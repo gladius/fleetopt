@@ -10,6 +10,57 @@ fleetopt optimize <project>
 That is the whole user surface. Everything else — capturing, querying, measuring,
 comparing, judging — is a tool the optimizer calls itself.
 
+## Quick start
+
+**Needs:** Python 3.11+, git, and a machine where Claude Code already works (a
+claude.ai login, or your company's key in `~/.claude/settings.json`). No other
+secret. There is no compile step; the editable install below is the whole build.
+
+```bash
+git clone <this repo> fleetopt && cd fleetopt
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"            # fleetopt + the fixture's langgraph; ~250 MB (bundled Claude Code binary)
+fleetopt optimize fixture --auto   # 3-5 min, no API spend: proves the install end to end
+```
+
+The last line should end with an `equivalence: PASSED` block and a `─── done in N
+turns, $x ───` line, and leave an `opt/...` branch in `fixture/`.
+
+**On a real project** (must be a git repo; the patch lands on a branch, master is
+never touched):
+
+```bash
+# first run on an unfamiliar repo: give it the command, keep the prompts, cap the spend
+FLEETOPT_PARALLEL=1 fleetopt optimize ~/work/their-agent \
+    --run "python -m pytest tests/integration -q" --max-usd 3
+
+# once you trust it: no prompts
+fleetopt optimize ~/work/their-agent --auto
+```
+
+| Flag | Meaning |
+|---|---|
+| `--run CMD` | How to invoke the agent once, end to end. Optional: the optimizer finds it otherwise, and sometimes picks the wrong interpreter first. Locked when given. |
+| `--auto` | Answer yes to both permission prompts (run the target, edit on a branch). |
+| `--max-usd N` | Stop the optimizer once its *own* spend reaches N (default 5). The target's API calls are its own bill. |
+| `--out DIR` | Where captures go (default `./.fleetopt`, relative to where you run it). |
+
+**What you get:** the report in the terminal (finding, measured before/after,
+judge verdict), the patch committed on a branch in the target repo, and every
+measurement in `.fleetopt/fleetopt.db`. The run also prints which credential it
+is using as its first line.
+
+**Two debug commands**, for when the optimizer comes back empty on a repo:
+`fleetopt capture <project> --run CMD` runs the target under instrumentation
+without any model involved (free), and `fleetopt report` prints what was
+captured. If `capture` shows `0 runs`, the command did not invoke the graph, or
+the interpreter has no langchain.
+
+**When it stops early:** a declined prompt is final for that session and it
+reports from read-only evidence. `within noise` means the change did not clear
+the baseline's own spread and is not a saving. Hitting `--max-usd` ends the run
+with whatever was measured so far.
+
 ## Why it is built this way
 
 Cheaper is trivially achievable by making an agent dumber: drop a model tier,
