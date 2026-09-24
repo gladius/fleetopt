@@ -1,10 +1,17 @@
-"""Output-equivalence gate.
+"""Output-equivalence gate, and correctness against a team's expected answers.
 
-Deliberately a separate API call with a clean context, not something the
-optimizer decides about its own work. The optimizer proposed the patch and wants
-it to pass; give it the verdict too and you get motivated reasoning wearing a
-verdict's clothes. The judge sees the task, the two outputs, and nothing else -
-not the patch, not the reasoning, not the savings figure.
+Deliberately separate API calls with a clean context, not something the optimizer
+decides about its own work. The optimizer proposed the patch and wants it to pass;
+give it the verdict too and you get motivated reasoning wearing a verdict's
+clothes. The judge sees the task, the input and two outputs - or the expected
+answer and one output - and nothing else: not the patch, not the reasoning, not
+the savings figure.
+
+Two questions, two prompts:
+- equivalence: is the output after the patch still an acceptable answer, given the
+  output before it? Proves "unchanged". Always available.
+- correctness: is the output a correct answer, given the answer the team expects?
+  Proves "correct". Only when eval cases were loaded (see evals.py).
 """
 
 import json
@@ -33,20 +40,37 @@ NEW OUTPUT
 
 Reply with JSON only: {{"equivalent": true|false, "reason": "<one sentence>"}}"""
 
+EXPECTED_PROMPT = """You are checking an AI agent's answer against the answer its team expects.
+
+Judge substance, not wording. The output passes if it conveys what the expected
+answer conveys; extra correct detail is fine. Missing information, a contradiction,
+or a narrower answer is a fail.
+
+TASK
+{task}
+
+INPUT
+{input}
+
+EXPECTED ANSWER (from the team's eval cases)
+{expected}
+
+AGENT OUTPUT
+{output}
+
+Reply with JSON only: {{"pass": true|false, "reason": "<one sentence>"}}"""
 
 SYSTEM = "You are an output-equivalence judge for AI agents. Reply with JSON only."
 
 
-async def judge(task, agent_input, baseline, candidate, model=None):
-    """Returns {"equivalent": bool, "reason": str}.
+async def _ask(prompt, model=None):
+    """One judge call through the same Claude Code binary as the optimizer, so it
+    authenticates the same way (login, settings.json, gateway, cloud) - but in its
+    own process with a clean context, no tools, one turn. With `tools=[]` the call
+    is ~400 input tokens, the same as a direct API call.
 
-    Runs through the same Claude Code binary as the optimizer, so it authenticates
-    the same way (login, settings.json, gateway, cloud) - but in its own process
-    with its own clean context, no tools, one turn. With `tools=[]` the call is
-    ~400 input tokens, the same as a direct API call.
-
-    Raises if the call fails - a gate that fails open is not a gate.
-    """
+    Raises if the call fails - a gate that fails open is not a gate. Returns the
+    parsed JSON, or {"_unparseable": text}."""
     from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
 
     from fleetopt import config
@@ -62,12 +86,6 @@ async def judge(task, agent_input, baseline, candidate, model=None):
         env=config.SDK_ENV,
         permission_mode="default",
     )
-    prompt = PROMPT.format(
-        task=task,
-        input=str(agent_input)[:2000],
-        baseline=str(baseline)[:4000],
-        candidate=str(candidate)[:4000],
-    )
 
     text, failure = "", None
     async for message in query(prompt=prompt, options=options):
@@ -81,21 +99,42 @@ async def judge(task, agent_input, baseline, candidate, model=None):
     text = text.strip()
     if text.startswith("```"):
         text = text.split("```")[1].removeprefix("json").strip()
-
     try:
-        verdict = json.loads(text)
+        return json.loads(text)
     except json.JSONDecodeError:
-        # An unparseable verdict is a failed check, not a pass.
-        return {"equivalent": False, "reason": f"judge returned unparseable output: {text[:200]}"}
-
-    return {
-        "equivalent": bool(verdict.get("equivalent")),
-        "reason": str(verdict.get("reason", "")),
-    }
+        return {"_unparseable": text[:200]}
 
 
-async def judge_sessions(conn, task, baseline_session, candidate_session):
-    """Pair root runs across two sessions and judge each pair.
+async def judge(task, agent_input, baseline, candidate, model=None):
+    """Equivalence. Returns {"equivalent": bool, "reason": str}."""
+    verdict = await _ask(PROMPT.format(
+        task=task,
+        input=str(agent_input)[:2000],
+        baseline=str(baseline)[:4000],
+        candidate=str(candidate)[:4000],
+    ), model)
+    if "_unparseable" in verdict:  # an unparseable verdict is a failed check, not a pass
+        return {"equivalent": False, "reason": f"judge returned unparseable output: {verdict['_unparseable']}"}
+    return {"equivalent": bool(verdict.get("equivalent")), "reason": str(verdict.get("reason", ""))}
+
+
+async def judge_expected(task, agent_input, expected, output, model=None):
+    """Correctness. Returns {"pass": bool, "reason": str}."""
+    verdict = await _ask(EXPECTED_PROMPT.format(
+        task=task,
+        input=str(agent_input)[:2000],
+        expected=str(expected)[:4000],
+        output=str(output)[:4000],
+    ), model)
+    if "_unparseable" in verdict:
+        return {"pass": False, "reason": f"judge returned unparseable output: {verdict['_unparseable']}"}
+    return {"pass": bool(verdict.get("pass")), "reason": str(verdict.get("reason", ""))}
+
+
+async def judge_sessions(conn, task, baseline_session, candidate_session, cases=None):
+    """Pair root runs across two sessions and judge each pair; with eval cases, also
+    grade both sides against the expected answer for every run whose input matches
+    a case. Returns (passed, equivalence_results, correctness_or_None).
 
     Pairs by position, not by matching the input text. Real agents thread
     generated ids through their state - message uuids, thread ids, timestamps -
@@ -133,4 +172,32 @@ async def judge_sessions(conn, task, baseline_session, candidate_session):
         verdict["input"] = (agent_input or "")[:120]
         results.append(verdict)
 
-    return all(r["equivalent"] for r in results), results
+    correctness = None
+    if cases:
+        from fleetopt.evidence import evals as evals_mod
+
+        rows = []
+        for (agent_input, baseline_out), (_, candidate_out) in zip(before, after):
+            case = evals_mod.match(cases, agent_input)
+            if case is None:
+                continue
+            b = await judge_expected(task, case["input"], case["expected"], baseline_out)
+            c = await judge_expected(task, case["input"], case["expected"], candidate_out)
+            rows.append({
+                "input": case["input"][:120],
+                "baseline_pass": b["pass"],
+                "candidate_pass": c["pass"],
+                "reason": c["reason"],
+            })
+        correctness = {
+            "cases": len(cases),
+            "matched": len(rows),
+            "baseline_pass": sum(r["baseline_pass"] for r in rows),
+            "candidate_pass": sum(r["candidate_pass"] for r in rows),
+            "rows": rows,
+        }
+
+    passed = all(r["equivalent"] for r in results) and (
+        correctness is None or correctness["candidate_pass"] >= correctness["baseline_pass"]
+    )
+    return passed, results, correctness

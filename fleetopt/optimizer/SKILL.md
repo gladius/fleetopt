@@ -28,6 +28,11 @@ monotonically, 67% of all tokens" is a finding.
    inside the baseline's own spread. That is not a saving. Do not report it as one.
 7. **Equivalence gates everything.** A cost reduction with a failed `judge` is a
    regression you have not noticed yet. Report it as a failure, not a tradeoff.
+8. **Evals before the baseline.** If the repo has eval cases (deepeval tests, JSONL
+   or JSON with expected answers, an evals/ folder), load them with
+   `load_eval_cases` first and prefer the suite that exercises them as the run
+   command; `judge` then grades correctness, not just "unchanged". Never run an
+   eval framework by hand - it bills the team's own graders. See `fleetopt:evals`.
 
 ## Rule out first
 

@@ -7,9 +7,12 @@ team, and a claim has to be reproducible.
 """
 
 import json
+import os
+import pathlib
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from fleetopt.evidence import evals as evals_mod
 from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
 from fleetopt.probe import runner, store
@@ -155,14 +158,59 @@ async def judge(args):
     base, cand = _ids(args["baseline"]), _ids(args["candidate"])
     if not base or not cand:
         return _ok("need both measurements before judging")
+    cases = CTX.get("eval_cases")
     with _conn() as conn:
-        passed, results = await judge_mod.judge_sessions(conn, args["task"], base[0], cand[0])
-    lines = [f"[{'PASS' if r['equivalent'] else 'FAIL'}] {r['reason']}" for r in results]
-    lines.append(f"\nequivalence: {'PASSED' if passed else 'FAILED'} ({len(results)} cases)")
+        passed, results, correctness = await judge_mod.judge_sessions(
+            conn, args["task"], base[0], cand[0], cases
+        )
+    lines = ["equivalence (output unchanged?):"]
+    lines += [f"  [{'PASS' if r['equivalent'] else 'FAIL'}] {r['reason']}" for r in results]
+    if correctness:
+        m = correctness["matched"]
+        lines.append(f"\ncorrectness against the team's eval cases ({correctness['cases']} loaded, {m} matched a captured run):")
+        lines.append(f"  baseline passes {correctness['baseline_pass']}/{m}, candidate passes {correctness['candidate_pass']}/{m}")
+        lines += [f"  [{'PASS' if r['candidate_pass'] else 'FAIL'}] {r['input'][:60]!r}: {r['reason']}" for r in correctness["rows"]]
+        if m < correctness["cases"]:
+            lines.append(f"  {correctness['cases'] - m} cases were not exercised by the run command and could not be graded.")
+    else:
+        lines.append("\ncorrectness: not checked - no eval cases loaded. This verdict means unchanged, not correct.")
+    lines.append(f"\nverdict: {'PASSED' if passed else 'FAILED'} ({len(results)} invocations)")
     return _ok("\n".join(lines))
 
 
-_TOOLS = [set_run_command, measure, query_traces, graph_topology, compare, judge]
+@tool(
+    "load_eval_cases",
+    "Load the project's eval cases (input + expected answer) from a file or folder "
+    "before measuring: JSONL/JSON with input/expected keys, or deepeval test files "
+    "(LLMTestCase/Golden). See fleetopt:evals for where to look. Once loaded, judge "
+    "also grades correctness against the expected answers for every captured run "
+    "whose input matches a case, and reports pass rates before and after.",
+    {"path": str},
+)
+async def load_eval_cases(args):
+    path = pathlib.Path(args["path"])
+    if not path.is_absolute():
+        path = CTX["project"] / path
+    if not path.exists():
+        return _ok(f"no such path: {path}")
+    cases, notes = evals_mod.load(path)
+    CTX["eval_cases"] = cases
+    if cases:  # kept in fleetopt's own folder, never in the team's repo
+        keep = CTX["out"] / "evals"
+        keep.mkdir(parents=True, exist_ok=True)
+        (keep / f"{CTX['project'].name}.jsonl").write_text(
+            "\n".join(json.dumps(c, ensure_ascii=False) for c in cases) + "\n", encoding="utf-8"
+        )
+    sample = cases[0] if cases else None
+    lines = [f"{len(cases)} eval cases loaded from {path}"] + [f"  {n}" for n in notes]
+    if sample:
+        lines.append(f"  first case: input={sample['input'][:80]!r} expected={sample['expected'][:80]!r}")
+    else:
+        lines.append("  nothing loadable here - see fleetopt:evals for the formats that work")
+    return _ok("\n".join(lines))
+
+
+_TOOLS = [set_run_command, measure, query_traces, graph_topology, compare, judge, load_eval_cases]
 
 
 def server():

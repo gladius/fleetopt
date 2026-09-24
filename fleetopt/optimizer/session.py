@@ -42,14 +42,17 @@ Work in this order, but use your judgement - the project decides the details:
 1. Understand it. Read the source and the graph topology. What is this agent for?
 2. Establish a baseline. Find how to run it once end to end, set that as the run
    command, then measure it. Without a baseline nothing you do afterwards is
-   provable.
+   provable. Before that, look for eval cases (see fleetopt:evals) and load them
+   with load_eval_cases; prefer the suite that exercises them as the run command.
 3. Find the cost. Query the traces. Go where the tokens are.
 4. Change one thing. Create a git branch first, then apply a single optimization.
 5. Prove it. Measure again under a new label, compare, and judge equivalence.
 
-Report at the end: what you changed, the measured difference, and the equivalence
-verdict. If the saving was within noise, or equivalence failed, say so plainly and
-leave the branch for review. A cost reduction that broke the agent is a
+Report at the end: what you changed, the measured difference, the equivalence
+verdict, and the correctness pass rate before and after if eval cases were loaded
+(say "correctness not checked" if none were found). If the saving was within
+noise, or equivalence or correctness failed, say so plainly and leave the branch
+for review. A cost reduction that broke the agent is a
 regression, not a result."""
 
 STOP = ("The user declined to let you {kind}. This is final for the session: do not retry, "
@@ -158,13 +161,16 @@ class Gate:
         return PermissionResultAllow()
 
 
-async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=60, max_usd=None, effort=None):
+async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=60, max_usd=None, effort=None, evals=None):
     project = pathlib.Path(project).resolve()
     out = pathlib.Path(out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
     tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd, "run_locked": bool(run_cmd)})
     mission = MISSION
+    if evals:
+        mission += (f"\n\nEval cases were supplied at `{evals}`. Call load_eval_cases with that "
+                    "path before measuring.")
     if run_cmd:
         mission += (f"\n\nThe run command is already set: `{run_cmd}`. Do not rediscover or "
                     "change it - start with measure.")

@@ -50,6 +50,7 @@ fleetopt optimize ~/work/their-agent --auto
 | `--run CMD` | How to invoke the agent once, end to end. Optional: the optimizer finds it otherwise, and sometimes picks the wrong interpreter first. Locked when given. |
 | `--auto` | Answer yes to both permission prompts (run the target, edit on a branch). |
 | `--max-usd N` | Stop the optimizer once its *own* spend reaches N (default 5). The target's API calls are its own bill. |
+| `--evals FILE` | Eval cases (input + expected answer) as JSONL/JSON or deepeval tests. Optional: the optimizer looks for them in the repo otherwise. With cases, the judge reports correctness pass rates before and after, not just "unchanged". |
 | `--out DIR` | Where captures go (default `./.fleetopt`, relative to where you run it). |
 
 **What you get:** the report in the terminal (finding, measured before/after,
@@ -147,6 +148,13 @@ These exist because each one is a way to produce a confident wrong number.
 - **Equivalence gates everything.** A cost reduction with a failed judge is a
   regression nobody noticed yet.
 
+- **Correct, not only unchanged, when the team has eval cases.** The judge always
+  checks that the patch left the output equivalent to the previous run. When eval
+  cases with expected answers exist - a deepeval suite, JSONL, JSON, or `--evals` -
+  it also grades both baseline and candidate against them and reports pass rates;
+  a candidate that passes fewer cases than the baseline fails. Only runs whose
+  input matches a case are graded, and the rest are reported as unmatched. Without
+  cases the report says "correctness not checked" in so many words.
 - **Never changes the target's environment.** Installs and downloads (`pip install`,
   `uv add`/`--with`, `poetry add`, `npm install`, `curl`, `wget`, ...) are denied in the
   optimizer's shell. A missing dependency is a finding to report, not something to
@@ -298,6 +306,10 @@ roughly $0.55-0.65. The target's own calls are separate (memory-agent: $0.13/run
 - **No optimization has yet been proven to save anything.** The fixture's win was
   real but synthetic; the real repo's candidate landed within noise. A confirmed
   saving on someone else's code is still outstanding.
+- **Eval cases are graded, not driven.** Cases are matched to whatever the run
+  command exercised; fleetopt does not yet invoke the agent per case, and it cannot
+  fetch LangSmith, Galileo or promptfoo datasets - it reports their names for a
+  human to export.
 - **The decision skills are untested on a real run.** `SKILL.md` is a router; the
   mechanics live in five Agent Skills under `optimizer/plugin/skills/` (`caching`,
   `prompt-growth`, `model-tier`, `redundant-work`, `tool-surface`), loaded as a local

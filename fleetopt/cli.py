@@ -52,6 +52,7 @@ def optimize(args):
             model=model,
             max_usd=args.max_usd,
             effort=os.environ.get("FLEETOPT_EFFORT") or None,
+            evals=args.evals,
         )
     )
 
@@ -151,6 +152,8 @@ def main(argv=None):
     opt.add_argument("project")
     opt.add_argument("--run", help="how to invoke the agent (the optimizer finds it otherwise)")
     opt.add_argument("--auto", action="store_true", help="no permission prompts")
+    opt.add_argument("--evals", help="file or folder of eval cases (input + expected answer): "
+                                     "JSONL/JSON or deepeval tests. Found automatically otherwise.")
     opt.add_argument("--max-usd", type=float, default=5.0,
                      help="stop the optimizer once its own spend reaches this (default 5). "
                           "Does not cover the target's API calls.")
