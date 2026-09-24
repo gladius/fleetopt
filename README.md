@@ -257,6 +257,12 @@ from its own first run command (`python agent.py`, wrong interpreter) and hit th
 mixed-code-state guard on a reused label, which cost three extra runs; label
 lookups now ignore stale code states, so that cannot recur.
 
+With an `evals/cases.jsonl` dropped into the fixture copy and **no flag**, the
+optimizer found it on its own, loaded it before the baseline, and the report
+gained a correctness section: 0/2 pass on both sides, with the judge's reason
+(the fake model's fixed reply can never match a real expected answer) and the
+conclusion that the patch did not make correctness worse. 30 turns, $0.43.
+
 Then from a **fresh clone following the Quick start verbatim** (same day, after the
 probe-once and environment-guard changes): run command right first time, no target
 output in the terminal, `fleetopt:prompt-growth` loaded before the edit, same
