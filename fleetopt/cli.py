@@ -10,6 +10,7 @@ has to run.
 
 import argparse
 import asyncio
+import io
 import os
 import pathlib
 import statistics
@@ -18,12 +19,29 @@ import sys
 from fleetopt import config
 from fleetopt.probe import runner, store
 
+# Fix Windows Unicode console encoding
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 
 def optimize(args):
     from fleetopt.optimizer import session
 
     # Same credential Claude Code uses on this machine; nothing fleetopt-specific.
     print(f"[fleetopt] auth: {config.auth_summary() or 'unknown (could not run auth status)'}")
+    # Model from env, then .env, then default
+    model = os.environ.get("FLEETOPT_MODEL")
+    if not model:
+        for path in (pathlib.Path(".env"), config.GLOBAL_ENV):
+            if path.exists():
+                for line in path.read_text().splitlines():
+                    line = line.strip()
+                    if line.startswith("FLEETOPT_MODEL="):
+                        model = line.split("=", 1)[1].strip()
+                        break
+            if model:
+                break
+    model = model or "claude-sonnet-5"
 
     return asyncio.run(
         session.run(
@@ -31,7 +49,7 @@ def optimize(args):
             args.out,
             run_cmd=args.run,
             auto=args.auto,
-            model=os.environ.get("FLEETOPT_MODEL", "claude-sonnet-5"),
+            model=model,
             max_usd=args.max_usd,
             effort=os.environ.get("FLEETOPT_EFFORT") or None,
         )
