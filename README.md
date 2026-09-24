@@ -20,11 +20,15 @@ secret. There is no compile step; the editable install below is the whole build.
 git clone <this repo> fleetopt && cd fleetopt
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"            # fleetopt + the fixture's langgraph; ~250 MB (bundled Claude Code binary)
-fleetopt optimize fixture --auto   # 3-5 min, no API spend: proves the install end to end
+# smoke test on a copy of the bundled fixture: 3-5 min, no API spend
+cp -r fixture /tmp/fixture && git -C /tmp/fixture init -q && git -C /tmp/fixture add -A && git -C /tmp/fixture commit -qm base
+fleetopt optimize /tmp/fixture --auto
 ```
 
 The last line should end with an `equivalence: PASSED` block and a `─── done in N
-turns, $x ───` line, and leave an `opt/...` branch in `fixture/`.
+turns, $x ───` line, and leave an `opt/...` branch in `/tmp/fixture`. The copy
+matters: the optimizer branches whatever git repo the target is in, and
+`fixture/` inside this checkout would mean branching fleetopt itself.
 
 **On a real project** (must be a git repo; the patch lands on a branch, master is
 never touched):

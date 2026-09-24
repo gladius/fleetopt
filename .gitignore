@@ -7,6 +7,3 @@ __pycache__/
 
 # test material, never part of the product
 targets/
-
-# own git repo on purpose: the optimizer branches it in isolation. Not a submodule.
-fixture/
