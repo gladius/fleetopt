@@ -15,6 +15,8 @@ comparing, judging — is a tool the optimizer calls itself.
 **Needs:** Python 3.11+, git, and a machine where Claude Code already works (a
 claude.ai login, or your company's key in `~/.claude/settings.json`). No other
 secret. There is no compile step; the editable install below is the whole build.
+Linux, macOS and Windows (activate with `.venv\Scripts\activate` there; console
+output never trips on a legacy code page).
 
 ```bash
 git clone <this repo> fleetopt && cd fleetopt

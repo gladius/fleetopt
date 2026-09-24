@@ -60,7 +60,7 @@ def execute(project, run_cmd, out_dir, with_io=False):
     # The target's stdout/stderr go to a file, not the operator's terminal: on a
     # failure they are the diagnosis (returned to the agent by measure), on success
     # they are noise.
-    with (raw / "target.log").open("w") as log:
+    with (raw / "target.log").open("wb") as log:  # raw bytes, whatever the target emits
         result = subprocess.run(run_cmd, shell=True, cwd=project, env=env,
                                 stdout=log, stderr=subprocess.STDOUT)
     return raw, traces, graphs, result.returncode
@@ -71,7 +71,7 @@ def output_tail(raw, lines=25):
     log = pathlib.Path(raw) / "target.log"
     if not log.exists():
         return ""
-    return "\n".join(log.read_text(errors="replace").splitlines()[-lines:])
+    return "\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
 
 
 def ingest(project, run_cmd, out_dir, label, raw, traces, graphs, returncode):

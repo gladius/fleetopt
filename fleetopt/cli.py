@@ -111,7 +111,19 @@ def report(args):
     return 0
 
 
+def _console_never_crashes():
+    """The optimizer's text and the target's output can contain any character; a
+    Windows console defaults to a legacy code page and raises on the first one it
+    cannot encode. Keep the console's encoding, replace what it cannot show."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):  # not a real console stream
+            pass
+
+
 def main(argv=None):
+    _console_never_crashes()
     config.load_env()
     parser = argparse.ArgumentParser(prog="fleetopt", description=__doc__)
     parser.add_argument("--out", default=".fleetopt", help="where captures are stored")

@@ -31,7 +31,7 @@ from fleetopt import config
 from fleetopt.optimizer import tools
 
 _HERE = pathlib.Path(__file__).parent
-SKILL = (_HERE / "SKILL.md").read_text()
+SKILL = (_HERE / "SKILL.md").read_text(encoding="utf-8")
 PLUGIN = _HERE / "plugin"  # decision skills, loaded by the harness, triggered by description
 
 MISSION = """Optimize the LangGraph agent in this project so it costs less to run,
@@ -140,7 +140,7 @@ class Gate:
                       "  It will work on a git branch, so this is reversible.",
         }[kind]
 
-        print(f"\n─── permission ───\n{question}")
+        print(f"\n--- permission ---\n{question}")
         try:
             answer = await asyncio.to_thread(input, "  allow for this session? [y/N] ")
         except EOFError:  # no terminal - treat as a decline, not a crash
@@ -211,9 +211,9 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
                     if isinstance(block, TextBlock):
                         print(block.text)
                     elif isinstance(block, ToolUseBlock):
-                        print(f"  · {block.name.replace('mcp__fleetopt__', '')}")
+                        print(f"  - {block.name.replace('mcp__fleetopt__', '')}")
             elif isinstance(message, ResultMessage):
                 cost = getattr(message, "total_cost_usd", None)
-                print(f"\n─── done in {message.num_turns} turns" +
-                      (f", ${cost:.4f}" if cost else "") + " ───")
+                print(f"\n--- done in {message.num_turns} turns" +
+                      (f", ${cost:.4f}" if cost else "") + " ---")
     return 0
