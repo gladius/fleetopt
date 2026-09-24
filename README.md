@@ -21,12 +21,12 @@ git clone <this repo> fleetopt && cd fleetopt
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"            # fleetopt + the fixture's langgraph; ~250 MB (bundled Claude Code binary)
 # smoke test on a copy of the bundled fixture: 3-5 min, no API spend
-cp -r fixture /tmp/fixture && git -C /tmp/fixture init -q && git -C /tmp/fixture add -A && git -C /tmp/fixture commit -qm base
-fleetopt optimize /tmp/fixture --auto
+T=$(mktemp -d) && cp -r fixture/. "$T" && git -C "$T" init -q && git -C "$T" add -A && git -C "$T" commit -qm base
+fleetopt optimize "$T" --auto
 ```
 
 The last line should end with an `equivalence: PASSED` block and a `─── done in N
-turns, $x ───` line, and leave an `opt/...` branch in `/tmp/fixture`. The copy
+turns, $x ───` line, and leave an `opt/...` branch in that temp repo. The copy
 matters: the optimizer branches whatever git repo the target is in, and
 `fixture/` inside this checkout would mean branching fleetopt itself.
 
