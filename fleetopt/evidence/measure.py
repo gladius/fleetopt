@@ -30,7 +30,9 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True):
             lambda _: runner.execute(project, run_cmd, out_dir, with_io), range(n)
         ))
 
-    ids = []
+    # Ingest every executed run before judging any of them: stopping at the first
+    # failure used to leave the other runs' temp dirs behind forever.
+    ids, failure = [], None
     for i, (raw, traces, graphs, code) in enumerate(executed):  # ingest serially
         session_id, n_runs, _ = runner.ingest(
             project, run_cmd, out_dir, label, raw, traces, graphs, code
@@ -40,13 +42,15 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True):
         # median toward "cheaper" for the worst possible reason - the work didn't
         # happen. Refuse the whole measurement rather than quietly discount it.
         if not n_runs:
-            raise RuntimeError(f"{label} run {i + 1} captured nothing - aborting")
-        if code != 0:
-            raise RuntimeError(
+            failure = failure or f"{label} run {i + 1} captured nothing - aborting"
+        elif code != 0:
+            failure = failure or (
                 f"{label} run {i + 1} exited {code} after {n_runs} runs - a failed "
                 "invocation cannot be measured. Fix the run command or the target first."
             )
         ids.append(session_id)
+    if failure:
+        raise RuntimeError(failure)
     return ids
 
 

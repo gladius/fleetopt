@@ -27,13 +27,22 @@ def _conn():
 
 
 def _ids(label):
-    """Sessions under a label, for THIS project, that actually completed. A crashed
-    run left a truncated trace behind; it must not reach a median. Scoped by project
-    because the db is shared - a 'baseline' from another repo must never be pooled."""
+    """Sessions under a label, for THIS project, that actually completed, at the code
+    state of the newest measurement under that label.
+
+    Three filters, each learned the expensive way. exit_code: a crashed run leaves a
+    truncated trace that must not reach a median. project: the db is shared, and a
+    'baseline' from another repo must never be pooled. code_state: labels get reused
+    across days, and a 'baseline' measured on last week's source is not this baseline -
+    without this the agent hit the mixed-state guard and re-measured under a fresh
+    label, three runs it did not need."""
     with _conn() as conn:
         return [r["id"] for r in conn.execute(
-            "SELECT id FROM sessions WHERE label = ? AND exit_code = 0 AND project = ?",
-            (label, str(CTX["project"])),
+            "SELECT id FROM sessions WHERE label = ? AND exit_code = 0 AND project = ?"
+            "   AND code_state IS (SELECT code_state FROM sessions"
+            "                       WHERE label = ? AND exit_code = 0 AND project = ?"
+            "                       ORDER BY id DESC LIMIT 1)",
+            (label, str(CTX["project"]), label, str(CTX["project"])),
         )]
 
 

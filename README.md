@@ -170,6 +170,16 @@ Also verified:
   that drops the quantitative findings.
 - The code-state guard catches two sessions sharing a label across an edit.
 
+Re-run 2026-09-24 after the auth change, with **no API key anywhere**: the
+optimizer and the judge both ran on the machine's claude.ai login (the CLI
+printed `auth: claude.ai login (max, ...)`), the judge went through the Agent SDK
+and returned PASSED 2/2, and the optimizer loaded `fleetopt:prompt-growth` before
+editing. It picked the narrower fix this time (send only the latest note): 3,029 →
+2,683 input tokens, -11.4%, outside noise, 32 turns, $0.66 nominal. It recovered
+from its own first run command (`python agent.py`, wrong interpreter) and hit the
+mixed-code-state guard on a reused label, which cost three extra runs; label
+lookups now ignore stale code states, so that cannot recur.
+
 ## Verified against a real repository
 
 [`JoshuaC215/agent-service-toolkit`](https://github.com/JoshuaC215/agent-service-toolkit)
@@ -218,7 +228,9 @@ roughly $0.55-0.65. The target's own calls are separate (memory-agent: $0.13/run
   `prompt-growth`, `model-tier`, `redundant-work`, `tool-surface`), loaded as a local
   plugin and triggered by their descriptions. They also work standalone: point Claude
   Code at the plugin and ask "is my caching set up right?" in any repo. Whether the
-  optimizer invokes the right one at the right time has not been observed yet.
+  optimizer invokes the right one at the right time has been observed once, on
+  the fixture (2026-09-24): it loaded `fleetopt:prompt-growth` after seeing
+  `prompt_chars` climb and before editing. Not yet observed on a real repo.
 - Pricing covers Anthropic, OpenAI and Gemini list rates as of 2026-09-23; hosted
   variants (Bedrock/Vertex/Azure ids) and >200K-context tiers are not priced.
 - Only LangGraph. ADK emits OpenTelemetry natively (1.17+), so its adapter should
