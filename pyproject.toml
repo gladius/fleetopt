@@ -1,0 +1,33 @@
+[project]
+name = "fleetopt"
+version = "0.1.0"
+description = "Find and prove cost savings in a LangGraph project without editing it"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=1.7",
+    "claude-agent-sdk>=0.2",
+]
+
+# The capture hook runs inside the target's interpreter and imports the target's
+# own langchain/langgraph. Deliberately not a dependency here - pinning them
+# would risk shadowing the versions the project under test actually uses.
+# The `dev` extra exists only because fixture/ has no venv of its own.
+[project.optional-dependencies]
+dev = [
+    "langchain-core==1.6.3",
+    "langgraph==1.2.11",
+]
+
+[project.scripts]
+fleetopt = "fleetopt.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["fleetopt*"]
+
+[tool.setuptools.package-data]
+"fleetopt.probe" = ["hooks/*.py"]
+"fleetopt.optimizer" = ["*.md", "plugin/.claude-plugin/*.json", "plugin/skills/*/SKILL.md"]

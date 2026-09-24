@@ -1,0 +1,9 @@
+.env
+.venv/
+.fleetopt/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# test material, never part of the product
+targets/

@@ -1,0 +1,8 @@
+{
+  "name": "fleetopt",
+  "description": "Cost-optimization decision skills for LangGraph agents: caching, prompt growth, model tier, redundant work, tool surface. Used by fleetopt optimize and usable standalone in Claude Code.",
+  "version": "0.1.0",
+  "author": {
+    "name": "fleet_ops central AI team"
+  }
+}
