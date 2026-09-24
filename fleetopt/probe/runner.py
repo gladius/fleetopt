@@ -57,8 +57,21 @@ def execute(project, run_cmd, out_dir, with_io=False):
     if with_io:
         env["FLEETOPT_CAPTURE_IO"] = "1"
 
-    result = subprocess.run(run_cmd, shell=True, cwd=project, env=env)
+    # The target's stdout/stderr go to a file, not the operator's terminal: on a
+    # failure they are the diagnosis (returned to the agent by measure), on success
+    # they are noise.
+    with (raw / "target.log").open("w") as log:
+        result = subprocess.run(run_cmd, shell=True, cwd=project, env=env,
+                                stdout=log, stderr=subprocess.STDOUT)
     return raw, traces, graphs, result.returncode
+
+
+def output_tail(raw, lines=25):
+    """Last lines the target printed, for a failure message."""
+    log = pathlib.Path(raw) / "target.log"
+    if not log.exists():
+        return ""
+    return "\n".join(log.read_text(errors="replace").splitlines()[-lines:])
 
 
 def ingest(project, run_cmd, out_dir, label, raw, traces, graphs, returncode):
@@ -74,13 +87,15 @@ def ingest(project, run_cmd, out_dir, label, raw, traces, graphs, returncode):
     # Raw files are a debug artifact; the database is the store. Keep them only
     # if nothing was ingested, so a silent capture is diagnosable.
     if n_runs:
-        for path in (traces, graphs):
+        for path in (traces, graphs, raw / "target.log"):
             path.unlink(missing_ok=True)
         raw.rmdir()
-    elif any(raw.iterdir()):
-        print(f"[fleetopt] nothing ingested - raw output left in {raw}")
+    elif any(p.stat().st_size for p in raw.iterdir()):
+        print(f"[fleetopt] nothing ingested - target output kept in {raw / 'target.log'}")
     else:
-        raw.rmdir()  # the process died before the hook wrote anything; nothing to keep
+        for p in raw.iterdir():  # died before printing or capturing anything
+            p.unlink()
+        raw.rmdir()
 
     return session_id, n_runs, n_graphs
 

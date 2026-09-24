@@ -58,20 +58,44 @@ STOP = ("The user declined to let you {kind}. This is final for the session: do 
 
 RUNS_TARGET = re.compile(r"\bpytest\b|\blanggraph\s+dev\b|\bpython[\d.]*\s+(?!-c\b|-m\s+(?:pip|venv|py_compile)\b)(?:-m\s+)?[\w./-]+")
 
+# Installs and downloads. Observed under --auto: handed an interpreter without
+# langgraph, the agent ran `uv run --with langgraph ...` and pulled the packages
+# from the internet. Right for a sandbox, wrong on someone else's machine.
+ENV_MUTATION = re.compile(
+    r"\b(?:pip3?\s+(?:install|uninstall)|python[\d.]*\s+-m\s+pip\s+(?:install|uninstall)"
+    r"|uv\s+(?:pip|add|sync|tool|run\s+--with)|pipx\s+(?:install|run)"
+    r"|poetry\s+(?:add|install|update)|pdm\s+(?:add|install)|(?:conda|mamba)\s+(?:install|create)"
+    r"|(?:npm|pnpm|yarn)\s+(?:install|add|i)\b|npx\s|apt(?:-get)?\s+install|(?:dnf|yum)\s+install"
+    r"|brew\s+install|curl\s|wget\s)"
+)
 
-def block_hand_runs(run_cmd):
-    """PreToolUse hook: the target runs only through `measure`. Running it by hand
-    spends the team's tokens twice, captures nothing, and fed 12K tokens of pytest
-    tracebacks into the optimizer's context last time. Enforced here, not asked for."""
+
+def _deny(reason):
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                   "permissionDecision": "deny", "permissionDecisionReason": reason}}
+
+
+def guard_bash(run_cmd):
+    """PreToolUse hook on Bash. Two rules, both enforced rather than asked for.
+
+    The target runs only through `measure`: running it by hand spends the team's
+    tokens twice, captures nothing, and fed 12K tokens of pytest tracebacks into
+    the optimizer's context last time.
+
+    The target's environment is not ours to change: no installs, no downloads. A
+    missing dependency is a finding about the run command, not something to fix."""
     async def hook(input_data, tool_use_id, context):
         cmd = (input_data.get("tool_input") or {}).get("command", "")
+        if ENV_MUTATION.search(cmd):
+            return _deny("fleetopt never installs packages or downloads anything into the "
+                         "target's environment. Find the interpreter that already has the "
+                         "project's dependencies (its .venv, `uv run`/`poetry run` if the project "
+                         "uses them, a Makefile target) and set that as the run command. If none "
+                         "exists, report it - that is the team's finding.")
         hits_run_cmd = bool(run_cmd) and run_cmd.split()[-1] in cmd
         if hits_run_cmd or RUNS_TARGET.search(cmd):
-            return {"hookSpecificOutput": {
-                "hookEventName": "PreToolUse", "permissionDecision": "deny",
-                "permissionDecisionReason": "The target runs only through the measure tool. "
-                                            "Use measure; if it fails, read its error instead of reproducing it.",
-            }}
+            return _deny("The target runs only through the measure tool. Use measure; if it "
+                         "fails, read its error instead of reproducing it.")
         return {}
     return hook
 
@@ -157,7 +181,7 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
         + ["Read", "Grep", "Glob", "Skill"],
         plugins=[{"type": "local", "path": str(PLUGIN)}],
         can_use_tool=Gate(auto),
-        hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[block_hand_runs(run_cmd)])]},
+        hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[guard_bash(run_cmd)])]},
         # Optional. Lower effort cuts the optimizer's own output/thinking tokens;
         # unverified for finding quality, so off unless FLEETOPT_EFFORT is set.
         effort=effort,

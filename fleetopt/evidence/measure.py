@@ -6,6 +6,7 @@ difference a saving when it sits inside the spread of the baseline itself.
 """
 
 import os
+import pathlib
 import statistics
 from concurrent.futures import ThreadPoolExecutor
 
@@ -25,10 +26,21 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True):
     so set FLEETOPT_PARALLEL=1 when latency is the thing being measured.
     """
     workers = min(n, int(os.environ.get("FLEETOPT_PARALLEL", n) or 1), 5)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        executed = list(pool.map(
-            lambda _: runner.execute(project, run_cmd, out_dir, with_io), range(n)
-        ))
+    run_one = lambda _=None: runner.execute(project, run_cmd, out_dir, with_io)
+
+    # A command that has never succeeded on this project gets one probe run before
+    # the rest start: a wrong interpreter then costs one crash, not n, and the
+    # agent gets the traceback at once instead of after 15 failed runs (observed).
+    executed = []
+    if n > 1 and not _ever_succeeded(out_dir, project, run_cmd):
+        probe = run_one()
+        executed.append(probe)
+        n_left = n - 1 if probe[3] == 0 else 0
+    else:
+        n_left = n
+    if n_left:
+        with ThreadPoolExecutor(max_workers=min(workers, n_left)) as pool:
+            executed += list(pool.map(run_one, range(n_left)))
 
     # Ingest every executed run before judging any of them: stopping at the first
     # failure used to leave the other runs' temp dirs behind forever.
@@ -42,16 +54,31 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True):
         # median toward "cheaper" for the worst possible reason - the work didn't
         # happen. Refuse the whole measurement rather than quietly discount it.
         if not n_runs:
-            failure = failure or f"{label} run {i + 1} captured nothing - aborting"
+            failure = failure or (
+                f"{label} run {i + 1} captured nothing (exit {code}). The target's last "
+                f"output lines:\n{runner.output_tail(raw)}\n(full output: {raw}/target.log)"
+            )
         elif code != 0:
             failure = failure or (
                 f"{label} run {i + 1} exited {code} after {n_runs} runs - a failed "
-                "invocation cannot be measured. Fix the run command or the target first."
+                "invocation cannot be measured. The target's last output lines:\n"
+                f"{runner.output_tail(raw)}"
             )
         ids.append(session_id)
     if failure:
         raise RuntimeError(failure)
     return ids
+
+
+def _ever_succeeded(out_dir, project, run_cmd):
+    conn = store.connect(pathlib.Path(out_dir).resolve() / "fleetopt.db")
+    try:
+        return conn.execute(
+            "SELECT 1 FROM sessions WHERE project = ? AND run_cmd = ? AND exit_code = 0 LIMIT 1",
+            (str(project), run_cmd),
+        ).fetchone() is not None
+    finally:
+        conn.close()
 
 
 def session_stats(conn, session_id):

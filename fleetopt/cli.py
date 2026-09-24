@@ -46,6 +46,7 @@ def capture(args):
     print(f"\n[fleetopt] exit {code} | session {session_id} | {n_runs} runs, {n_graphs} graphs")
     if not n_runs:
         print("[fleetopt] no runs captured - did the command actually invoke the graph?")
+        print("[fleetopt] the target's last output lines are in the path printed above")
     return code
 
 

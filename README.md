@@ -20,7 +20,8 @@ secret. There is no compile step; the editable install below is the whole build.
 git clone <this repo> fleetopt && cd fleetopt
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"            # fleetopt + the fixture's langgraph; ~250 MB (bundled Claude Code binary)
-# smoke test on a copy of the bundled fixture: 3-5 min, no API spend
+# smoke test on a copy of the bundled fixture: 3-5 min, no API spend. Keep the venv
+# active - the fixture runs on this venv's langgraph.
 T=$(mktemp -d) && cp -r fixture/. "$T" && git -C "$T" init -q && git -C "$T" add -A && git -C "$T" commit -qm base
 fleetopt optimize "$T" --auto
 ```
@@ -143,6 +144,17 @@ These exist because each one is a way to produce a confident wrong number.
   it. The agent once spent 13 turns re-deriving a command that was already correct.
 - **Equivalence gates everything.** A cost reduction with a failed judge is a
   regression nobody noticed yet.
+
+- **Never changes the target's environment.** Installs and downloads (`pip install`,
+  `uv add`/`--with`, `poetry add`, `npm install`, `curl`, `wget`, ...) are denied in the
+  optimizer's shell. A missing dependency is a finding to report, not something to
+  fix. Observed 2026-09-24 under `--auto`: handed an interpreter without langgraph,
+  the agent pulled the packages with `uv run --with`. Right for a sandbox, wrong on
+  someone's machine.
+- **A command that has never worked here is probed once** before the remaining runs
+  start, and a failed measurement returns the target's own last output lines to the
+  agent. Before this, a wrong interpreter cost 15 crashed runs and 20 turns of
+  guessing; the traceback had gone to the operator's terminal, not to the agent.
 
 ## Permissions
 
