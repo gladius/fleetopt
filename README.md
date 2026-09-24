@@ -247,6 +247,12 @@ from its own first run command (`python agent.py`, wrong interpreter) and hit th
 mixed-code-state guard on a reused label, which cost three extra runs; label
 lookups now ignore stale code states, so that cannot recur.
 
+Then from a **fresh clone following the Quick start verbatim** (same day, after the
+probe-once and environment-guard changes): run command right first time, no target
+output in the terminal, `fleetopt:prompt-growth` loaded before the edit, same
+-11.4%, judge PASSED 2/2, **20 turns, $0.22 nominal**. The run before those changes
+on the same clone took 49 turns and $0.82, fifteen of them crashed baseline runs.
+
 ## Verified against a real repository
 
 [`JoshuaC215/agent-service-toolkit`](https://github.com/JoshuaC215/agent-service-toolkit)
