@@ -56,7 +56,12 @@ STOP = ("The user declined to let you {kind}. This is final for the session: do 
         "do not look for another way to do it. Write your final report now with what you "
         "established from read-only evidence, and state plainly what you could not do.")
 
-RUNS_TARGET = re.compile(r"\bpytest\b|\blanggraph\s+dev\b|\bpython[\d.]*\s+(?!-c\b|-m\s+(?:pip|venv|py_compile)\b)(?:-m\s+)?[\w./-]+")
+# Eval runners count as running the target too: a deepeval or promptfoo suite
+# invokes the agent on every case and bills the team for its own graders.
+RUNS_TARGET = re.compile(
+    r"\bpytest\b|\blanggraph\s+dev\b|\bdeepeval\s+test\b|\bpromptfoo\s+eval\b|\bbraintrust\s+eval\b"
+    r"|\bpython[\d.]*\s+(?!-c\b|-m\s+(?:pip|venv|py_compile)\b)(?:-m\s+)?[\w./-]+"
+)
 
 # Installs and downloads. Observed under --auto: handed an interpreter without
 # langgraph, the agent ran `uv run --with langgraph ...` and pulled the packages
