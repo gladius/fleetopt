@@ -52,6 +52,7 @@ fleetopt optimize ~/work/their-agent --auto
 | `--max-usd N` | Stop the optimizer once its *own* spend reaches N (default 5). The target's API calls are its own bill. |
 | `--evals FILE` | Eval cases (input + expected answer) as JSONL/JSON or deepeval tests. Optional: the optimizer looks for them in the repo otherwise. With cases, the judge reports correctness pass rates before and after, not just "unchanged". |
 | `--out DIR` | Where captures go (default `./.fleetopt`, relative to where you run it). |
+| `--dev-cache` | Development only. Replays identical model calls from `<out>/dev_cache.sqlite`, so a repeated run of the target costs nothing. Token counts stay real; latency and the noise floor do not, so nothing measured under it is a claim. |
 
 **What you get:** the report in the terminal (finding, measured before/after in
 dollars first, judge verdict), the patch committed on a branch in the target repo,
@@ -243,6 +244,12 @@ The skill evals live next to the skills because the runner looks for them below 
 plugin. `tests/corpus/corpus_build.py` regenerates the candidate list from GitHub
 search; export `GITHUB_TOKEN` for the full pass. Every break found on a real repo
 becomes a pytest case; every recurring pattern becomes a line in a skill.
+
+Two fixtures, both on a fake model so nothing costs anything: `fixture/agent.py` has a
+planted cost defect (a node that re-sends its whole history); `fixture/supervisor.py`
+has planted structural smells for the architecture review (a router that only ever
+takes one branch, a supervisor whose three workers always run in the same order, a
+reflection loop that never changes the draft).
 
 ## Verified end to end
 

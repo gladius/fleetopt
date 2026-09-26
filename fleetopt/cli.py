@@ -170,8 +170,15 @@ def main(argv=None):
 
     for p in (opt, cap, rep):  # after the subcommand, where people put it
         p.add_argument("--out", default=".fleetopt", help="where captures and run records go (default ./.fleetopt)")
+    for p in (opt, cap):
+        p.add_argument("--dev-cache", action="store_true",
+                       help="development only: replay identical model calls from <out>/dev_cache.sqlite so a "
+                            "repeated run of the target costs nothing. Token counts stay real; latency and "
+                            "the noise floor do not, so nothing measured under it is a claim")
 
     args = parser.parse_args(argv)
+    if getattr(args, "dev_cache", False):
+        os.environ["FLEETOPT_DEV_CACHE"] = str(pathlib.Path(args.out).resolve() / "dev_cache.sqlite")
     return args.fn(args)
 
 

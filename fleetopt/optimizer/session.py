@@ -229,6 +229,11 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
     if run_cmd:
         mission += (f"\n\nThe run command is already set: `{run_cmd}`. Do not rediscover or "
                     "change it - start with measure.")
+    if os.environ.get("FLEETOPT_DEV_CACHE"):
+        mission += ("\n\nDEV CACHE IS ON: identical model calls are replayed from disk. Token counts "
+                    "are real; wall time, cost variance and the noise floor are not. Nothing measured "
+                    "in this run is a claim - say so in the report.")
+        print("[fleetopt] dev cache on: repeated model calls replay from disk; measurements are not claims")
 
     options = ClaudeAgentOptions(
         cwd=str(project),
@@ -296,7 +301,8 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
                     print(f"\n--- done in {message.num_turns} turns" +
                           (f", ${cost:.4f}" if cost else "") + " ---")
     finally:
-        meta = {"model": model, "auto": auto, "evals_path": evals, "max_turns": max_turns, "max_usd": max_usd}
+        meta = {"model": model, "auto": auto, "evals_path": evals, "max_turns": max_turns, "max_usd": max_usd,
+                "dev_cache": os.environ.get("FLEETOPT_DEV_CACHE")}
         try:
             _write_record(run_dir, project, start_sha, started, meta, texts, calls, skills, result)
         except OSError as exc:  # never let the record mask what the run itself did

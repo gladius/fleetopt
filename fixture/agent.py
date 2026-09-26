@@ -5,40 +5,11 @@ growing context every iteration, and a summarize step. The fake chat model emits
 usage_metadata so the whole thing runs offline with no API cost.
 """
 
-import time
 from typing import TypedDict
 
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from fake_model import BudgetFakeChat
+from langchain_core.messages import HumanMessage
 from langgraph.graph import END, START, StateGraph
-
-
-class BudgetFakeChat(BaseChatModel):
-    """Fake model that reports token usage, so capture has something to read."""
-
-    reply: str = "ok"
-    input_tokens: int = 100
-    output_tokens: int = 50
-    latency_s: float = 0.02
-
-    @property
-    def _llm_type(self) -> str:
-        return "budget-fake"
-
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        time.sleep(self.latency_s)
-        # Grow with the prompt the way a real model's input tokens would.
-        prompt_chars = sum(len(str(m.content)) for m in messages)
-        message = AIMessage(
-            content=self.reply,
-            usage_metadata={
-                "input_tokens": self.input_tokens + prompt_chars // 4,
-                "output_tokens": self.output_tokens,
-                "total_tokens": self.input_tokens + prompt_chars // 4 + self.output_tokens,
-            },
-        )
-        return ChatResult(generations=[ChatGeneration(message=message)])
 
 
 class State(TypedDict):

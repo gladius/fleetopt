@@ -173,6 +173,7 @@ def main():
     ap.add_argument("--pages", type=int, default=3)
     args = ap.parse_args()
 
+    print(f"token: {'yes' if TOKEN else 'no'} -> inspecting up to {args.top}", file=sys.stderr)
     repos = {}
     for q in QUERIES:
         got = search(q, args.pages)

@@ -233,3 +233,42 @@ def test_capture_fixture_end_to_end(tmp_path):
     assert (tmp_path / "out" / "fleetopt.db").exists()
     runs = re.search(r"(\d+) runs, (\d+) graphs", out.stdout)
     assert runs and int(runs.group(1)) > 0 and int(runs.group(2)) == 1, out.stdout
+
+
+# --- dev cache and the second fixture ------------------------------------------------
+
+def _capture_fixture(tmp_path, script, *extra):
+    target = tmp_path / "fixture"
+    if not target.exists():
+        shutil.copytree(ROOT / "fixture", target)
+        for args in (["init", "-q"], ["add", "-A"],
+                     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"]):
+            subprocess.run(["git", "-C", str(target), *args], check=True, capture_output=True)
+    return subprocess.run(
+        [sys.executable, "-c", "from fleetopt.cli import main; main()", "capture", str(target),
+         "--run", f"{sys.executable} {script}", "--out", str(tmp_path / "out"), *extra],
+        cwd=tmp_path, capture_output=True, text=True, timeout=300,
+    )
+
+
+def test_dev_cache_replays_identical_runs_and_keeps_token_counts(tmp_path):
+    first = _capture_fixture(tmp_path, "agent.py", "--dev-cache")
+    second = _capture_fixture(tmp_path, "agent.py", "--dev-cache")
+    assert first.returncode == 0 and second.returncode == 0, first.stdout + second.stdout + second.stderr
+    assert (tmp_path / "out" / "dev_cache.sqlite").exists()
+    conn = store.connect(tmp_path / "out" / "fleetopt.db")
+    rows = conn.execute(
+        "SELECT COUNT(*), SUM(input_tokens), SUM(duration_ms) FROM runs"
+        " WHERE run_type = 'llm' GROUP BY session_id ORDER BY session_id").fetchall()
+    assert len(rows) == 2
+    assert rows[0][0] == rows[1][0] > 0 and rows[0][1] == rows[1][1]  # same calls, same tokens
+    assert rows[1][2] < rows[0][2]  # replayed calls skip the fake model's sleep
+
+
+def test_supervisor_fixture_captures_its_planted_smells(tmp_path):
+    out = _capture_fixture(tmp_path, "supervisor.py")
+    assert out.returncode == 0, out.stdout + out.stderr
+    conn = store.connect(tmp_path / "out" / "fleetopt.db")
+    nodes = {r[0] for r in conn.execute("SELECT DISTINCT node FROM runs WHERE node IS NOT NULL")}
+    assert {"route", "technical", "supervisor", "worker_a", "worker_b", "worker_c", "draft", "reflect"} <= nodes
+    assert not {"billing", "other"} & nodes  # in the graph, never taken
