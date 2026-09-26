@@ -83,6 +83,7 @@ async def _ask(prompt, model=None):
         allowed_tools=[],
         system_prompt=SYSTEM,
         setting_sources=config.SETTING_SOURCES,
+        extra_args=config.sdk_args(),
         env=config.SDK_ENV,
         permission_mode="default",
     )

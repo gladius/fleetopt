@@ -33,6 +33,8 @@ from fleetopt.optimizer import tools
 _HERE = pathlib.Path(__file__).parent
 SKILL = (_HERE / "SKILL.md").read_text(encoding="utf-8")
 PLUGIN = _HERE / "plugin"  # decision skills, loaded by the harness, triggered by description
+# Only fleetopt's skills are listed to the model; the CLI's built-in ones are noise here.
+SKILLS = sorted(f"fleetopt:{p.name}" for p in (PLUGIN / "skills").iterdir() if p.is_dir())
 
 MISSION = """Optimize the LangGraph agent in this project so it costs less to run,
 without changing what it produces.
@@ -200,9 +202,12 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
         # And it reads the target's source, never its secrets (see config.DENY_READS).
         disallowed_tools=["AskUserQuestion", *config.DENY_READS],
         # Authenticates like Claude Code on this machine (login, settings.json env
-        # block, apiKeyHelper, cloud switches) - loads user settings for that, and
-        # nothing from the target repo's own .claude/. See config.py.
+        # block, apiKeyHelper, cloud switches) without inheriting the operator's
+        # plugins, skills or MCP servers, or the target repo's .claude/. See config.py.
         setting_sources=config.SETTING_SOURCES,
+        extra_args=config.sdk_args(),
+        strict_mcp_config=True,
+        skills=SKILLS,
         env=config.SDK_ENV,
         max_turns=max_turns,
         # Caps the optimizer's own spend. The target's API calls go through the

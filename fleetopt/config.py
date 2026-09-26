@@ -6,6 +6,8 @@ the way Claude Code on this machine does - a claude.ai login, ANTHROPIC_API_KEY 
 ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL in the environment or in the `env` block
 of ~/.claude/settings.json, an apiKeyHelper, or the Bedrock/Vertex/Foundry
 switches. If Claude Code works on the machine, fleetopt works. Nothing to copy.
+Only those credential keys are taken from settings.json; the operator's plugins,
+skills, hooks and MCP servers stay out of every run (SETTING_SOURCES, sdk_args).
 
 Knobs (FLEETOPT_*): real environment, then ./.env, then ~/.config/fleetopt/env.
 Same format everywhere, first hit wins.
@@ -45,12 +47,32 @@ def child_env():
     return {k: v for k, v in os.environ.items() if k not in _injected}
 
 
-# Which Claude Code settings the SDK sessions load. "user" keeps
-# ~/.claude/settings.json, where a company puts its gateway URL and key and where
-# apiKeyHelper lives. The target repo's own .claude/ (hooks, permissions,
-# CLAUDE.md) is deliberately NOT loaded: it is another team's configuration and
-# an instruction surface we don't control. Managed policy settings always apply.
-SETTING_SOURCES = ["user"]
+# Which Claude Code settings the SDK sessions load: none. Loading "user" would pull
+# in the operator's own plugins, skills, hooks and MCP servers (measured on one dev
+# box: 3 plugins, 35 skills, 5 servers including Gmail and Drive, and 40x the
+# fixed per-turn cost). A run on another team's repo gets none of that. What a
+# company puts in ~/.claude/settings.json to reach its gateway - the `env` block
+# and apiKeyHelper - is passed through explicitly by sdk_args(). The target repo's
+# own .claude/ is not loaded either: another team's instruction surface. Managed
+# policy settings and the claude.ai login apply regardless.
+SETTING_SOURCES = []
+
+
+def _user_settings_path():
+    root = os.environ.get("CLAUDE_CONFIG_DIR")
+    return (pathlib.Path(root) if root else pathlib.Path.home() / ".claude") / "settings.json"
+
+
+def sdk_args():
+    """Extra CLI args for every SDK session: the credential-bearing keys of the
+    user's settings.json (`env`, `apiKeyHelper`) as an inline --settings JSON, and
+    nothing else from that file."""
+    try:
+        settings = json.loads(_user_settings_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    keep = {k: settings[k] for k in ("env", "apiKeyHelper") if k in settings}
+    return {"settings": json.dumps(keep)} if keep else {}
 
 # Passed to every Claude Code subprocess fleetopt spawns.
 SDK_ENV = {
