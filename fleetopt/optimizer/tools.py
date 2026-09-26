@@ -16,6 +16,7 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 from fleetopt.evidence import evals as evals_mod
 from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
+from fleetopt.evidence import shape as shape_mod
 from fleetopt.probe import runner, store
 
 # Set once by session.py before the agent starts.
@@ -227,11 +228,61 @@ async def load_eval_cases(args):
     return _ok("\n".join(lines))
 
 
-_TOOLS = [set_run_command, measure, query_traces, graph_topology, compare, judge, load_eval_cases]
+@tool(
+    "graph_shape",
+    "Structural facts from the traces under a label: branches declared but never taken, "
+    "dispatchers whose target order never varies (and whether a model was consulted to "
+    "decide it), loops that run the same number of rounds in every trace, repeated model "
+    "calls with identical replies. Numbers only - the evidence an architecture review cites.",
+    {"label": str},
+)
+async def graph_shape(args):
+    ids = _ids(args["label"])
+    if not ids:
+        return _ok(f"no completed measurement under label {args['label']!r}")
+    with _conn() as conn:
+        result = shape_mod.analyze(conn, ids)
+    _record("graph_shape", label=args["label"], traces=result["traces"], findings=result["findings"])
+    return _ok(shape_mod.render(result))
 
 
-def server():
-    return create_sdk_mcp_server(name="fleetopt", tools=_TOOLS)
+@tool(
+    "review_architecture",
+    "Run the architecture reviewer on the traces under a label: a separate read-only "
+    "session with its own context that names the design patterns, checks each against "
+    "graph_shape numbers and returns a report with tiers. Call once, after the baseline, "
+    "with one sentence on what the agent is for. Put the report verbatim under an "
+    "'Architecture review' heading in your final report.",
+    {"label": str, "purpose": str},
+)
+async def review_architecture(args):
+    if not CTX.get("review"):
+        return _ok("architecture review is off for this run (start with --review)")
+    if not _ids(args["label"]):
+        return _ok(f"no completed measurement under label {args['label']!r} - measure first")
+    from fleetopt.optimizer import review as review_mod
+
+    try:
+        report, cost = await review_mod.run(CTX["project"], args["label"], args["purpose"], model=CTX.get("model"))
+    except RuntimeError as e:
+        _record("review_failed", label=args["label"], error=str(e)[:300])
+        return _ok(f"architecture review failed: {e}")
+    if CTX.get("run_dir"):
+        (CTX["run_dir"] / "review.md").write_text(report + "\n", encoding="utf-8")
+    _record("review", label=args["label"], words=len(report.split()), reviewer_cost_usd=cost)
+    return _ok(report)
+
+
+_TOOLS = [set_run_command, measure, query_traces, graph_topology, graph_shape, compare, judge,
+          load_eval_cases, review_architecture]
+
+
+def server(names=None):
+    """The in-process tool server; `names` (mcp__fleetopt__* or bare) selects a subset,
+    which is how the reviewer gets a read-only one."""
+    chosen = _TOOLS if names is None else [
+        t for t in _TOOLS if t.name in names or f"mcp__fleetopt__{t.name}" in names]
+    return create_sdk_mcp_server(name="fleetopt", tools=chosen)
 
 
 TOOL_NAMES = [f"mcp__fleetopt__{t.name}" for t in _TOOLS]

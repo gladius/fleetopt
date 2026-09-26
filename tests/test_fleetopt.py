@@ -312,3 +312,18 @@ def test_shape_on_the_cost_fixture_sees_only_the_research_loop(tmp_path):
     result = shape.analyze(conn, [r[0] for r in conn.execute("SELECT id FROM sessions")])
     assert {f["node"] for f in result["findings"]} == {"research"}  # runs 3 rounds to its cap
     assert shape.render({"traces": 0, "nodes": [], "findings": []}) == "no traces to analyze"
+
+
+def test_graph_shape_tool_renders_the_fixtures_smells(tmp_path):
+    assert _capture_fixture(tmp_path, "supervisor.py").returncode == 0
+    tools.CTX.update(out=tmp_path / "out", project=(tmp_path / "fixture").resolve(), events=[])
+    reply = json.dumps(asyncio.run(tools.graph_shape.handler({"label": "manual"})))
+    assert "2 traces" in reply and "never taken" in reply and "same order" in reply
+    assert tools.CTX["events"][-1]["event"] == "graph_shape"
+    assert "no completed measurement" in json.dumps(asyncio.run(tools.graph_shape.handler({"label": "nope"})))
+
+
+def test_review_tool_is_off_unless_the_run_asked_for_it():
+    tools.CTX.update(review=False, events=[])
+    reply = json.dumps(asyncio.run(tools.review_architecture.handler({"label": "baseline", "purpose": "x"})))
+    assert "review is off" in reply

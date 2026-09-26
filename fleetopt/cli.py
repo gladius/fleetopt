@@ -53,6 +53,7 @@ def optimize(args):
             max_usd=args.max_usd,
             effort=os.environ.get("FLEETOPT_EFFORT") or None,
             evals=args.evals,
+            review=args.review,
         )
     )
 
@@ -155,6 +156,9 @@ def _parser():
     opt.add_argument("--max-usd", type=float, default=5.0,
                      help="stop the optimizer once its own spend reaches this (default 5). "
                           "Does not cover the target's API calls.")
+    opt.add_argument("--review", action="store_true",
+                     help="also review the architecture on the baseline traces (a read-only subagent; "
+                          "findings are recommendations with evidence under their own heading)")
     opt.set_defaults(fn=optimize)
 
     cap = sub.add_parser("capture", help="[debug] run a project under instrumentation")

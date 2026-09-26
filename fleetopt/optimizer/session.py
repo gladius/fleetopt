@@ -61,6 +61,16 @@ noise, or equivalence or correctness failed, say so plainly and leave the branch
 for review. A cost reduction that broke the agent is a
 regression, not a result."""
 
+REVIEW_MISSION = """
+
+ARCHITECTURE REVIEW IS ON. Once the baseline is measured and before any patch, call
+review_architecture once with the baseline label and one sentence on what this agent is
+for. It runs a separate read-only reviewer and returns its report. Put that report
+verbatim under a heading "Architecture review" in your final report, separate from the
+savings. Do not act on tier-two items. Act on a tier-one item only if eval cases are
+loaded and cover the affected path; otherwise leave it as a recommendation and say what
+would unlock it."""
+
 STOP = ("The user declined to let you {kind}. This is final for the session: do not retry, "
         "do not look for another way to do it. Write your final report now with what you "
         "established from read-only evidence, and state plainly what you could not do.")
@@ -212,7 +222,7 @@ class Gate:
         return PermissionResultAllow()
 
 
-async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=60, max_usd=None, effort=None, evals=None):
+async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=60, max_usd=None, effort=None, evals=None, review=False):
     project = pathlib.Path(project).resolve()
     out = pathlib.Path(out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -221,7 +231,8 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
     run_dir = out / "runs" / f"{started:%Y%m%d-%H%M%S}-{project.name}"
     run_dir.mkdir(parents=True, exist_ok=True)
     start_sha = _git(project, "rev-parse", "HEAD")
-    tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd, "run_locked": bool(run_cmd), "events": []})
+    tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd, "run_locked": bool(run_cmd),
+                      "events": [], "review": review, "model": model, "run_dir": run_dir})
     mission = MISSION
     if evals:
         mission += (f"\n\nEval cases were supplied at `{evals}`. Call load_eval_cases with that "
@@ -229,6 +240,8 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
     if run_cmd:
         mission += (f"\n\nThe run command is already set: `{run_cmd}`. Do not rediscover or "
                     "change it - start with measure.")
+    if review:
+        mission += REVIEW_MISSION
     if os.environ.get("FLEETOPT_DEV_CACHE"):
         mission += ("\n\nDEV CACHE IS ON: identical model calls are replayed from disk. Token counts "
                     "are real; wall time, cost variance and the noise floor are not. Nothing measured "
@@ -245,6 +258,12 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
             "you have not measured.\n\n" + SKILL
         ),
         mcp_servers={"fleetopt": tools.server()},
+        # Built-ins by allowlist. The CLI default is 26 tools including web fetch and
+        # search, cron, worktrees, messaging and wake-up scheduling: egress and mutation
+        # surfaces an optimizer has no business with, and schema tokens on every turn.
+        # Observed before this: a run called ScheduleWakeup to "wait" for its reviewer.
+        # The reviewer is a separate query() behind review_architecture, not a subagent.
+        tools=["Read", "Grep", "Glob", "Bash", "Edit", "Write", "Skill"],
         # Only ungated tools go here. An allowed_tools entry auto-approves before
         # can_use_tool is consulted, so anything the Gate must see is left out and
         # falls through to it (the SDK warns about this: CanUseToolShadowedWarning).
@@ -302,7 +321,7 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
                           (f", ${cost:.4f}" if cost else "") + " ---")
     finally:
         meta = {"model": model, "auto": auto, "evals_path": evals, "max_turns": max_turns, "max_usd": max_usd,
-                "dev_cache": os.environ.get("FLEETOPT_DEV_CACHE")}
+                "dev_cache": os.environ.get("FLEETOPT_DEV_CACHE"), "review": review}
         try:
             _write_record(run_dir, project, start_sha, started, meta, texts, calls, skills, result)
         except OSError as exc:  # never let the record mask what the run itself did
