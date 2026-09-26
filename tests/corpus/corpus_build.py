@@ -6,7 +6,8 @@ Writes corpus.md and corpus.json next to this file. Unauthenticated GitHub allow
 10 search calls a minute and 60 other calls an hour, so tree inspection (which
 is what tells us size and patterns) is capped by --top. Export GITHUB_TOKEN for
 5000 calls an hour; the script then also reads each repo's dependency file to
-name the LLM providers it pulls in.
+name the LLM providers it pulls in. The token can also sit in
+~/.config/fleetopt/github_token.
 """
 
 import argparse
@@ -24,7 +25,18 @@ import urllib.request
 
 API = "https://api.github.com"
 HERE = pathlib.Path(__file__).parent
-TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+def _token():
+    """GITHUB_TOKEN in the environment, else the file ~/.config/fleetopt/github_token
+    (one line, chmod 600). Read-only public-repo scope is all the script needs. The
+    value is used in a request header and never printed."""
+    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+        if os.environ.get(name):
+            return os.environ[name].strip()
+    f = pathlib.Path.home() / ".config" / "fleetopt" / "github_token"
+    return f.read_text(encoding="utf-8").strip() if f.exists() else None
+
+
+TOKEN = _token()
 SKIP = {"langchain-ai/langgraph", "langchain-ai/langchain", "langchain-ai/langgraphjs"}
 
 QUERIES = [
