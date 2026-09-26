@@ -7,3 +7,9 @@ __pycache__/
 
 # test material, never part of the product
 targets/
+
+# research output, not product
+research_notes/
+reports/
+tests/corpus/corpus.json
+fleetopt/optimizer/plugin/evals/results/

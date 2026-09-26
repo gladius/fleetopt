@@ -28,8 +28,8 @@ T=$(mktemp -d) && cp -r fixture/. "$T" && git -C "$T" init -q && git -C "$T" add
 fleetopt optimize "$T" --auto
 ```
 
-The last line should end with an `equivalence: PASSED` block and a `─── done in N
-turns, $x ───` line, and leave an `opt/...` branch in that temp repo. The copy
+The last line should end with an `equivalence: PASSED` block and a `--- done in N
+turns, $x ---` line, and leave an `opt/...` branch in that temp repo. The copy
 matters: the optimizer branches whatever git repo the target is in, and
 `fixture/` inside this checkout would mean branching fleetopt itself.
 
@@ -89,6 +89,8 @@ fleetopt/
   probe/          observes an unmodified target — hooks, runner, sqlite store
   evidence/       turns observations into defensible claims — measure, pricing, judge
   optimizer/      the agent — session, tools, SKILL.md (router) + plugin/skills/ (one skill per decision)
+                  plugin/evals/  eval cases for those skills (`claude plugin eval`)
+tests/            pytest for the deterministic code; corpus/ = real-repo ledger and candidate list
 ```
 
 `judge` lives in `evidence/`, not `optimizer/`, on purpose: the optimizer
@@ -204,6 +206,9 @@ Code on the machine does, in Claude Code's own precedence: cloud-provider
 switches, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `apiKeyHelper`, then the
 claude.ai login. Those variables can sit in the shell or in the `env` block of
 `~/.claude/settings.json`, which is how a company gateway is usually distributed.
+Only that `env` block and `apiKeyHelper` are read from the file: the operator's own
+plugins, skills, hooks and MCP servers never enter a run, and neither does the
+target repo's `.claude/`.
 `fleetopt optimize` prints which one it found. The target agent is separate: it
 runs with the operator's real environment and its own keys, and never inherits
 anything fleetopt read from its own config files.
@@ -218,6 +223,22 @@ optimizer's own reasoning spend (unverified for finding quality, off by default)
 **What a claude.ai login covers:** the optimizer and the judge, not the agent
 under test. The fixture uses a fake model, so its runs are free of API spend.
 A real target makes its own provider calls with its own key.
+
+## Testing
+
+Three layers, each the standard tool for what it checks. None of them touches a
+target's API key.
+
+| Layer | What it checks | Command | Cost |
+|---|---|---|---|
+| pytest | the deterministic code: eval discovery, label scoping, the Bash guard, the noise floor, session isolation, and one capture of the fixture | `pytest -q` | none, about 2 s |
+| plugin eval | the six skills: with the plugin loaded the agent reaches each skill's conclusion (the 4,096-token Haiku minimum, effort before tier, the ~10K schema threshold...); the default with/without arm shows whether the skill made the difference | `claude plugin eval fleetopt/optimizer/plugin --trust-plugin` | 12 short agent runs on your login, a few dollars |
+| corpus ledger | the whole loop on real agents | `fleetopt optimize targets/<repo> --auto`, then a line in `tests/corpus/ledger.md` | the target's own tokens plus the optimizer's |
+
+The skill evals live next to the skills because the runner looks for them below the
+plugin. `tests/corpus/corpus_build.py` regenerates the candidate list from GitHub
+search; export `GITHUB_TOKEN` for the full pass. Every break found on a real repo
+becomes a pytest case; every recurring pattern becomes a line in a skill.
 
 ## Verified end to end
 
