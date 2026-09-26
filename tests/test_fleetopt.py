@@ -20,7 +20,7 @@ import sys
 import pytest
 
 from fleetopt import cli, config
-from fleetopt.evidence import evals, measure
+from fleetopt.evidence import evals, measure, shape
 from fleetopt.optimizer import session, tools
 from fleetopt.probe import runner, store
 
@@ -281,3 +281,34 @@ def test_out_is_accepted_before_and_after_the_subcommand():
     assert parse(["optimize", "repo", "--out", "after"]).out == "after"
     assert parse(["--out", "before", "optimize", "repo"]).out == "before"
     assert parse(["--out", "before", "capture", "repo", "--run", "x", "--out", "after"]).out == "after"
+
+
+# --- structural smells: numbers, not opinions ------------------------------------------
+
+def test_shape_finds_the_supervisor_fixtures_planted_smells_and_nothing_else(tmp_path):
+    assert _capture_fixture(tmp_path, "supervisor.py").returncode == 0
+    conn = store.connect(tmp_path / "out" / "fleetopt.db")
+    ids = [r[0] for r in conn.execute("SELECT id FROM sessions")]
+    result = shape.analyze(conn, ids)
+    kinds = {(f["kind"], f["node"]) for f in result["findings"]}
+    assert result["traces"] == 2
+    assert ("branch_never_taken", "route") in kinds          # billing, other exist and are never taken
+    assert ("fixed_dispatch", "supervisor") in kinds         # worker_a -> worker_b -> worker_c -> draft, every time
+    assert ("constant_rounds", "reflect") in kinds           # three rounds, always
+    assert ("repeated_identical_reply", "reflect") in kinds  # the critic never says anything new
+    never = next(f for f in result["findings"] if f["kind"] == "branch_never_taken")
+    assert sorted(never["targets"]) == ["billing", "other"]
+    dispatches = [f for f in result["findings"] if f["kind"] == "fixed_dispatch"]
+    assert [d["node"] for d in dispatches] == ["supervisor"]  # reflect's self-loop is rounds, not dispatch
+    assert dispatches[0]["order"] == ["worker_a", "worker_b", "worker_c", "draft"] and dispatches[0]["calls_model"]
+    assert not {n for _, n in kinds} - {"route", "supervisor", "reflect"}  # no finding on a healthy node
+    text = shape.render(result)
+    assert "2 traces" in text and "never taken in 2 traces" in text
+
+
+def test_shape_on_the_cost_fixture_sees_only_the_research_loop(tmp_path):
+    assert _capture_fixture(tmp_path, "agent.py").returncode == 0
+    conn = store.connect(tmp_path / "out" / "fleetopt.db")
+    result = shape.analyze(conn, [r[0] for r in conn.execute("SELECT id FROM sessions")])
+    assert {f["node"] for f in result["findings"]} == {"research"}  # runs 3 rounds to its cap
+    assert shape.render({"traces": 0, "nodes": [], "findings": []}) == "no traces to analyze"
