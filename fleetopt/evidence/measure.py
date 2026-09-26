@@ -157,7 +157,7 @@ def aggregate(conn, session_ids):
     per = [session_stats(conn, sid) for sid in session_ids]
     return {
         key: _median([p[key] for p in per])
-        for key in ("llm_calls", "input_tokens", "output_tokens", "cost_usd", "wall_ms")
+        for key in ("cost_usd", "wall_ms", "llm_calls", "input_tokens", "output_tokens")  # billed cost first: tokens track it loosely
     }, per
 
 

@@ -145,7 +145,6 @@ def main(argv=None):
     _console_never_crashes()
     config.load_env()
     parser = argparse.ArgumentParser(prog="fleetopt", description=__doc__)
-    parser.add_argument("--out", default=".fleetopt", help="where captures are stored")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     opt = sub.add_parser("optimize", help="find and prove cost savings in a project")
@@ -168,6 +167,9 @@ def main(argv=None):
     rep = sub.add_parser("report", help="[debug] summarize a capture")
     rep.add_argument("--session", type=int)
     rep.set_defaults(fn=report)
+
+    for p in (opt, cap, rep):  # after the subcommand, where people put it
+        p.add_argument("--out", default=".fleetopt", help="where captures and run records go (default ./.fleetopt)")
 
     args = parser.parse_args(argv)
     return args.fn(args)

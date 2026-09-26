@@ -11,9 +11,13 @@ Touching the repository is asked once, and after that git is the undo.
 """
 
 import asyncio
+import datetime
+import importlib.metadata
+import json
 import os
 import pathlib
 import re
+import subprocess
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -50,8 +54,8 @@ Work in this order, but use your judgement - the project decides the details:
 4. Change one thing. Create a git branch first, then apply a single optimization.
 5. Prove it. Measure again under a new label, compare, and judge equivalence.
 
-Report at the end: what you changed, the measured difference, the equivalence
-verdict, and the correctness pass rate before and after if eval cases were loaded
+Report at the end: what you changed, the measured difference (dollars first, then
+latency, then tokens), the equivalence verdict, and the correctness pass rate before and after if eval cases were loaded
 (say "correctness not checked" if none were found). If the saving was within
 noise, or equivalence or correctness failed, say so plainly and leave the branch
 for review. A cost reduction that broke the agent is a
@@ -108,6 +112,51 @@ def guard_bash(run_cmd):
                          "fails, read its error instead of reproducing it.")
         return {}
     return hook
+
+
+
+def _git(project, *args):
+    """Read-only git query on the target; '' when there is no repo or no git."""
+    try:
+        return subprocess.run(["git", "-C", str(project), *args],
+                              capture_output=True, text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def _write_record(run_dir, project, start_sha, started, meta, texts, calls, skills, result):
+    """What this run did: report.md for a human, run.json for the ledger and for
+    improving fleetopt, patch.diff when the branch changed anything. No prompts or
+    outputs of the target are stored; the 120-char input excerpts in judge rows and
+    the diff are the only target content, so sharing a run folder is the operator's
+    call, not automatic."""
+    (run_dir / "report.md").write_text("\n\n".join(texts), encoding="utf-8")
+    (run_dir / "log.txt").write_text("\n".join(calls), encoding="utf-8")
+    diff = _git(project, "diff", start_sha) if start_sha else ""
+    if diff:
+        (run_dir / "patch.diff").write_text(diff + "\n", encoding="utf-8")
+    try:
+        version = importlib.metadata.version("fleetopt")
+    except importlib.metadata.PackageNotFoundError:
+        version = "unknown"
+    record = {
+        "fleetopt": version,
+        "project": str(project),
+        "code_state_before": start_sha,
+        "branch_after": _git(project, "rev-parse", "--abbrev-ref", "HEAD"),
+        "started": started.isoformat(timespec="seconds"),
+        "finished": datetime.datetime.now().isoformat(timespec="seconds"),
+        **meta,
+        "run_cmd": tools.CTX.get("run_cmd"),
+        **result,
+        "skills": skills,
+        "tool_calls": calls,
+        "events": tools.CTX.get("events", []),
+        "patch": "patch.diff" if diff else None,
+        "report": "report.md",
+    }
+    (run_dir / "run.json").write_text(json.dumps(record, indent=1, default=str), encoding="utf-8")
+    print(f"[fleetopt] run record: {run_dir}")
 
 
 # Read-only git is not a repository mutation; don't spend the user's attention on it.
@@ -168,7 +217,11 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
     out = pathlib.Path(out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
-    tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd, "run_locked": bool(run_cmd)})
+    started = datetime.datetime.now()
+    run_dir = out / "runs" / f"{started:%Y%m%d-%H%M%S}-{project.name}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    start_sha = _git(project, "rev-parse", "HEAD")
+    tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd, "run_locked": bool(run_cmd), "events": []})
     mission = MISSION
     if evals:
         mission += (f"\n\nEval cases were supplied at `{evals}`. Call load_eval_cases with that "
@@ -219,17 +272,33 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
     async def prompt():
         yield {"type": "user", "message": {"role": "user", "content": mission}}
 
-    async with ClaudeSDKClient(options=options) as client:
-        await client.query(prompt())
-        async for message in client.receive_response():
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        print(block.text)
-                    elif isinstance(block, ToolUseBlock):
-                        print(f"  - {block.name.replace('mcp__fleetopt__', '')}")
-            elif isinstance(message, ResultMessage):
-                cost = getattr(message, "total_cost_usd", None)
-                print(f"\n--- done in {message.num_turns} turns" +
-                      (f", ${cost:.4f}" if cost else "") + " ---")
+    texts, calls, skills, result = [], [], [], {}
+    try:
+        async with ClaudeSDKClient(options=options) as client:
+            await client.query(prompt())
+            async for message in client.receive_response():
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            print(block.text)
+                            texts.append(block.text)
+                        elif isinstance(block, ToolUseBlock):
+                            name = block.name.replace("mcp__fleetopt__", "")
+                            print(f"  - {name}")
+                            calls.append(name)
+                            if block.name == "Skill":
+                                skills.append((block.input or {}).get("skill", "?"))
+                elif isinstance(message, ResultMessage):
+                    cost = getattr(message, "total_cost_usd", None)
+                    result = {"turns": message.num_turns, "optimizer_cost_usd": cost,
+                              "status": message.subtype,
+                              "error": message.result if message.is_error else None}
+                    print(f"\n--- done in {message.num_turns} turns" +
+                          (f", ${cost:.4f}" if cost else "") + " ---")
+    finally:
+        meta = {"model": model, "auto": auto, "evals_path": evals, "max_turns": max_turns, "max_usd": max_usd}
+        try:
+            _write_record(run_dir, project, start_sha, started, meta, texts, calls, skills, result)
+        except OSError as exc:  # never let the record mask what the run itself did
+            print(f"[fleetopt] could not write the run record: {exc}")
     return 0

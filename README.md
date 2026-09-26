@@ -53,10 +53,14 @@ fleetopt optimize ~/work/their-agent --auto
 | `--evals FILE` | Eval cases (input + expected answer) as JSONL/JSON or deepeval tests. Optional: the optimizer looks for them in the repo otherwise. With cases, the judge reports correctness pass rates before and after, not just "unchanged". |
 | `--out DIR` | Where captures go (default `./.fleetopt`, relative to where you run it). |
 
-**What you get:** the report in the terminal (finding, measured before/after,
-judge verdict), the patch committed on a branch in the target repo, and every
-measurement in `.fleetopt/fleetopt.db`. The run also prints which credential it
-is using as its first line.
+**What you get:** the report in the terminal (finding, measured before/after in
+dollars first, judge verdict), the patch committed on a branch in the target repo,
+every measurement in `.fleetopt/fleetopt.db`, and a run folder at
+`.fleetopt/runs/<timestamp>-<project>/` with `report.md`, `run.json` (what every
+tool established: run command, medians, compare, judge, skills used, turns, cost),
+`patch.diff` and `log.txt`. The run folder is what feeds the ledger and what you
+would send back to the central team; it holds no prompts or outputs of the target.
+The run also prints which credential it is using as its first line.
 
 **Two debug commands**, for when the optimizer comes back empty on a repo:
 `fleetopt capture <project> --run CMD` runs the target under instrumentation
@@ -253,6 +257,12 @@ equivalence    PASSED (2/2)
 branch         opt/bounded-research-context
 51 turns, $0.81
 ```
+
+Re-run 2026-09-26 with isolated sessions and the run record: 21 turns, $0.32,
+`fleetopt:prompt-growth` fired, input tokens -11.4%, equivalence 2/2, and the run
+folder written with `report.md`, `run.json`, `patch.diff`, `log.txt`. Cost shows
+`unpriced` on the fixture because its model is a fake with no price; on a real
+agent that line is dollars.
 
 The optimizer found the run command itself, established a baseline, identified
 the pattern from `prompt_chars` rising 57 → 698 → 1339 → 1966 within a single

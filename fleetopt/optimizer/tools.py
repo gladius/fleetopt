@@ -6,6 +6,7 @@ equivalence gate stay in code because their output is a claim handed to another
 team, and a claim has to be reproducible.
 """
 
+import datetime
 import json
 import os
 import pathlib
@@ -23,6 +24,13 @@ CTX = {}
 
 def _ok(text):
     return {"content": [{"type": "text", "text": text}]}
+
+
+def _record(event, **data):
+    """One line in the run record (session.py writes run.json): what a tool
+    established, never the target's prompts or outputs."""
+    CTX.setdefault("events", []).append(
+        {"t": datetime.datetime.now().isoformat(timespec="seconds"), "event": event, **data})
 
 
 def _conn():
@@ -65,6 +73,7 @@ async def set_run_command(args):
         return _ok(f"run command was supplied by the operator and is locked: {CTX['run_cmd']!r}. "
                    "Call measure with it. It unlocks only if measure fails with it.")
     CTX["run_cmd"] = args["cmd"]
+    _record("run_command", cmd=args["cmd"])
     return _ok(f"run command set: {args['cmd']}")
 
 
@@ -83,9 +92,12 @@ async def measure(args):
         measure_mod.collect(CTX["project"], CTX["run_cmd"], CTX["out"], n, label)
     except RuntimeError as e:
         CTX["run_failed"] = True  # unlocks set_run_command
+        _record("measure_failed", label=label, error=str(e)[:300])
         return _ok(f"measurement failed: {e}")
     with _conn() as conn:
-        stats, _ = measure_mod.aggregate(conn, _ids(label))
+        ids = _ids(label)
+        stats, _ = measure_mod.aggregate(conn, ids)
+    _record("measure", label=label, n=n, sessions=len(ids), stats=stats)
     return _ok(f"{label} ({n} runs), medians:\n{json.dumps(stats, indent=2)}")
 
 
@@ -144,7 +156,9 @@ async def compare(args):
         if not base or not cand:
             return _ok(f"missing measurements: {args['baseline']}={len(base)}, "
                        f"{args['candidate']}={len(cand)}")
-        return _ok(measure_mod.render(measure_mod.compare(conn, base, cand)))
+        comparison = measure_mod.compare(conn, base, cand)
+    _record("compare", baseline=args["baseline"], candidate=args["candidate"], result=comparison)
+    return _ok(measure_mod.render(comparison))
 
 
 @tool(
@@ -163,6 +177,8 @@ async def judge(args):
         passed, results, correctness = await judge_mod.judge_sessions(
             conn, args["task"], base[0], cand[0], cases
         )
+    _record("judge", baseline=args["baseline"], candidate=args["candidate"],
+            passed=passed, equivalence=results, correctness=correctness)
     lines = ["equivalence (output unchanged?):"]
     lines += [f"  [{'PASS' if r['equivalent'] else 'FAIL'}] {r['reason']}" for r in results]
     if correctness:
@@ -195,6 +211,7 @@ async def load_eval_cases(args):
         return _ok(f"no such path: {path}")
     cases, notes = evals_mod.load(path)
     CTX["eval_cases"] = cases
+    _record("eval_cases", path=str(path), loaded=len(cases))
     if cases:  # kept in fleetopt's own folder, never in the team's repo
         keep = CTX["out"] / "evals"
         keep.mkdir(parents=True, exist_ok=True)

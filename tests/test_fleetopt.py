@@ -120,6 +120,7 @@ def test_compare_applies_noise_floor_and_flags_unpriced(tmp_path):
     assert verdict(_measured(conn, 1500)) == "regressed"
     mystery = measure.compare(conn, base, [_measured(conn, 700, model="mystery-model")])
     assert mystery["cost_usd"]["verdict"] == "unpriced"
+    assert list(mystery)[:2] == ["cost_usd", "wall_ms"]  # billed cost is the headline, then latency
 
 
 def test_compare_refuses_to_pool_different_source_versions(tmp_path):
@@ -225,9 +226,10 @@ def test_capture_fixture_end_to_end(tmp_path):
     git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
     out = subprocess.run(
         [sys.executable, "-c", "from fleetopt.cli import main; main()",
-         "capture", str(target), "--run", f"{sys.executable} agent.py"],
+         "capture", str(target), "--run", f"{sys.executable} agent.py", "--out", str(tmp_path / "out")],
         cwd=tmp_path, capture_output=True, text=True, timeout=300,
     )
     assert out.returncode == 0, out.stdout + out.stderr
+    assert (tmp_path / "out" / "fleetopt.db").exists()
     runs = re.search(r"(\d+) runs, (\d+) graphs", out.stdout)
     assert runs and int(runs.group(1)) > 0 and int(runs.group(2)) == 1, out.stdout
