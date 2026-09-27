@@ -19,7 +19,7 @@ import sys
 
 import pytest
 
-from fleetopt import config
+from fleetopt import cli, config
 from fleetopt.evidence import evals, measure
 from fleetopt.optimizer import session, tools
 from fleetopt.probe import runner, store
@@ -201,6 +201,7 @@ def test_sdk_args_pass_only_credential_keys_from_settings(tmp_path, monkeypatch)
         "model": "opus",
     }), encoding="utf-8")
     assert set(json.loads(config.sdk_args()["settings"])) == {"env", "apiKeyHelper"}
+    assert {"enabledPlugins", "hooks", "model"}.isdisjoint(config.AUTH_KEYS)
     (tmp_path / "settings.json").unlink()
     assert config.sdk_args() == {}
 
@@ -272,3 +273,11 @@ def test_supervisor_fixture_captures_its_planted_smells(tmp_path):
     nodes = {r[0] for r in conn.execute("SELECT DISTINCT node FROM runs WHERE node IS NOT NULL")}
     assert {"route", "technical", "supervisor", "worker_a", "worker_b", "worker_c", "draft", "reflect"} <= nodes
     assert not {"billing", "other"} & nodes  # in the graph, never taken
+
+
+def test_out_is_accepted_before_and_after_the_subcommand():
+    parse = cli._parser().parse_args
+    assert parse(["optimize", "repo"]).out == ".fleetopt"
+    assert parse(["optimize", "repo", "--out", "after"]).out == "after"
+    assert parse(["--out", "before", "optimize", "repo"]).out == "before"
+    assert parse(["--out", "before", "capture", "repo", "--run", "x", "--out", "after"]).out == "after"

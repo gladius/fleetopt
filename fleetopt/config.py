@@ -58,6 +58,14 @@ def child_env():
 SETTING_SOURCES = []
 
 
+# The settings.json keys that carry or fetch a credential. Everything else in that
+# file (plugins, hooks, permissions, MCP servers, model choice) stays out of a run.
+# `claude auth status` cannot be run under these flags, so the auth line fleetopt
+# prints describes the machine, and a setup that depends on a key missing from this
+# list fails loudly at the first model call rather than silently.
+AUTH_KEYS = ("env", "apiKeyHelper", "awsAuthRefresh", "awsCredentialExport")
+
+
 def _user_settings_path():
     root = os.environ.get("CLAUDE_CONFIG_DIR")
     return (pathlib.Path(root) if root else pathlib.Path.home() / ".claude") / "settings.json"
@@ -71,7 +79,7 @@ def sdk_args():
         settings = json.loads(_user_settings_path().read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    keep = {k: settings[k] for k in ("env", "apiKeyHelper") if k in settings}
+    keep = {k: settings[k] for k in AUTH_KEYS if k in settings}
     return {"settings": json.dumps(keep)} if keep else {}
 
 # Passed to every Claude Code subprocess fleetopt spawns.

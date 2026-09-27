@@ -141,10 +141,9 @@ def _console_never_crashes():
             pass
 
 
-def main(argv=None):
-    _console_never_crashes()
-    config.load_env()
+def _parser():
     parser = argparse.ArgumentParser(prog="fleetopt", description=__doc__)
+    parser.add_argument("--out", default=".fleetopt", help=argparse.SUPPRESS)  # old position, still accepted
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     opt = sub.add_parser("optimize", help="find and prove cost savings in a project")
@@ -169,14 +168,21 @@ def main(argv=None):
     rep.set_defaults(fn=report)
 
     for p in (opt, cap, rep):  # after the subcommand, where people put it
-        p.add_argument("--out", default=".fleetopt", help="where captures and run records go (default ./.fleetopt)")
+        p.add_argument("--out", default=argparse.SUPPRESS,
+                       help="where captures and run records go (default ./.fleetopt)")
     for p in (opt, cap):
         p.add_argument("--dev-cache", action="store_true",
                        help="development only: replay identical model calls from <out>/dev_cache.sqlite so a "
                             "repeated run of the target costs nothing. Token counts stay real; latency and "
                             "the noise floor do not, so nothing measured under it is a claim")
 
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv=None):
+    _console_never_crashes()
+    config.load_env()
+    args = _parser().parse_args(argv)
     if getattr(args, "dev_cache", False):
         os.environ["FLEETOPT_DEV_CACHE"] = str(pathlib.Path(args.out).resolve() / "dev_cache.sqlite")
     return args.fn(args)
