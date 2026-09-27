@@ -252,20 +252,6 @@ def _capture_fixture(tmp_path, script, *extra):
     )
 
 
-def test_dev_cache_replays_identical_runs_and_keeps_token_counts(tmp_path):
-    first = _capture_fixture(tmp_path, "agent.py", "--dev-cache")
-    second = _capture_fixture(tmp_path, "agent.py", "--dev-cache")
-    assert first.returncode == 0 and second.returncode == 0, first.stdout + second.stdout + second.stderr
-    assert (tmp_path / "out" / "dev_cache.sqlite").exists()
-    conn = store.connect(tmp_path / "out" / "fleetopt.db")
-    rows = conn.execute(
-        "SELECT COUNT(*), SUM(input_tokens), SUM(duration_ms) FROM runs"
-        " WHERE run_type = 'llm' GROUP BY session_id ORDER BY session_id").fetchall()
-    assert len(rows) == 2
-    assert rows[0][0] == rows[1][0] > 0 and rows[0][1] == rows[1][1]  # same calls, same tokens
-    assert rows[1][2] < rows[0][2]  # replayed calls skip the fake model's sleep
-
-
 def test_supervisor_fixture_captures_its_planted_smells(tmp_path):
     out = _capture_fixture(tmp_path, "supervisor.py")
     assert out.returncode == 0, out.stdout + out.stderr

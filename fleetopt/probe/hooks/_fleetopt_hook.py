@@ -203,44 +203,6 @@ def _patch_langgraph():
     StateGraph.compile = compile
 
 
-def _install_dev_cache(path):
-    """Replay identical model calls from a sqlite file, so a repeated run of the
-    target costs nothing. Development only (FLEETOPT_DEV_CACHE): token counts stay
-    real because the cached message carries its usage_metadata, but latency and
-    run-to-run variance vanish, so nothing measured under it is a claim."""
-    import sqlite3
-
-    from langchain_core.caches import BaseCache
-    from langchain_core.globals import set_llm_cache
-    from langchain_core.load import dumps, loads
-
-    class ReplayCache(BaseCache):
-        def __init__(self, db):
-            self._conn = sqlite3.connect(db, check_same_thread=False)
-            self._conn.execute("CREATE TABLE IF NOT EXISTS replay"
-                               " (prompt TEXT, llm TEXT, value TEXT, PRIMARY KEY (prompt, llm))")
-            self._lock = threading.Lock()
-
-        def lookup(self, prompt, llm_string):
-            with self._lock:
-                row = self._conn.execute("SELECT value FROM replay WHERE prompt = ? AND llm = ?",
-                                         (prompt, llm_string)).fetchone()
-            return [loads(g) for g in json.loads(row[0])] if row else None
-
-        def update(self, prompt, llm_string, return_val):
-            with self._lock:
-                self._conn.execute("INSERT OR REPLACE INTO replay VALUES (?, ?, ?)",
-                                   (prompt, llm_string, json.dumps([dumps(g) for g in return_val])))
-                self._conn.commit()
-
-        def clear(self, **kwargs):
-            with self._lock:
-                self._conn.execute("DELETE FROM replay")
-                self._conn.commit()
-
-    set_llm_cache(ReplayCache(path))
-
-
 def install():
     """Import langchain/langgraph eagerly and instrument both.
 
@@ -260,8 +222,3 @@ def install():
             _warn(f"{label} not instrumented ({exc})")
         except Exception as exc:
             _warn(f"{label} instrumentation failed: {exc}")
-    if os.environ.get("FLEETOPT_DEV_CACHE"):
-        try:
-            _install_dev_cache(os.environ["FLEETOPT_DEV_CACHE"])
-        except Exception as exc:
-            _warn(f"dev cache not installed: {exc}")

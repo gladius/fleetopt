@@ -52,7 +52,6 @@ fleetopt optimize ~/work/their-agent --auto
 | `--max-usd N` | Stop the optimizer once its *own* spend reaches N (default 5). The target's API calls are its own bill. |
 | `--evals FILE` | Eval cases (input + expected answer) as JSONL/JSON or deepeval tests. Optional: the optimizer looks for them in the repo otherwise. With cases, the judge reports correctness pass rates before and after, not just "unchanged". |
 | `--out DIR` | Where captures go (default `./.fleetopt`, relative to where you run it). |
-| `--dev-cache` | Development only. Replays identical model calls from `<out>/dev_cache.sqlite`, so a repeated run of the target costs nothing. Token counts stay real; latency and the noise floor do not, so nothing measured under it is a claim. |
 
 **What you get:** the report in the terminal (finding, measured before/after in
 dollars first, judge verdict), the patch committed on a branch in the target repo,
