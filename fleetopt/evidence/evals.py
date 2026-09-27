@@ -63,10 +63,27 @@ def _load_file(f):
     return [c for c in (_from_obj(o, src) for o in objs if isinstance(o, dict)) if c]
 
 
+def _pick(container, keys):
+    """The value under the first known key; for a dataset row's nested dict with one
+    entry, that entry, whatever it is called."""
+    if not isinstance(container, dict):
+        return container
+    lower = {str(k).lower(): v for k, v in container.items()}
+    found = next((lower[k] for k in keys if k in lower), None)
+    if found is None and len(lower) == 1:
+        found = next(iter(lower.values()))
+    return found
+
+
 def _from_obj(obj, source):
     lower = {str(k).lower(): v for k, v in obj.items()}
     inp = next((lower[k] for k in INPUT_KEYS if k in lower), None)
     exp = next((lower[k] for k in EXPECTED_KEYS if k in lower), None)
+    # LangSmith dataset exports nest them: {"inputs": {"question": ...}, "outputs": {"answer": ...}}
+    if inp is None and "inputs" in lower:
+        inp = _pick(lower["inputs"], INPUT_KEYS)
+    if exp is None and "outputs" in lower:
+        exp = _pick(lower["outputs"], EXPECTED_KEYS)
     if inp is None or exp is None:
         return None
     return {"input": _text(inp), "expected": _text(exp), "source": source}

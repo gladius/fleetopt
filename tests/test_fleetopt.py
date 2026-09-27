@@ -45,10 +45,15 @@ def test_evals_load_three_formats_and_skip_venv(tmp_path):
     venv.mkdir(parents=True)
     (venv / "ignored.jsonl").write_text('{"input": "x", "expected": "y"}\n', encoding="utf-8")
 
+    (tmp_path / "langsmith_export.json").write_text(json.dumps([
+        {"inputs": {"question": "total spent on keyboards?"}, "outputs": {"answer": "$1,118.00"}, "metadata": {}},
+        {"inputs": {"text": "only key, odd name"}, "outputs": {"label": "still a case"}},
+    ]), encoding="utf-8")
+
     cases, notes = evals.load(tmp_path)
-    assert sorted(c["expected"] for c in cases) == ["4", "Jupiter", "Paris", "Shakespeare"]
+    assert sorted(c["expected"] for c in cases) == ["$1,118.00", "4", "Jupiter", "Paris", "Shakespeare", "still a case"]
     assert all(".venv" not in c["source"] for c in cases)
-    assert len(notes) == 3
+    assert len(notes) == 4
 
 
 def test_evals_match_ignores_case_and_whitespace():
