@@ -236,7 +236,7 @@ def test_capture_fixture_end_to_end(tmp_path):
     assert runs and int(runs.group(1)) > 0 and int(runs.group(2)) == 1, out.stdout
 
 
-# --- dev cache and the second fixture ------------------------------------------------
+# --- the second fixture ------------------------------------------------------------------
 
 def _capture_fixture(tmp_path, script, *extra):
     target = tmp_path / "fixture"
