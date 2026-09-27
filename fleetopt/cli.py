@@ -142,6 +142,53 @@ def _console_never_crashes():
             pass
 
 
+def review(args):
+    """Review only: capture the agent, print the structural numbers, run the reviewer.
+    No optimizer session, so it costs the target's own run plus one reviewer session."""
+    import datetime
+    import json
+
+    from fleetopt.evidence import measure as measure_mod
+    from fleetopt.evidence import shape
+    from fleetopt.optimizer import review as review_mod
+    from fleetopt.optimizer import tools
+    from fleetopt.probe import store
+
+    project = pathlib.Path(args.project).resolve()
+    out = pathlib.Path(args.out).resolve()
+    print(f"[fleetopt] auth: {config.auth_summary() or 'unknown (could not run auth status)'}")
+    label = f"review-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+    try:
+        measure_mod.collect(project, args.run, out, args.n, label)
+    except RuntimeError as exc:
+        print(f"[fleetopt] capture failed: {exc}")
+        return 1
+
+    tools.CTX.update({"project": project, "out": out, "run_cmd": args.run, "events": [], "review": True})
+    with store.connect(out / "fleetopt.db") as conn:
+        facts = shape.analyze(conn, tools._ids(label))
+    print("\n--- structure, from the traces ---\n" + shape.render(facts))
+
+    model = os.environ.get("FLEETOPT_REVIEW_MODEL") or os.environ.get("FLEETOPT_MODEL") or "claude-sonnet-5"
+    purpose = args.purpose or "not stated - derive it from the README and the prompts"
+    try:
+        text, cost = asyncio.run(review_mod.run(project, label, purpose, model=model, max_usd=args.max_usd))
+    except RuntimeError as exc:
+        print(f"[fleetopt] {exc}")
+        return 1
+
+    run_dir = out / "runs" / f"{label}-{project.name}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "review.md").write_text(text + "\n", encoding="utf-8")
+    (run_dir / "run.json").write_text(json.dumps({
+        "kind": "review", "project": str(project), "run_cmd": args.run, "label": label, "n": args.n,
+        "model": model, "reviewer_cost_usd": cost, "shape": facts, "events": tools.CTX["events"],
+    }, indent=1, default=str), encoding="utf-8")
+    print("\n--- architecture review ---\n" + text)
+    print(f"\n--- reviewer ${cost or 0:.4f} ---\n[fleetopt] run record: {run_dir}")
+    return 0
+
+
 def _parser():
     parser = argparse.ArgumentParser(prog="fleetopt", description=__doc__)
     parser.add_argument("--out", default=".fleetopt", help=argparse.SUPPRESS)  # old position, still accepted
@@ -171,7 +218,15 @@ def _parser():
     rep.add_argument("--session", type=int)
     rep.set_defaults(fn=report)
 
-    for p in (opt, cap, rep):  # after the subcommand, where people put it
+    rev = sub.add_parser("review", help="architecture review only: capture, structural numbers, reviewer's report")
+    rev.add_argument("project")
+    rev.add_argument("--run", required=True, help="how to invoke the agent; use inputs that differ from each other")
+    rev.add_argument("--n", type=int, default=1, help="times to run the command (default 1: a review needs variety of inputs, not repeats)")
+    rev.add_argument("--purpose", help="one sentence on what the agent is for (derived from the README otherwise)")
+    rev.add_argument("--max-usd", type=float, default=1.0, help="cap on the reviewer's own spend (default 1)")
+    rev.set_defaults(fn=review)
+
+    for p in (opt, cap, rep, rev):  # after the subcommand, where people put it
         p.add_argument("--out", default=argparse.SUPPRESS,
                        help="where captures and run records go (default ./.fleetopt)")
 

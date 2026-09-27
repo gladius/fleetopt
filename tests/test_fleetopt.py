@@ -267,6 +267,8 @@ def test_out_is_accepted_before_and_after_the_subcommand():
     assert parse(["optimize", "repo", "--out", "after"]).out == "after"
     assert parse(["--out", "before", "optimize", "repo"]).out == "before"
     assert parse(["--out", "before", "capture", "repo", "--run", "x", "--out", "after"]).out == "after"
+    args = parse(["review", "repo", "--run", "x"])
+    assert (args.n, args.out, args.purpose, args.fn.__name__) == (1, ".fleetopt", None, "review")
 
 
 # --- structural smells: numbers, not opinions ------------------------------------------
