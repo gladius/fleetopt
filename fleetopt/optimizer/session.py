@@ -245,8 +245,8 @@ def verdict(events):
     measured = [e for e in events if e["event"] == "compare" and e.get("candidate_state") == final
                 and e.get("baseline_state") != final]
     cost = measured[-1]["result"].get("cost_usd", {}) if measured else {}
-    saving = (f" Cost {cost.get('before')} to {cost.get('after')} per run: {cost.get('verdict')}."
-              if cost.get("before") is not None else "")
+    saving = (f" Cost ${cost['before']:.4f} to ${cost['after']:.4f} per run: {cost.get('verdict')}."
+              if cost.get("before") is not None and cost.get("after") is not None else "")
     if not all(e["passed"] for e in judged):
         return (f"NOT PROVEN SAFE: the judge failed ({details}).{saving}"
                 " A saving with a failed gate is not a result. The branch is left for review.")
