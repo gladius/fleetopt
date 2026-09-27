@@ -107,22 +107,30 @@ def session_stats(conn, session_id):
         else:
             total_cost += c
 
-    wall = [
-        r["duration_ms"]
-        for r in conn.execute(
-            "SELECT duration_ms FROM runs WHERE session_id = ? AND parent_run_id IS NULL",
-            (session_id,),
-        )
-        if r["duration_ms"]
-    ]
-
+    roots = conn.execute(
+        "SELECT duration_ms, outputs, error FROM runs WHERE session_id = ? AND parent_run_id IS NULL",
+        (session_id,),
+    ).fetchall()
+    wall = [r["duration_ms"] for r in roots if r["duration_ms"]]
+    # A request that raised, or returned nothing, did not do the work. Money spent on it
+    # is not comparable with money spent on one that did: a design that crashes after
+    # five calls is "cheaper" than one that finishes.
+    completed = sum(r["error"] is None and r["outputs"] is not None for r in roots)
+    cost = total_cost if priced else None
     return {
         "llm_calls": len(rows),
         "input_tokens": sum(r["input_tokens"] for r in rows),
         "output_tokens": sum(r["output_tokens"] for r in rows),
-        "cost_usd": total_cost if priced else None,
+        "cost_usd": cost,
         "wall_ms": sum(wall),
+        "completed": completed if roots else None,
+        "cost_per_completed": (cost / completed) if cost is not None and completed else None,
     }
+
+
+# Billed cost first: tokens track it loosely. Then whether the work got done at all.
+METRICS = ("cost_usd", "wall_ms", "completed", "cost_per_completed", "llm_calls", "input_tokens", "output_tokens")
+HIGHER_IS_BETTER = {"completed"}
 
 
 def _median(values):
@@ -158,7 +166,7 @@ def aggregate(conn, session_ids):
     per = [session_stats(conn, sid) for sid in session_ids]
     return {
         key: _median([p[key] for p in per])
-        for key in ("cost_usd", "wall_ms", "llm_calls", "input_tokens", "output_tokens")  # billed cost first: tokens track it loosely
+        for key in METRICS
     }, per
 
 
@@ -171,7 +179,13 @@ def compare(conn, baseline_ids, candidate_ids):
     for key, before in base.items():
         after = cand.get(key)
         if before is None or after is None:
-            out[key] = {"before": before, "after": after, "delta_pct": None, "verdict": "unpriced"}
+            if key == "cost_per_completed" and base.get("completed") == 0 and after is not None:
+                verdict = "baseline finished nothing"
+            elif key in ("completed", "cost_per_completed"):
+                verdict = "n/a"
+            else:
+                verdict = "unpriced"
+            out[key] = {"before": before, "after": after, "delta_pct": None, "verdict": verdict}
             continue
 
         spread = [p[key] for p in base_per if p[key] is not None]
@@ -181,7 +195,7 @@ def compare(conn, baseline_ids, candidate_ids):
 
         if abs(delta) <= noise:
             verdict = "within noise"
-        elif delta < 0:
+        elif (delta < 0) != (key in HIGHER_IS_BETTER):
             verdict = "improved"
         else:
             verdict = "regressed"
@@ -191,14 +205,15 @@ def compare(conn, baseline_ids, candidate_ids):
 
 
 def render(comparison):
-    lines = [f"{'metric':<16} {'before':>12} {'after':>12} {'change':>9}  verdict", "-" * 64]
+    lines = [f"{'metric':<19} {'before':>12} {'after':>12} {'change':>9}  verdict", "-" * 67]
     for key, v in comparison.items():
-        before = f"{v['before']:,.4f}" if key == "cost_usd" and v["before"] else (
+        money = key in ("cost_usd", "cost_per_completed")
+        before = f"{v['before']:,.4f}" if money and v["before"] else (
             f"{v['before']:,.0f}" if v["before"] is not None else "-"
         )
-        after = f"{v['after']:,.4f}" if key == "cost_usd" and v["after"] else (
+        after = f"{v['after']:,.4f}" if money and v["after"] else (
             f"{v['after']:,.0f}" if v["after"] is not None else "-"
         )
         pct = f"{v['delta_pct']:+.1f}%" if v["delta_pct"] is not None else "-"
-        lines.append(f"{key:<16} {before:>12} {after:>12} {pct:>9}  {v['verdict']}")
+        lines.append(f"{key:<19} {before:>12} {after:>12} {pct:>9}  {v['verdict']}")
     return "\n".join(lines)

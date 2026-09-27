@@ -377,3 +377,25 @@ def test_shape_counts_model_calls_per_tool_round_and_stays_quiet_on_one_trace(tm
     ratio = next(f for f in result["findings"] if f["kind"] == "calls_per_tool_round")
     assert (ratio["model_calls"], ratio["tool_rounds"], ratio["ratio"]) == (5, 1, 5.0)
     assert not kinds & {"constant_rounds", "fixed_dispatch", "repeated_identical_reply"}  # one trace proves no habit
+
+
+def test_compare_counts_finished_requests_and_prices_only_those(tmp_path):
+    conn = store.connect(tmp_path / "c.db")
+
+    def run_of(finished, tokens):
+        sid = _session(conn, project="p", label="x", code_state="v1", exit_code=0)
+        for i in range(3):
+            ok = i < finished
+            conn.execute("INSERT INTO runs (session_id, run_type, name, outputs, error, duration_ms) VALUES (?, 'chain', 'root', ?, ?, 100)",
+                         (sid, "answer" if ok else None, None if ok else "IndexError('x')"))
+        conn.execute("INSERT INTO runs (session_id, run_type, model, input_tokens, output_tokens, parent_run_id)"
+                     " VALUES (?, 'llm', 'claude-haiku-4-5', ?, 100, 'r')", (sid, tokens))
+        return sid
+
+    crashing = [run_of(0, 10_000) for _ in range(3)]   # cheap, and does nothing
+    working = [run_of(3, 20_000) for _ in range(3)]    # costs more, finishes everything
+    result = measure.compare(conn, crashing, working)
+    assert result["cost_usd"]["verdict"] == "regressed"                       # true, and misleading alone
+    assert (result["completed"]["before"], result["completed"]["after"], result["completed"]["verdict"]) == (0, 3, "improved")
+    assert result["cost_per_completed"]["verdict"] == "baseline finished nothing"
+    assert "completed" in measure.render(result)
