@@ -53,7 +53,6 @@ fleetopt optimize ~/work/their-agent --auto
 | `--evals FILE` | Eval cases (input + expected answer) as JSONL/JSON or deepeval tests. Optional: the optimizer looks for them in the repo otherwise. With cases, the judge reports correctness pass rates before and after, not just "unchanged". |
 | `--out DIR` | Where captures go (default `./.fleetopt`, relative to where you run it). |
 | `--review` | Also review the architecture: a separate read-only session names the design patterns, checks each against structural numbers from the traces (branches never taken, fixed dispatch order, loops that always run to their cap, critics that never change anything) and reports whether a simpler design would do, under its own heading. Recommendations with evidence, not patches. |
-| `--dev-cache` | Development only. Replays identical model calls from `<out>/dev_cache.sqlite`, so a repeated run of the target costs nothing. Token counts stay real; latency and the noise floor do not, so nothing measured under it is a claim. |
 
 **What you get:** the report in the terminal (finding, measured before/after in
 dollars first, judge verdict), the patch committed on a branch in the target repo,
