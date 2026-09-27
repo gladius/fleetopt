@@ -404,3 +404,18 @@ def test_compare_counts_finished_requests_and_prices_only_those(tmp_path):
     assert (result["completed"]["before"], result["completed"]["after"], result["completed"]["verdict"]) == (0, 3, "improved")
     assert result["cost_per_completed"]["verdict"] == "baseline finished nothing"
     assert "completed" in measure.render(result)
+
+
+def test_review_stops_when_the_agent_never_ran(tmp_path, capsys, monkeypatch):
+    target = tmp_path / "t"
+    target.mkdir()
+    (target / "boom.py").write_text("raise SystemExit('wrong interpreter')\n", encoding="utf-8")
+    monkeypatch.setattr(config, "auth_summary", lambda: "test")
+
+    def never(*a, **k):
+        raise AssertionError("the reviewer must not be started for a run that captured nothing")
+
+    from fleetopt.optimizer import review as review_mod
+    monkeypatch.setattr(review_mod, "run", never)
+    code = cli.main(["review", str(target), "--run", f"{sys.executable} boom.py", "--out", str(tmp_path / "out")])
+    assert code == 1 and "nothing to review" in capsys.readouterr().out

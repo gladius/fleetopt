@@ -183,6 +183,11 @@ def review(args):
         facts = shape.analyze(conn, ids)
         failed = conn.execute(
             f"SELECT COUNT(*) FROM sessions WHERE exit_code != 0 AND id IN ({','.join('?' * len(ids))})", ids).fetchone()[0]
+    if not facts["traces"]:
+        # Observed: a run command that failed at import, and a reviewer session spent
+        # describing a graph that never ran.
+        print("[fleetopt] the agent never ran, so there is nothing to review. Fix the run command first.")
+        return 1
     print(f"\n--- structure, from the traces (label {label}) ---\n" + shape.render(facts))
 
     model = os.environ.get("FLEETOPT_REVIEW_MODEL") or os.environ.get("FLEETOPT_MODEL") or "claude-sonnet-5"
