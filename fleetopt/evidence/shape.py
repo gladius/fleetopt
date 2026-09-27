@@ -75,28 +75,35 @@ def distinct_inputs(conn, session_ids, trace_ids):
 
 
 def calls_per_tool_round(conn, session_ids):
-    """Model calls spent per round of tool use. A tool-calling agent spends one: the
-    same call picks the tool, writes its arguments and decides whether to stop. A
-    graph that asks one model call what to do, another to do it and a third whether
-    it is done spends three for the same round."""
-    llm, rounds, nodes = 0, set(), set()
+    """Model calls spent per round of tool use. A tool-calling agent spends one per
+    round, plus one to give the answer: the same call picks the tool, writes its
+    arguments and decides whether to stop. A graph that asks one model call what to do,
+    another to do it and a third whether it is done spends three per round.
+
+    Counted per trace, over traces that used a tool, leaving out one call per trace for
+    the final answer. (The first version divided all calls by all rounds and called a
+    plain two-node agent over-built: traces that needed no tool inflated it.)"""
+    llm, rounds, nodes = Counter(), defaultdict(set), set()
     for r in conn.execute(
         f"SELECT trace_id, run_type, node, step FROM runs WHERE session_id IN {_in(session_ids)}"
         " AND run_type IN ('llm', 'tool')", session_ids,
     ):
         if r["run_type"] == "llm":
-            llm += 1
+            llm[r["trace_id"]] += 1
             nodes.add(r["node"])
         else:
-            rounds.add((r["trace_id"], r["step"]))
-    if not rounds or llm / len(rounds) < 2.5:
+            rounds[r["trace_id"]].add(r["step"])
+    calls = sum(max(llm[t] - 1, 0) for t in rounds)
+    total = sum(len(steps) for steps in rounds.values())
+    if not total or calls / total < 2:
         return []
-    ratio = llm / len(rounds)
+    ratio = calls / total
     return [{
-        "kind": "calls_per_tool_round", "node": "(graph)", "model_calls": llm, "tool_rounds": len(rounds),
-        "ratio": round(ratio, 1), "model_nodes": sorted(x for x in nodes if x),
-        "text": f"(graph): {llm} model calls for {len(rounds)} rounds of tool use ({ratio:.1f} per round),"
-                f" spread over {', '.join(sorted(x for x in nodes if x))}; a tool-calling agent spends about one per round",
+        "kind": "calls_per_tool_round", "node": "(graph)", "model_calls": calls, "tool_rounds": total,
+        "traces": len(rounds), "ratio": round(ratio, 1), "model_nodes": sorted(x for x in nodes if x),
+        "text": f"(graph): {calls} model calls for {total} rounds of tool use in {len(rounds)} traces, not counting"
+                f" each trace's final answer ({ratio:.1f} per round), spread over {', '.join(sorted(x for x in nodes if x))};"
+                " a tool-calling agent spends one per round",
     }]
 
 

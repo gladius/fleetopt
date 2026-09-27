@@ -380,8 +380,26 @@ def test_shape_counts_model_calls_per_tool_round_and_stays_quiet_on_one_trace(tm
     result = shape.analyze(conn, [sid])
     kinds = {f["kind"] for f in result["findings"]}
     ratio = next(f for f in result["findings"] if f["kind"] == "calls_per_tool_round")
-    assert (ratio["model_calls"], ratio["tool_rounds"], ratio["ratio"]) == (5, 1, 5.0)
+    assert (ratio["model_calls"], ratio["tool_rounds"], ratio["ratio"]) == (4, 1, 4.0)  # 5 calls, less the answer
     assert not kinds & {"constant_rounds", "fixed_dispatch", "repeated_identical_reply"}  # one trace proves no habit
+
+
+def test_a_plain_tool_calling_agent_is_not_called_over_built(tmp_path):
+    conn = store.connect(tmp_path / "p.db")
+    sid = _session(conn, project="p", label="x", code_state="v1", exit_code=0)
+
+    def run(trace, step, kind, node):
+        conn.execute("INSERT INTO runs (session_id, trace_id, run_type, name, node, step, start_time)"
+                     " VALUES (?, ?, ?, ?, ?, ?, ?)", (sid, trace, kind, node, node, step, f"{trace}{step:02d}{kind}"))
+
+    for trace in ("with-tool-1", "with-tool-2"):      # call the tool, then answer: 2 model calls, 1 round
+        for step, kind, node in ((1, "chain", "assistant"), (1, "llm", "assistant"), (2, "chain", "tools"),
+                                 (2, "tool", "tools"), (3, "chain", "assistant"), (3, "llm", "assistant")):
+            run(trace, step, kind, node)
+    for trace in ("no-tool-1", "no-tool-2", "no-tool-3"):  # answers directly: these used to inflate the ratio
+        run(trace, 1, "chain", "assistant")
+        run(trace, 1, "llm", "assistant")
+    assert not [f for f in shape.analyze(conn, [sid])["findings"] if f["kind"] == "calls_per_tool_round"]
 
 
 def test_compare_counts_finished_requests_and_prices_only_those(tmp_path):
