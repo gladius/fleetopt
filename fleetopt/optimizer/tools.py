@@ -48,11 +48,14 @@ def _ids(label):
     across days, and a 'baseline' measured on last week's source is not this baseline -
     without this the agent hit the mixed-state guard and re-measured under a fresh
     label, three runs it did not need."""
+    # A review reads crashed runs too: the crash is its first finding. Nothing that
+    # feeds a median ever sets this.
+    ok = "" if CTX.get("include_failed") else " AND exit_code = 0"
     with _conn() as conn:
         return [r["id"] for r in conn.execute(
-            "SELECT id FROM sessions WHERE label = ? AND exit_code = 0 AND project = ?"
+            f"SELECT id FROM sessions WHERE label = ?{ok} AND project = ?"
             "   AND code_state IS (SELECT code_state FROM sessions"
-            "                       WHERE label = ? AND exit_code = 0 AND project = ?"
+            f"                       WHERE label = ?{ok} AND project = ?"
             "                       ORDER BY id DESC LIMIT 1)",
             (label, str(CTX["project"]), label, str(CTX["project"])),
         )]

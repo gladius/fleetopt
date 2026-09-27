@@ -18,7 +18,9 @@ saves the team a debate.
 2. **Get the numbers.** `graph_topology` for the declared shape; `graph_shape` on the
    baseline label for what actually happened; `query_traces` for anything specific.
    Read source only to confirm what a number says.
-3. **Name the patterns you see** with the table below, then check each one's "warranted
+3. **Name the patterns by what ran, not by what nodes are called.** A node named
+   `supervisor` that never calls a model is a rule, not a supervisor; check the `model`
+   column before naming anything. Then use the table below, then check each one's "warranted
    when" against the evidence. Say "on the inputs we ran" - a branch never taken in 12
    traces may be over-built, or may never have been asked. Evidence is as wide as the
    distinct inputs, not the trace count: `graph_shape` reports both, and 6 traces of 2
@@ -26,7 +28,14 @@ saves the team a debate.
 4. **Report the effect on cost, latency and reliability**, separately, from the trace
    numbers (calls saved, hops removed, retries avoided). Simplicity is a note, never a
    headline. Correctness is the gate, not an axis.
-5. **Never patch.** The optimizer owns the branch. Mark each recommendation tier one or
+5. **Step back once.** After the per-pattern findings, ask the question the team did not:
+   would a standard construct - one model call, a fixed pipeline, a tool-calling agent -
+   do this whole job? Answer in one finding, tier two, with the number that supports it
+   (`calls_per_tool_round`, calls per trace, nodes that never vary), or say in one line
+   why the structure earns its keep. Defects are not a reason to skip this: a design can
+   be both broken and over-built, and fixing the defects inside a design that should not
+   exist is wasted work.
+6. **Never patch.** The optimizer owns the branch. Mark each recommendation tier one or
    tier two so it knows what to do with it.
 
 ## Tiers
@@ -46,6 +55,7 @@ saves the team a debate.
 | Pattern | Warranted when | Smell (evidence) | Simpler |
 |---|---|---|---|
 | **Single call / pipeline** | Fixed steps, no decisions between them | - | Already the floor |
+| **Hand-built agent loop** (separate model calls to choose an action, to issue the tool call, to judge whether it is done) | Almost never: only when each step needs a different model or a human between them | `calls_per_tool_round` of 2.5 or more; a `decide`/`plan`/`reflect` node whose reply is one token or a label | A tool-calling agent (`create_agent`): one call per round picks the tool, its arguments and when to stop, and keeps tool calls paired with their results as providers require (tier two) |
 | **ReAct loop** (model picks tools until done) | Tool choice and count really vary per input | Same tool sequence in every trace (`fixed_dispatch`); loop always runs to cap (`constant_rounds`) | A pipeline of those tools; early exit on a done condition |
 | **Router** (conditional edge on a model's label) | Several branches taken across inputs | `branch_never_taken` for one or more targets; one target in n/n traces | Hardwire the taken branch (tier one, needs cases for the untaken inputs); or a rule instead of a model call |
 | **Supervisor / orchestrator** (a model decides which worker next) | Worker order or set varies with the input; workers are heterogeneous | `fixed_dispatch` with `calls_model`: a model is consulted at every step and the order never varies; one worker only | Edges in that order; the supervisor's calls disappear (cost and a hop of latency per step) |
@@ -57,8 +67,12 @@ saves the team a debate.
 | **Human-in-the-loop** | A human actually intervenes on some traces | Interrupt on every trace, always resumed unchanged | Remove the interrupt, log instead |
 | **Long-term memory store** | Memories are written and later read on other traces | Writes with no reads; reads returning empty in n/n traces | Drop the store until something reads it |
 
+Also worth a line when you see it: **orchestration code that never runs** - a module that
+defines a supervisor, a router or a loop and is imported only by tests. The running graph
+and the documented design have drifted apart; a human decides which one is right (tier two).
+
 `graph_shape` kinds referenced above: `branch_never_taken`, `fixed_dispatch` (with
-`calls_model`), `constant_rounds`, `repeated_identical_reply`, `interrupt` (a node paused
+`calls_model`), `constant_rounds`, `repeated_identical_reply`, `calls_per_tool_round`, `interrupt` (a node paused
 for a human), and `node_error`. A `node_error` comes before any pattern: a node that
 raises in every trace is broken, and one marked as caught inside the node means the
 graph carried on without that step's result - report it first, as a reliability finding. Anything else in the

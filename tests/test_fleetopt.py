@@ -76,6 +76,11 @@ def test_ids_scope_to_project_and_newest_code_state(tmp_path):
         fresh = [_session(conn, project=a, label="baseline", code_state="v2", exit_code=0) for _ in range(2)]
     assert tools._ids("baseline") == fresh
     assert tools._ids("candidate") == []
+    tools.CTX["include_failed"] = True   # a review, never a measurement
+    try:
+        assert len(tools._ids("baseline")) == 2  # newest code state has no crashed run; still scoped to it
+    finally:
+        tools.CTX.pop("include_failed")
 
 
 # --- the Bash guard: enforced, not asked ------------------------------------------
@@ -268,7 +273,8 @@ def test_out_is_accepted_before_and_after_the_subcommand():
     assert parse(["--out", "before", "optimize", "repo"]).out == "before"
     assert parse(["--out", "before", "capture", "repo", "--run", "x", "--out", "after"]).out == "after"
     args = parse(["review", "repo", "--run", "x"])
-    assert (args.n, args.out, args.purpose, args.fn.__name__) == (1, ".fleetopt", None, "review")
+    assert (args.n, args.out, args.purpose, args.label, args.fn.__name__) == (1, ".fleetopt", None, None, "review")
+    assert parse(["review", "repo", "--label", "earlier"]).run is None
 
 
 # --- structural smells: numbers, not opinions ------------------------------------------
@@ -355,3 +361,19 @@ def test_a_capture_that_fails_late_keeps_the_targets_last_words(tmp_path):
     cmd = f'{sys.executable} agent.py && {sys.executable} -c "print(\'the reason it failed\'); raise SystemExit(3)"'
     with pytest.raises(RuntimeError, match="exited 3 after .* runs(.|\\n)*the reason it failed"):
         measure.collect(target, cmd, tmp_path / "out", 1, "x")
+
+
+def test_shape_counts_model_calls_per_tool_round_and_stays_quiet_on_one_trace(tmp_path):
+    conn = store.connect(tmp_path / "r.db")
+    sid = _session(conn, project="p", label="x", code_state="v1", exit_code=0)
+    rows = [(1, "plan", "plan", "chain"), (1, "M", "plan", "llm"), (2, "decide", "decide", "chain"), (2, "M", "decide", "llm"),
+            (3, "act", "act", "chain"), (3, "M", "act", "llm"), (4, "tools", "tools", "chain"), (4, "search", "tools", "tool"),
+            (5, "reflect", "reflect", "chain"), (5, "M", "reflect", "llm"), (6, "decide", "decide", "chain"), (6, "M", "decide", "llm")]
+    for step, name, node, kind in rows:
+        conn.execute("INSERT INTO runs (session_id, trace_id, run_type, name, node, step, completion, start_time)"
+                     " VALUES (?, 't1', ?, ?, ?, ?, 'search', ?)", (sid, kind, name, node, step, f"{step:02d}{kind}"))
+    result = shape.analyze(conn, [sid])
+    kinds = {f["kind"] for f in result["findings"]}
+    ratio = next(f for f in result["findings"] if f["kind"] == "calls_per_tool_round")
+    assert (ratio["model_calls"], ratio["tool_rounds"], ratio["ratio"]) == (5, 1, 5.0)
+    assert not kinds & {"constant_rounds", "fixed_dispatch", "repeated_identical_reply"}  # one trace proves no habit

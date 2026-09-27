@@ -74,6 +74,32 @@ def distinct_inputs(conn, session_ids, trace_ids):
     return len({seen.get(t) or t for t in trace_ids})
 
 
+def calls_per_tool_round(conn, session_ids):
+    """Model calls spent per round of tool use. A tool-calling agent spends one: the
+    same call picks the tool, writes its arguments and decides whether to stop. A
+    graph that asks one model call what to do, another to do it and a third whether
+    it is done spends three for the same round."""
+    llm, rounds, nodes = 0, set(), set()
+    for r in conn.execute(
+        f"SELECT trace_id, run_type, node, step FROM runs WHERE session_id IN {_in(session_ids)}"
+        " AND run_type IN ('llm', 'tool')", session_ids,
+    ):
+        if r["run_type"] == "llm":
+            llm += 1
+            nodes.add(r["node"])
+        else:
+            rounds.add((r["trace_id"], r["step"]))
+    if not rounds or llm / len(rounds) < 2.5:
+        return []
+    ratio = llm / len(rounds)
+    return [{
+        "kind": "calls_per_tool_round", "node": "(graph)", "model_calls": llm, "tool_rounds": len(rounds),
+        "ratio": round(ratio, 1), "model_nodes": sorted(x for x in nodes if x),
+        "text": f"(graph): {llm} model calls for {len(rounds)} rounds of tool use ({ratio:.1f} per round),"
+                f" spread over {', '.join(sorted(x for x in nodes if x))}; a tool-calling agent spends about one per round",
+    }]
+
+
 def node_failures(conn, session_ids, n):
     """Nodes where something raised, and nodes that paused for a human. An interrupt
     is LangGraph's human-in-the-loop mechanism, not a failure. An error on a call
@@ -155,7 +181,7 @@ def analyze(conn, session_ids):
                         + (f"; always goes to {', '.join(always)}" if always else ""),
             })
         orders = order_per_source[src]
-        if orders and len(set(orders)) == 1 and len(orders[0]) > 1:
+        if n > 1 and orders and len(set(orders)) == 1 and len(orders[0]) > 1:
             fixed = orders[0]
             with_model = src in llm_nodes
             findings.append({
@@ -170,7 +196,7 @@ def analyze(conn, session_ids):
         for node, c in Counter(node for _, node in seq).items():
             rounds[node].append(c)
     for node, counts in sorted(rounds.items()):
-        if len(counts) == n and len(set(counts)) == 1 and counts[0] > 1:
+        if n > 1 and len(counts) == n and len(set(counts)) == 1 and counts[0] > 1:
             findings.append({
                 "kind": "constant_rounds", "node": node, "rounds": counts[0], "traces": n,
                 "text": f"{node}: ran exactly {counts[0]} times in every one of {n} traces (runs to its cap, never exits early)",
@@ -179,12 +205,13 @@ def analyze(conn, session_ids):
     # Repeated model calls whose replies never change within a trace.
     for node in sorted(llm_nodes):
         per_trace = [per[node] for per in replies.values() if len(per.get(node, [])) > 1]
-        if per_trace and len(per_trace) == n and all(len(set(r)) == 1 for r in per_trace):
+        if n > 1 and per_trace and len(per_trace) == n and all(len(set(r)) == 1 for r in per_trace):
             findings.append({
                 "kind": "repeated_identical_reply", "node": node, "traces": n,
                 "text": f"{node}: the model's reply is identical across all rounds in {n}/{n} traces",
             })
 
+    findings += calls_per_tool_round(conn, session_ids)
     findings = node_failures(conn, session_ids, n) + findings  # a node that raises comes first
 
     return {

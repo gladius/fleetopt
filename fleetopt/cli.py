@@ -157,20 +157,39 @@ def review(args):
     project = pathlib.Path(args.project).resolve()
     out = pathlib.Path(args.out).resolve()
     print(f"[fleetopt] auth: {config.auth_summary() or 'unknown (could not run auth status)'}")
-    label = f"review-{datetime.datetime.now():%Y%m%d-%H%M%S}"
-    try:
-        measure_mod.collect(project, args.run, out, args.n, label)
-    except RuntimeError as exc:
-        print(f"[fleetopt] capture failed: {exc}")
+    crashed = ""
+    if args.label:  # reuse a capture: a second opinion costs no second run of the target
+        label = args.label
+    elif args.run:
+        label = f"review-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+        try:
+            measure_mod.collect(project, args.run, out, args.n, label)
+        except RuntimeError as exc:
+            # Unusable for a measurement, not for a review: what ran is evidence and the
+            # crash is the first finding.
+            crashed = str(exc)
+            print(f"[fleetopt] the run failed; reviewing what was captured.\n{crashed}")
+    else:
+        print("[fleetopt] review needs --run (capture now) or --label (reuse a capture)")
         return 1
 
-    tools.CTX.update({"project": project, "out": out, "run_cmd": args.run, "events": [], "review": True})
+    tools.CTX.update({"project": project, "out": out, "run_cmd": args.run, "events": [], "review": True,
+                      "include_failed": True})
+    ids = tools._ids(label)
+    if not ids:
+        print(f"[fleetopt] nothing captured under {label!r} for this project - nothing to review")
+        return 1
     with store.connect(out / "fleetopt.db") as conn:
-        facts = shape.analyze(conn, tools._ids(label))
-    print("\n--- structure, from the traces ---\n" + shape.render(facts))
+        facts = shape.analyze(conn, ids)
+        failed = conn.execute(
+            f"SELECT COUNT(*) FROM sessions WHERE exit_code != 0 AND id IN ({','.join('?' * len(ids))})", ids).fetchone()[0]
+    print(f"\n--- structure, from the traces (label {label}) ---\n" + shape.render(facts))
 
     model = os.environ.get("FLEETOPT_REVIEW_MODEL") or os.environ.get("FLEETOPT_MODEL") or "claude-sonnet-5"
     purpose = args.purpose or "not stated - derive it from the README and the prompts"
+    if failed:
+        purpose += (f". NOTE: {failed} of {len(ids)} captured runs exited with an error, so the traces are partial;"
+                    " say so, and treat the failure as the first finding")
     try:
         text, cost = asyncio.run(review_mod.run(project, label, purpose, model=model, max_usd=args.max_usd))
     except RuntimeError as exc:
@@ -220,7 +239,8 @@ def _parser():
 
     rev = sub.add_parser("review", help="architecture review only: capture, structural numbers, reviewer's report")
     rev.add_argument("project")
-    rev.add_argument("--run", required=True, help="how to invoke the agent; use inputs that differ from each other")
+    rev.add_argument("--run", help="how to invoke the agent; use inputs that differ from each other")
+    rev.add_argument("--label", help="review an existing capture under this label instead of running the agent again")
     rev.add_argument("--n", type=int, default=1, help="times to run the command (default 1: a review needs variety of inputs, not repeats)")
     rev.add_argument("--purpose", help="one sentence on what the agent is for (derived from the README otherwise)")
     rev.add_argument("--max-usd", type=float, default=1.0, help="cap on the reviewer's own spend (default 1)")
