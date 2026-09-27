@@ -13,7 +13,9 @@ Smells computed:
   also calls a model to make that non-decision;
 - a node that runs the same number of times (>1) in every trace: a loop that runs
   to its cap instead of exiting early;
-- a repeated model-calling node whose replies are identical round after round.
+- a repeated model-calling node whose replies are identical round after round;
+- a node where something raised (and whether the node swallowed it), a node that
+  paused for a human.
 """
 
 import json
@@ -70,6 +72,37 @@ def distinct_inputs(conn, session_ids, trace_ids):
             " AND parent_run_id IS NULL", session_ids)
     }
     return len({seen.get(t) or t for t in trace_ids})
+
+
+def node_failures(conn, session_ids, n):
+    """Nodes where something raised, and nodes that paused for a human. An interrupt
+    is LangGraph's human-in-the-loop mechanism, not a failure. An error on a call
+    inside a node whose own run did not fail was caught there: the graph went on
+    without that result, which is worth more attention than a crash."""
+    raised = defaultdict(lambda: {"traces": set(), "message": "", "node_failed": False})
+    for r in conn.execute(
+        f"SELECT trace_id, node, name, run_type, error FROM runs WHERE session_id IN {_in(session_ids)}"
+        " AND error IS NOT NULL ORDER BY start_time", session_ids,
+    ):
+        text = r["error"] or ""
+        cls = text.split("(", 1)[0].strip() or "Error"
+        node = r["node"] or "(graph)"
+        kind = "interrupt" if cls == "GraphInterrupt" else "node_error"
+        entry = raised[(kind, node, cls)]
+        entry["traces"].add(r["trace_id"])
+        entry["message"] = entry["message"] or " ".join(text.split("Traceback", 1)[0].split())[:220]
+        entry["node_failed"] |= r["run_type"] == "chain" and r["name"] in (r["node"], "LangGraph")
+    out = []
+    for (kind, node, cls), e in sorted(raised.items(), key=lambda kv: (kv[0][0] != "node_error", kv[0][1])):
+        k = len(e["traces"])
+        if kind == "interrupt":
+            text = f"{node}: paused for a human in {k}/{n} traces"
+        else:
+            caught = "" if e["node_failed"] else " - caught inside the node, the graph continued without it"
+            text = f"{node}: raised {cls} in {k}/{n} traces{caught}: {e['message']}"
+        out.append({"kind": kind, "node": node, "error": cls, "traces": n, "count": k,
+                    "swallowed": kind == "node_error" and not e["node_failed"], "text": text})
+    return out
 
 
 def _transitions(seq):
@@ -151,6 +184,8 @@ def analyze(conn, session_ids):
                 "kind": "repeated_identical_reply", "node": node, "traces": n,
                 "text": f"{node}: the model's reply is identical across all rounds in {n}/{n} traces",
             })
+
+    findings = node_failures(conn, session_ids, n) + findings  # a node that raises comes first
 
     return {
         "traces": n,

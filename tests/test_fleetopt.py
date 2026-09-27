@@ -324,3 +324,34 @@ def test_shape_counts_distinct_inputs_not_just_traces(tmp_path):
     result = shape.analyze(conn, [r[0] for r in conn.execute("SELECT id FROM sessions")])
     assert (result["traces"], result["distinct_inputs"]) == (6, 2)
     assert "2 inputs wide" in shape.render(result)
+
+
+def test_shape_reports_swallowed_errors_and_human_pauses(tmp_path):
+    conn = store.connect(tmp_path / "e.db")
+    sid = _session(conn, project="p", label="x", code_state="v1", exit_code=0)
+
+    def run(trace, step, name, node, run_type="chain", error=None):
+        conn.execute(
+            "INSERT INTO runs (session_id, trace_id, run_type, name, node, step, error, start_time)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (sid, trace, run_type, name, node, step, error, f"{trace}-{step:02d}-{name}"))
+
+    for trace in ("t1", "t2"):
+        run(trace, 1, "draft", "draft")
+        run(trace, 2, "critic", "critic")                       # the node itself did not fail...
+        run(trace, 2, "ChatAnthropic", "critic", "llm",         # ...the call inside it did
+            error="BadRequestError(\"Error code: 400 - temperature is deprecated\")Traceback (most recent call last): ...")
+        run(trace, 3, "human_gate", "human_gate", error="GraphInterrupt((Interrupt(value={}),))Traceback ...")
+    result = shape.analyze(conn, [sid])
+    first, *_ = result["findings"]
+    assert (first["kind"], first["node"], first["count"], first["swallowed"]) == ("node_error", "critic", 2, True)
+    assert "temperature is deprecated" in first["text"] and "caught inside the node" in first["text"]
+    pause = next(f for f in result["findings"] if f["kind"] == "interrupt")
+    assert (pause["node"], pause["count"]) == ("human_gate", 2) and "paused for a human in 2/2" in pause["text"]
+
+
+def test_a_capture_that_fails_late_keeps_the_targets_last_words(tmp_path):
+    target = tmp_path / "fixture"
+    shutil.copytree(ROOT / "fixture", target)
+    cmd = f'{sys.executable} agent.py && {sys.executable} -c "print(\'the reason it failed\'); raise SystemExit(3)"'
+    with pytest.raises(RuntimeError, match="exited 3 after .* runs(.|\\n)*the reason it failed"):
+        measure.collect(target, cmd, tmp_path / "out", 1, "x")

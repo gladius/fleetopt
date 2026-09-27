@@ -46,6 +46,7 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True):
     # failure used to leave the other runs' temp dirs behind forever.
     ids, failure = [], None
     for i, (raw, traces, graphs, code) in enumerate(executed):  # ingest serially
+        tail = runner.output_tail(raw)  # before ingest: it removes the log once runs are stored
         session_id, n_runs, _ = runner.ingest(
             project, run_cmd, out_dir, label, raw, traces, graphs, code
         )
@@ -56,13 +57,13 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True):
         if not n_runs:
             failure = failure or (
                 f"{label} run {i + 1} captured nothing (exit {code}). The target's last "
-                f"output lines:\n{runner.output_tail(raw)}\n(full output: {raw}/target.log)"
+                f"output lines:\n{tail}\n(full output: {raw}/target.log)"
             )
         elif code != 0:
             failure = failure or (
                 f"{label} run {i + 1} exited {code} after {n_runs} runs - a failed "
                 "invocation cannot be measured. The target's last output lines:\n"
-                f"{runner.output_tail(raw)}"
+                f"{tail}"
             )
         ids.append(session_id)
     if failure:

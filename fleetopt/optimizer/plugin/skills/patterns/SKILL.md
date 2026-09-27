@@ -58,7 +58,10 @@ saves the team a debate.
 | **Long-term memory store** | Memories are written and later read on other traces | Writes with no reads; reads returning empty in n/n traces | Drop the store until something reads it |
 
 `graph_shape` kinds referenced above: `branch_never_taken`, `fixed_dispatch` (with
-`calls_model`), `constant_rounds`, `repeated_identical_reply`. Anything else in the
+`calls_model`), `constant_rounds`, `repeated_identical_reply`, `interrupt` (a node paused
+for a human), and `node_error`. A `node_error` comes before any pattern: a node that
+raises in every trace is broken, and one marked as caught inside the node means the
+graph carried on without that step's result - report it first, as a reliability finding. Anything else in the
 table needs a `query_traces` number of your own; write the query into the finding.
 
 ## Report format
