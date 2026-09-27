@@ -222,28 +222,11 @@ class Gate:
         return PermissionResultAllow()
 
 
-async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=60, max_usd=None, effort=None, evals=None, review=False):
-    project = pathlib.Path(project).resolve()
-    out = pathlib.Path(out_dir).resolve()
-    out.mkdir(parents=True, exist_ok=True)
-
-    started = datetime.datetime.now()
-    run_dir = out / "runs" / f"{started:%Y%m%d-%H%M%S}-{project.name}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    start_sha = _git(project, "rev-parse", "HEAD")
-    tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd, "run_locked": bool(run_cmd),
-                      "events": [], "review": review, "model": model, "run_dir": run_dir})
-    mission = MISSION
-    if evals:
-        mission += (f"\n\nEval cases were supplied at `{evals}`. Call load_eval_cases with that "
-                    "path before measuring.")
-    if run_cmd:
-        mission += (f"\n\nThe run command is already set: `{run_cmd}`. Do not rediscover or "
-                    "change it - start with measure.")
-    if review:
-        mission += REVIEW_MISSION
-
-    options = ClaudeAgentOptions(
+def build_options(project, run_cmd=None, auto=False, model=None, max_turns=60, max_usd=None, effort=None):
+    """Everything a session is allowed to be. Apart from run() so the product's
+    promises can be read off it in a test without starting a session
+    (tests/test_invariants.py)."""
+    return ClaudeAgentOptions(
         cwd=str(project),
         model=model,
         system_prompt=(
@@ -287,6 +270,30 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
         max_budget_usd=max_usd,
         permission_mode="default",
     )
+
+
+async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=60, max_usd=None, effort=None, evals=None, review=False):
+    project = pathlib.Path(project).resolve()
+    out = pathlib.Path(out_dir).resolve()
+    out.mkdir(parents=True, exist_ok=True)
+
+    started = datetime.datetime.now()
+    run_dir = out / "runs" / f"{started:%Y%m%d-%H%M%S}-{project.name}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    start_sha = _git(project, "rev-parse", "HEAD")
+    tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd, "run_locked": bool(run_cmd),
+                      "events": [], "review": review, "model": model, "run_dir": run_dir})
+    mission = MISSION
+    if evals:
+        mission += (f"\n\nEval cases were supplied at `{evals}`. Call load_eval_cases with that "
+                    "path before measuring.")
+    if run_cmd:
+        mission += (f"\n\nThe run command is already set: `{run_cmd}`. Do not rediscover or "
+                    "change it - start with measure.")
+    if review:
+        mission += REVIEW_MISSION
+
+    options = build_options(project, run_cmd, auto, model, max_turns, max_usd, effort)
 
     async def prompt():
         yield {"type": "user", "message": {"role": "user", "content": mission}}

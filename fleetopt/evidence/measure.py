@@ -131,6 +131,7 @@ def session_stats(conn, session_id):
 # Billed cost first: tokens track it loosely. Then whether the work got done at all.
 METRICS = ("cost_usd", "wall_ms", "completed", "cost_per_completed", "llm_calls", "input_tokens", "output_tokens")
 HIGHER_IS_BETTER = {"completed"}
+MIN_RELATIVE_NOISE = 0.02
 
 
 def _median(values):
@@ -190,6 +191,10 @@ def compare(conn, baseline_ids, candidate_ids):
 
         spread = [p[key] for p in base_per if p[key] is not None]
         noise = (max(spread) - min(spread)) if len(spread) > 1 else 0
+        # Three reruns of a steady agent spread by almost nothing, and then a 4 ms
+        # change on a 455 ms run reads as a regression (observed). Reruns alone
+        # understate variance, so nothing under 2% of the baseline is a verdict.
+        noise = max(noise, MIN_RELATIVE_NOISE * abs(before))
         delta = after - before
         pct = (100 * delta / before) if before else None
 

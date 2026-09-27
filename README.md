@@ -239,6 +239,7 @@ target's API key.
 
 | Layer | What it checks | Command | Cost |
 |---|---|---|---|
+| invariants | the product's promises, one test each: a session inherits nothing from the operator, has no web access, cannot read secrets; nothing is installed or hand-run; the probe only observes; a change inside the noise is not a saving; the judge fails closed; the reviewer can only look; structural patches wait for eval cases | `pytest -q tests/test_invariants.py` | none, under 1 s |
 | pytest | the deterministic code: eval discovery, label scoping, the Bash guard, the noise floor, session isolation, and one capture of the fixture | `pytest -q` | none, about 2 s |
 | plugin eval | the six skills: with the plugin loaded the agent reaches each skill's conclusion (the 4,096-token Haiku minimum, effort before tier, the ~10K schema threshold...); the default with/without arm shows whether the skill made the difference | `claude plugin eval fleetopt/optimizer/plugin --trust-plugin` | 12 short agent runs on your login, a few dollars |
 | corpus ledger | the whole loop on real agents | `fleetopt optimize targets/<repo> --auto`, then a line in `tests/corpus/ledger.md` | the target's own tokens plus the optimizer's |

@@ -50,6 +50,19 @@ saves the team a debate.
 - **Tier two - redesign.** "These five agents should be one", "this should not be an
   agent". Report with evidence. A human decides.
 
+## Before recommending a redesign: what must survive
+
+A simpler design that loses something the old one did is a regression with better
+numbers. List these from the code, and for each say how the simpler design keeps it:
+
+- the entry point other code calls, and what it returns or streams;
+- what happens when a tool fails - the old graph may have tolerated it;
+- the cap on rounds or spend;
+- anything written to disk, sent or stored while it runs;
+- state fields that code outside the graph reads;
+- the points where a human approves;
+- provider rules the old prompt handling relied on, or broke.
+
 ## Patterns: warranted when, smell when, simpler is
 
 | Pattern | Warranted when | Smell (evidence) | Simpler |

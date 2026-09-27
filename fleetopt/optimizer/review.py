@@ -15,14 +15,18 @@ import pathlib
 from fleetopt import config
 
 _HERE = pathlib.Path(__file__).parent
-GUIDE = (_HERE / "plugin" / "skills" / "patterns" / "SKILL.md").read_text(encoding="utf-8")
+_PATTERNS = _HERE / "plugin" / "skills" / "patterns"
+GUIDE = (_PATTERNS / "SKILL.md").read_text(encoding="utf-8")
+# Dated framework facts, read from installed packages. Local files, no network: the
+# reviewer reads another team's code and gets no browser.
+REFERENCES = "\n\n".join(f.read_text(encoding="utf-8") for f in sorted((_PATTERNS / "references").glob("*.md")))
 
 SYSTEM = (
     "You review the architecture of the LangGraph agent in the current directory for a central "
     "AI team. You may read source and query the capture database with the fleetopt tools; you never "
     "edit files, never run anything, never patch. Every finding cites a number from graph_shape or "
     "query_traces and a source location. Follow the guide below exactly and make your final message "
-    "the report in its format, nothing else.\n\n" + GUIDE
+    "the report in its format, nothing else.\n\n" + GUIDE + "\n\n" + REFERENCES
 )
 
 READ_ONLY = ["Read", "Grep", "Glob", "mcp__fleetopt__graph_shape",
