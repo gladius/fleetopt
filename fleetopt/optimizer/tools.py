@@ -34,6 +34,25 @@ def _record(event, **data):
         {"t": datetime.datetime.now().isoformat(timespec="seconds"), "event": event, **data})
 
 
+def _state(ids):
+    """The code fingerprint the sessions ran against."""
+    if not ids:
+        return None
+    with _conn() as conn:
+        return conn.execute("SELECT code_state FROM sessions WHERE id = ?", (ids[0],)).fetchone()["code_state"]
+
+
+def sides(baseline, candidate, base_state, cand_state):
+    """Which code each side ran, in words nobody can misread. Observed: an optimizer
+    measured its patched code under a label called 'baseline-retest', then cited that
+    comparison as proof the unmodified agent had the same defect."""
+    line = f"{baseline} ran code {base_state}; {candidate} ran code {cand_state}."
+    if base_state == cand_state:
+        line += ("\nNOTE: both sides ran the SAME code. This shows the agent's own run-to-run"
+                 " variation. It says nothing about the effect of a change.")
+    return line
+
+
 def _conn():
     return store.connect(CTX["out"] / "fleetopt.db")
 
@@ -101,8 +120,14 @@ async def measure(args):
     with _conn() as conn:
         ids = _ids(label)
         stats, _ = measure_mod.aggregate(conn, ids)
-    _record("measure", label=label, n=n, sessions=len(ids), stats=stats)
-    return _ok(f"{label} ({n} runs), medians:\n{json.dumps(stats, indent=2)}")
+    state = _state(ids)
+    original = CTX.setdefault("baseline_state", state)  # the first measurement of a run is the unmodified code
+    _record("measure", label=label, n=n, sessions=len(ids), stats=stats, code_state=state)
+    note = f"\ncode state {state}"
+    if state != original:
+        note += (f" - this is CHANGED code (the run's first measurement was {original})."
+                 " Whatever the label says, it is not a baseline.")
+    return _ok(f"{label} ({n} runs), medians:\n{json.dumps(stats, indent=2)}{note}")
 
 
 @tool(
@@ -161,8 +186,10 @@ async def compare(args):
             return _ok(f"missing measurements: {args['baseline']}={len(base)}, "
                        f"{args['candidate']}={len(cand)}")
         comparison = measure_mod.compare(conn, base, cand)
-    _record("compare", baseline=args["baseline"], candidate=args["candidate"], result=comparison)
-    return _ok(measure_mod.render(comparison))
+    b, c = _state(base), _state(cand)
+    _record("compare", baseline=args["baseline"], candidate=args["candidate"], result=comparison,
+            baseline_state=b, candidate_state=c)
+    return _ok(sides(args["baseline"], args["candidate"], b, c) + "\n\n" + measure_mod.render(comparison))
 
 
 @tool(
@@ -181,9 +208,10 @@ async def judge(args):
         passed, results, correctness = await judge_mod.judge_sessions(
             conn, args["task"], base[0], cand[0], cases
         )
+    b, c = _state(base), _state(cand)
     _record("judge", baseline=args["baseline"], candidate=args["candidate"],
-            passed=passed, equivalence=results, correctness=correctness)
-    lines = ["equivalence (output unchanged?):"]
+            passed=passed, equivalence=results, correctness=correctness, baseline_state=b, candidate_state=c)
+    lines = [sides(args["baseline"], args["candidate"], b, c), "", "equivalence (output unchanged?):"]
     lines += [f"  [{'PASS' if r['equivalent'] else 'FAIL'}] {r['reason']}" for r in results]
     if correctness:
         m = correctness["matched"]

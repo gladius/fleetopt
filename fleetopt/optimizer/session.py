@@ -222,6 +222,37 @@ class Gate:
         return PermissionResultAllow()
 
 
+def verdict(events):
+    """What the measurements support, computed from what the tools recorded. Printed
+    after the agent's report and stored in the run record, so a report cannot argue
+    with a failed gate. Only a judged comparison of two different code states counts,
+    and every judgment of the final code counts: one failure is a failure."""
+    real = [e for e in events if e["event"] == "judge" and e.get("baseline_state") != e.get("candidate_state")]
+    if not real:
+        return "NOTHING PROVEN: no change was judged against the code it started from."
+    final = real[-1]["candidate_state"]
+    judged = [e for e in real if e["candidate_state"] == final]
+
+    def detail(e):
+        ok = sum(bool(r["equivalent"]) for r in e["equivalence"])
+        text = f"{e['candidate']}: equivalence {ok}/{len(e['equivalence'])}"
+        c = e.get("correctness")
+        if c:
+            return text + f", correctness {c['baseline_pass']}/{c['matched']} before and {c['candidate_pass']}/{c['matched']} after"
+        return text + ", correctness not checked (no eval cases)"
+
+    details = "; ".join(detail(e) for e in judged)
+    measured = [e for e in events if e["event"] == "compare" and e.get("candidate_state") == final
+                and e.get("baseline_state") != final]
+    cost = measured[-1]["result"].get("cost_usd", {}) if measured else {}
+    saving = (f" Cost {cost.get('before')} to {cost.get('after')} per run: {cost.get('verdict')}."
+              if cost.get("before") is not None else "")
+    if not all(e["passed"] for e in judged):
+        return (f"NOT PROVEN SAFE: the judge failed ({details}).{saving}"
+                " A saving with a failed gate is not a result. The branch is left for review.")
+    return f"PROVEN ON THIS EVIDENCE: the judge passed ({details}).{saving}"
+
+
 def build_options(project, run_cmd=None, auto=False, model=None, max_turns=60, max_usd=None, effort=None):
     """Everything a session is allowed to be. Apart from run() so the product's
     promises can be read off it in a test without starting a session
@@ -283,6 +314,7 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
     start_sha = _git(project, "rev-parse", "HEAD")
     tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd, "run_locked": bool(run_cmd),
                       "events": [], "review": review, "model": model, "run_dir": run_dir})
+    tools.CTX.pop("baseline_state", None)
     mission = MISSION
     if evals:
         mission += (f"\n\nEval cases were supplied at `{evals}`. Call load_eval_cases with that "
@@ -322,8 +354,10 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
                     print(f"\n--- done in {message.num_turns} turns" +
                           (f", ${cost:.4f}" if cost else "") + " ---")
     finally:
+        computed = verdict(tools.CTX.get("events", []))
+        print(f"\n--- fleetopt verdict (computed from the measurements, not written by the agent) ---\n{computed}")
         meta = {"model": model, "auto": auto, "evals_path": evals, "max_turns": max_turns, "max_usd": max_usd,
-                "review": review}
+                "review": review, "verdict": computed}
         try:
             _write_record(run_dir, project, start_sha, started, meta, texts, calls, skills, result)
         except OSError as exc:  # never let the record mask what the run itself did

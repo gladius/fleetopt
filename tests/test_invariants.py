@@ -151,3 +151,33 @@ def test_structural_patches_wait_for_eval_cases():
     assert "only if eval cases are loaded" in " ".join(session.REVIEW_MISSION.split())
     assert "only when eval cases are loaded" in guide
     assert "what must survive" in guide
+
+
+# --- the verdict belongs to the measurements, not to the agent that wants it --------------
+
+def _judged(candidate, passed, base_state="v1", cand_state="v2", before=4, after=4):
+    return {"event": "judge", "baseline": "baseline", "candidate": candidate, "passed": passed,
+            "baseline_state": base_state, "candidate_state": cand_state,
+            "equivalence": [{"equivalent": True}, {"equivalent": passed}],
+            "correctness": {"cases": 12, "matched": 4, "baseline_pass": before, "candidate_pass": after}}
+
+
+def test_a_failed_gate_cannot_be_argued_away():
+    events = [_judged("patched", False, after=3),
+              _judged("patched-again", True),                                       # one pass does not erase a failure
+              _judged("baseline-retest", False, base_state="v2", cand_state="v2")]  # same code: not a before/after
+    text = session.verdict(events)
+    assert text.startswith("NOT PROVEN SAFE") and "4/4 before and 3/4 after" in text
+    assert "patched-again" in text and "baseline-retest" not in text
+
+
+def test_nothing_is_proven_without_a_judged_change():
+    assert session.verdict([]).startswith("NOTHING PROVEN")
+    assert session.verdict([_judged("again", True, cand_state="v1")]).startswith("NOTHING PROVEN")
+    assert session.verdict([_judged("patched", True)]).startswith("PROVEN ON THIS EVIDENCE")
+
+
+def test_a_comparison_says_which_code_each_side_ran():
+    same = tools.sides("baseline", "baseline-retest", "abc+1", "abc+1")
+    assert "SAME code" in same and "says nothing about the effect of a change" in same
+    assert "SAME code" not in tools.sides("baseline", "patched", "abc+1", "abc+2")
