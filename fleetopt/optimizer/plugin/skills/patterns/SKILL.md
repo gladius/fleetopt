@@ -20,7 +20,9 @@ saves the team a debate.
    Read source only to confirm what a number says.
 3. **Name the patterns you see** with the table below, then check each one's "warranted
    when" against the evidence. Say "on the inputs we ran" - a branch never taken in 12
-   traces may be over-built, or may never have been asked.
+   traces may be over-built, or may never have been asked. Evidence is as wide as the
+   distinct inputs, not the trace count: `graph_shape` reports both, and 6 traces of 2
+   inputs is 2 inputs.
 4. **Report the effect on cost, latency and reliability**, separately, from the trace
    numbers (calls saved, hops removed, retries avoided). Simplicity is a note, never a
    headline. Correctness is the gate, not an axis.

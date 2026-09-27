@@ -291,7 +291,7 @@ def test_shape_finds_the_supervisor_fixtures_planted_smells_and_nothing_else(tmp
     ids = [r[0] for r in conn.execute("SELECT id FROM sessions")]
     result = shape.analyze(conn, ids)
     kinds = {(f["kind"], f["node"]) for f in result["findings"]}
-    assert result["traces"] == 2
+    assert result["traces"] == 2 and result["distinct_inputs"] == 2
     assert ("branch_never_taken", "route") in kinds          # billing, other exist and are never taken
     assert ("fixed_dispatch", "supervisor") in kinds         # worker_a -> worker_b -> worker_c -> draft, every time
     assert ("constant_rounds", "reflect") in kinds           # three rounds, always
@@ -327,3 +327,12 @@ def test_review_tool_is_off_unless_the_run_asked_for_it():
     tools.CTX.update(review=False, events=[])
     reply = json.dumps(asyncio.run(tools.review_architecture.handler({"label": "baseline", "purpose": "x"})))
     assert "review is off" in reply
+
+
+def test_shape_counts_distinct_inputs_not_just_traces(tmp_path):
+    for _ in range(3):  # a baseline: the same command, three times
+        assert _capture_fixture(tmp_path, "supervisor.py").returncode == 0
+    conn = store.connect(tmp_path / "out" / "fleetopt.db")
+    result = shape.analyze(conn, [r[0] for r in conn.execute("SELECT id FROM sessions")])
+    assert (result["traces"], result["distinct_inputs"]) == (6, 2)
+    assert "2 inputs wide" in shape.render(result)
