@@ -188,7 +188,9 @@ def analyze(conn, session_ids):
                         + (f"; always goes to {', '.join(always)}" if always else ""),
             })
         orders = order_per_source[src]
-        if n > 1 and orders and len(set(orders)) == 1 and len(orders[0]) > 1:
+        # A dispatcher chooses among different targets. The same target over and over is
+        # an agent loop going round (model -> tools -> model), which is rounds, not dispatch.
+        if n > 1 and orders and len(set(orders)) == 1 and len(set(orders[0])) > 1:
             fixed = orders[0]
             with_model = src in llm_nodes
             findings.append({
@@ -206,7 +208,8 @@ def analyze(conn, session_ids):
         if n > 1 and len(counts) == n and len(set(counts)) == 1 and counts[0] > 1:
             findings.append({
                 "kind": "constant_rounds", "node": node, "rounds": counts[0], "traces": n,
-                "text": f"{node}: ran exactly {counts[0]} times in every one of {n} traces (runs to its cap, never exits early)",
+                "text": f"{node}: ran exactly {counts[0]} times in every one of {n} traces"
+                        " (a cap it always reaches, or a fixed schedule; check which)",
             })
 
     # Repeated model calls whose replies never change within a trace.

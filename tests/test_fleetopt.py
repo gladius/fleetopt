@@ -399,7 +399,9 @@ def test_a_plain_tool_calling_agent_is_not_called_over_built(tmp_path):
     for trace in ("no-tool-1", "no-tool-2", "no-tool-3"):  # answers directly: these used to inflate the ratio
         run(trace, 1, "chain", "assistant")
         run(trace, 1, "llm", "assistant")
-    assert not [f for f in shape.analyze(conn, [sid])["findings"] if f["kind"] == "calls_per_tool_round"]
+    kinds = {f["kind"] for f in shape.analyze(conn, [sid])["findings"]}
+    assert "calls_per_tool_round" not in kinds
+    assert "fixed_dispatch" not in kinds  # going round the same loop is not choosing among workers
 
 
 def test_compare_counts_finished_requests_and_prices_only_those(tmp_path):
