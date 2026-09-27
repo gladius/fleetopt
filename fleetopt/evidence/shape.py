@@ -58,6 +58,20 @@ def llm_replies(conn, session_ids):
     return out
 
 
+def distinct_inputs(conn, session_ids, trace_ids):
+    """How many different inputs the traces cover. A baseline is the same command run
+    n times, so 6 traces are often 2 inputs: consistency, not variety. Inputs that
+    carry generated ids or timestamps count as different; that overstates variety,
+    never understates it, so treat the number as an upper bound."""
+    seen = {
+        r["trace_id"]: " ".join((r["inputs"] or "").split())
+        for r in conn.execute(
+            f"SELECT trace_id, inputs FROM runs WHERE session_id IN {_in(session_ids)}"
+            " AND parent_run_id IS NULL", session_ids)
+    }
+    return len({seen.get(t) or t for t in trace_ids})
+
+
 def _transitions(seq):
     """Observed (src, dst) pairs, step to next step; parallel nodes share a step."""
     by_step = defaultdict(list)
@@ -140,6 +154,7 @@ def analyze(conn, session_ids):
 
     return {
         "traces": n,
+        "distinct_inputs": distinct_inputs(conn, session_ids, list(seqs)),
         "nodes": [x for x in nodes if not x.startswith("__")],
         "llm_nodes": sorted(llm_nodes),
         "conditional_sources": sorted(cond_targets),
@@ -150,8 +165,12 @@ def analyze(conn, session_ids):
 def render(result):
     if not result["traces"]:
         return "no traces to analyze"
-    head = (f"{result['traces']} traces, {len(result['nodes'])} nodes, {len(result['llm_nodes'])} call a model,"
-            f" {len(result['conditional_sources'])} branch points")
+    k = result.get("distinct_inputs", result["traces"])
+    head = (f"{result['traces']} traces over at most {k} distinct inputs, {len(result['nodes'])} nodes,"
+            f" {len(result['llm_nodes'])} call a model, {len(result['conditional_sources'])} branch points")
+    if k < result["traces"]:
+        head += (f"\nnote: the traces repeat the same inputs, so n/n counts show consistency, not variety;"
+                 f" the evidence is {k} inputs wide")
     if not result["findings"]:
         return head + "\nno structural smells on these traces"
     return head + "\n" + "\n".join(f"- {f['text']}" for f in result["findings"])
