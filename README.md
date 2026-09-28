@@ -1,98 +1,45 @@
 # fleetopt
 
-Makes a LangGraph agent cheaper and simpler, **without editing it to observe it**,
-and proves each change before claiming it.
+Finds where a LangGraph agent wastes money or is more complicated than its job needs,
+fixes what it can prove on a separate branch, and leaves the merge to the team. It
+observes the agent without editing it.
 
 ```bash
-fleetopt apply <project>      # review it, change it on a new branch, prove each change
-fleetopt review <project>     # look only: the first half of the above, changes nothing
+fleetopt apply <project>      # the whole loop: review, change, prove, report
+fleetopt review <project>     # look only: changes nothing
 ```
 
-`apply` is the whole loop and needs nothing run before it. Everything else —
-capturing, querying, measuring, comparing, judging — is a tool it calls itself.
+`apply` needs nothing run before it and asks no questions.
 
-## Quick start
+## Install
 
-**Needs:** Python 3.11+, git, and a machine where Claude Code already works (a
-claude.ai login, or your company's key in `~/.claude/settings.json`). No other
-secret. There is no compile step; the editable install below is the whole build.
-Linux, macOS and Windows (activate with `.venv\Scripts\activate` there; console
-output never trips on a legacy code page).
+Needs Python 3.11+, git, and a machine where Claude Code already works (a claude.ai
+login, or your company's key in `~/.claude/settings.json`). Linux, macOS, Windows.
 
 ```bash
 git clone <this repo> fleetopt && cd fleetopt
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"            # fleetopt + the fixture's langgraph; ~250 MB (bundled Claude Code binary)
-# smoke test on a copy of the bundled fixture: 3-5 min, no API spend. Keep the venv
-# active - the fixture runs on this venv's langgraph.
+python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+```
+
+Try it on a copy of the bundled fixture. About 10 minutes, a fake model, no API spend:
+
+```bash
 T=$(mktemp -d) && cp -r fixture/. "$T" && git -C "$T" init -q && git -C "$T" add -A && git -C "$T" commit -qm base
 fleetopt apply "$T"
 ```
 
-It prints the review (numbered findings), then the changes it tries, and ends with a
-`fleetopt verdict` line computed from the measurements. It leaves a new branch in
-that temp repo with one commit per finding left standing. The copy matters: the
-branch is made in whatever git repo the target is in, and `fixture/` inside this
-checkout would mean branching fleetopt itself.
+Use a copy: the branch is made in whatever git repository the project is in.
 
-**On a real project** (must be a git repo; the patch lands on a new branch, the branch
-you were on is never touched):
+## What a team provides
 
-```bash
-fleetopt apply ~/work/their-agent                # the whole loop
-fleetopt review ~/work/their-agent               # look first; apply then starts from this review
-fleetopt apply ~/work/their-agent --only C1,D2   # just the findings a person chose, nothing else
-```
-
-**Look, then change.** `review` runs the agent once and reports two things, as
-numbered findings with the trace numbers they rest on: where the agent wastes money
-(`C1`, `C2`, ...) and whether its design fits its job (`D1`, ...). It changes nothing
-and claims no saving: it saw one run. `apply` tries the findings on a new branch, one
-commit each, measures and judges each one, undoes what fails, and then looks again,
-because a fix often uncovers the next cost. The review is where it starts, not a fence.
-
-| A finding that is | `apply` tries it | and keeps it when |
-|---|---|---|
-| cost (`C`): the graph keeps its nodes and edges | always | the saving clears the noise and every request passes the judge |
-| design (`D`, tier one): a node or edge removed, merged or rewired mechanically | only when the team has eval cases | something got better and every request passes the judge |
-| redesign (`D`, tier two) | only when the team has eval cases | the same |
-
-**What the judge passes, per request:** where the team's eval case covers the request,
-the new answer is correct by that case (or both were wrong and the answer did not
-change); where no case covers it, the new answer is equivalent to the original. One
-failed request fails the change. Requiring equivalence everywhere made a design
-upgrade unprovable: a better design answers in other words.
-
-**The level** printed by every review is the largest kind of change it found: 0 fit,
-1 wasteful (cost), 2 over-built (design), 3 wrong shape (redesign), 4 broken (requests
-that do not finish). It is what a report across many agents would be sorted by.
-
-These rules are applied in code before the session starts. The reviewer says what
-kind of change a finding is and what could go wrong; it does not get to decide what is
-tried (left to choose, one marked every cost finding "needs cases" and nothing was).
-**The person decides at the merge:** nothing is ever merged or pushed, and one commit
-per finding means a team can keep some and drop others.
-
-**The same code is never reviewed twice.** Every capture records a fingerprint of the
-code (commit plus uncommitted changes). While it has not changed, `review` shows the
-saved review and `apply` starts from it; neither runs the agent or a reviewer again.
-(A new file git does not track yet does not change the fingerprint.)
-
-There is no run command to pass and nothing to approve. **How an agent is started is a
-fact about the project, so fleetopt works it out once per project and remembers it**:
-
-| What it needs | Where it looks |
+| | |
 |---|---|
-| The agent | the project's `langgraph.json`; otherwise a compiled graph, or a graph factory that takes no arguments, in its source. With several, the one the team ships and tests |
-| The interpreter | the project's own `.venv` / `venv`. fleetopt never installs anything |
-| Keys and settings | the env file the project names, loaded inside the agent's own process. fleetopt never reads it |
-| Inputs | the team's eval cases; otherwise a file of inputs the project keeps; otherwise four written from its README |
+| A project that runs | Its own environment and its own keys. fleetopt installs nothing and never reads the keys |
+| A git repository | Changes land on a new branch. The branch you were on is never touched |
+| Eval cases, for design changes | Inputs with the answers expected. Found in the project, or passed with `--evals` |
 
-**The team provides a project that runs; fleetopt adds nothing to a developer's
-machine.** Before anything is spent it checks, in a few seconds and without calling a
-model, that the agent loads in the project's environment and that a key for one of
-the providers it uses is set. If not, it lists everything that is missing at once,
-each with the fix in the project's own terms, and stops:
+If something is missing, fleetopt lists all of it at once and stops before spending:
 
 ```
 fleetopt cannot start this agent yet. 2 things to set up, then run the same command again:
@@ -101,276 +48,129 @@ fleetopt cannot start this agent yet. 2 things to set up, then run the same comm
   2. The project's environment has no module named `langgraph`. It has a uv.lock, so: uv sync
 ```
 
-It then starts the agent once with one input to prove the answer, and saves it as a
-small JSON file under `.fleetopt/entries/` (never in the team's repo). From then on
-fleetopt runs its own driver (`fleetopt/drive/driver.py`) against that entry and
-nothing else: never a command somebody guessed. Another framework is another way of
-filling in the same entry.
+## What it does
 
-What is the team's to provide is reported and fleetopt stops. What is fleetopt's to
-work out, it works out, by reading the source in a read-only session and trying the
-answer by running it, twice at most:
-
-| The first request | fleetopt |
+| Step | |
 |---|---|
-| is refused by the provider (a wrong key, no credit), or a service cannot be reached | stops and says so: the team's to fix |
-| is refused for want of a key the project does not have, while it has one for another provider it supports | finds the setting that selects that provider and uses it. Key names only, never values |
-| fails on how the agent was called (which graph, a tenant id, the shape of the input) | changes the entry and tries again |
-| fails because the agent expects a hosting platform to hand it a store or a run context | attaches an empty in-memory store and passes the context, as `langgraph dev` does |
-| fails on the agent's own bug, after the model had answered | carries on. That agent starts; it does not finish. It is reviewed as **broken** (level 4), and fixing it comes before making it cheaper |
+| Start | Finds the agent and works out how to start it. Once per project, then remembered |
+| Watch | Runs it on the team's own inputs and records every step |
+| Review | Numbered findings, each with the number it rests on: cost (`C1`, ...) and design (`D1`, ...) |
+| Change | One finding at a time, one commit each, on a new branch |
+| Prove | Measures again and judges the answers. What does not hold up is undone |
+| Repeat | Looks again: a fix often uncovers the next cost |
+| Report | What changed, what it gained, and a verdict computed from the measurements |
 
-| Flag | Meaning |
-|---|---|
-| `--graph NAME` | Rarely needed. When a project has several agents, fleetopt reads its README, code and the team's own tests, picks the one the team ships, says why in one line and remembers the choice. `--graph` overrides that: a name from its `langgraph.json`, or `file.py:variable`. |
-| `--only IDS` | `apply` only. Try just these findings of the review, for example `C1,D2`, and stop. Without it: everything the review marked safe to try, then whatever those fixes uncover. |
-| `--fresh` | `review` only. Run the agent and review again although the code has not changed. |
-| `--evals FILE` | Eval cases (input + expected answer) as JSONL/JSON, a LangSmith dataset export, or deepeval tests. Optional: they are looked for in the repo otherwise. With cases, the judge reports correctness pass rates before and after, not just "unchanged". |
-| `--max-usd N` | Stop fleetopt's own session once its spend reaches N (default 5 for apply, 1 for review). The target's API calls are its own bill. |
-| `--out DIR` | Where captures, entries and run records go (default `./.fleetopt`, relative to where you run it). |
+`review` is the first three steps. While the code has not changed, a review is reused:
+neither command runs the agent or the reviewer twice for the same code.
 
-**What you get:** the report in the terminal (one row per finding: what happened,
-measured before/after in dollars first, judge verdict), the changes committed on a branch in the target repo,
-every measurement in `.fleetopt/fleetopt.db`, and a run folder at
-`.fleetopt/runs/<timestamp>-<project>/` with `report.md`, `run.json` (what every
-tool established: medians, compare, judge, skills used, turns, cost, and the computed verdict),
-`patch.diff` and `log.txt`; a review leaves its own folder with `review.md` and the findings in `run.json`. The run folder is what feeds the ledger and what you
-would send back to the central team; it holds no prompts or outputs of the target.
-The run also prints which credential it is using as its first line.
+## What is tried, and what is kept
 
-**One debug command**, for when a run comes back empty on a repo: `fleetopt capture <project>`
-starts the agent under instrumentation and nothing more. If it shows `0 runs`, the agent ran
-without going through LangChain's callbacks.
-
-**When it ends with nothing changed:** `within noise` means the change did not clear
-the baseline's own spread and is not a saving, so it was undone. A failed judge means
-an answer got worse, so it was undone. Hitting `--max-usd` or the turn limit ends the
-run with whatever was measured so far, and the verdict says whether the code that was
-left had been judged.
-
-**The last thing printed** is a summary computed from what was recorded, also saved as
-`summary.txt`: the agent, its level, what was found, how many changed versions were
-tried, kept and undone, what was gained, the verdict, what was spent on the team's key
-and by fleetopt, and the branch.
-
-## Why it is built this way
-
-Cheaper is trivially achievable by making an agent dumber: drop a model tier,
-truncate the context, skip a step. So the hard part was never finding savings, it
-was being able to hand another team a number they can trust.
-
-That splits the system in two:
-
-| | Who does it | Why |
+| A finding that is | is tried | and kept when |
 |---|---|---|
-| Discovery, diagnosis, the fix | **The agent** | Can't be enumerated. There are too many patterns and too many project shapes to encode as a workflow |
-| Measurement and the equivalence gate | **Deterministic code** | The output is a claim handed to another team. It has to be reproducible, and an LLM eyeballing medians will report noise as savings |
+| cost: the graph keeps its nodes and edges | always | the gain clears the noise and every request passes the judge |
+| design: a node or edge removed, merged or rewired | only when the team has eval cases | something got better and every request passes the judge |
+| redesign | only when the team has eval cases | the same |
+
+**The judge, per request.** Where an eval case covers the request, the new answer must
+be correct by that case. Where none does, it must be equivalent to the original answer.
+One failed request fails the change.
+
+These rules are applied in code, before any session starts. Nothing is merged or
+pushed. One commit per finding means a team can keep some and drop others.
+
+## The level
+
+Every review gives the agent a level: the largest kind of change it found.
+
+| Level | Name | Meaning |
+|---|---|---|
+| 0 | fit | Nothing worth changing |
+| 1 | wasteful | Works, and costs more than it should |
+| 2 | over-built | Parts of the design do nothing |
+| 3 | wrong shape | A simpler design would do the whole job |
+| 4 | broken | Requests do not finish. Fixed before anything is made cheaper |
+
+## What you get
+
+The last thing printed is a summary, computed from what was recorded:
 
 ```
-fleetopt/
-  cli.py          one product command, two debug commands
-  config.py       the one place for knobs, auth policy, and what the target's process may inherit
-  probe/          observes an unmodified target — hooks, runner, sqlite store
-  evidence/       turns observations into defensible claims — measure, pricing, judge
-  optimizer/      the agent — session, tools, SKILL.md (router) + plugin/skills/ (one skill per decision)
-                  plugin/evals/  eval cases for those skills (`claude plugin eval`)
-tests/            pytest for the deterministic code; corpus/ = real-repo ledger and candidate list
+Agent    supervisor_hitl_sql_agent
+Level    3 of 4, wrong shape
+Found    2 cost, 1 redesign
+Tried    3 changed version(s): 0 kept, 3 undone
+Gained   nothing proven
+Verdict  nothing left standing
+Spent    $1.22 on the team's key in 27 run(s) of the agent, $2.63 by fleetopt
+Branch   fleetopt/c1-c2-d1, the same code it started from
 ```
 
-`judge` lives in `evidence/`, not `optimizer/`, on purpose: the optimizer
-proposed the patch and wants it to pass. It does not get to grade its own work.
-It runs through the same Claude Code binary as the optimizer (same credential, no
-second setup) but in its own process with a clean context, no tools and one turn;
-with `tools=[]` that is ~400 input tokens, the price of a direct API call.
+| Where | What |
+|---|---|
+| The project's repository | A new branch, one commit per finding left standing |
+| `.fleetopt/runs/<time>-<project>/` | `report.md`, `summary.txt`, `patch.diff`, and `run.json`: every measurement and judgment |
+| `.fleetopt/runs/review-<time>-<project>/` | `review.md` and the findings |
+| `.fleetopt/fleetopt.db` | Every recorded run of the agent |
 
-## Zero-edit capture
+A run folder holds no prompts and no outputs of the agent.
 
-Python's `site` module auto-imports `sitecustomize` at interpreter startup. We
-put ours on `PYTHONPATH` and run the target's own command, so instrumentation
-lands before any of its code executes. Two things get installed:
+## Options
 
-- **A global tracer** registered via `register_configure_hook`. LangChain
-  *appends* it to every callback manager, so it runs alongside whatever the
-  project already configured — existing LangSmith traces keep flowing untouched.
-  This is the same `Run` stream LangSmith itself consumes, so prompts,
-  completions, token counts, cache reads and node attribution are all available.
-- **A patch on `StateGraph.compile`**, so every compiled graph snapshots its own
-  topology (`get_graph(xray=True)` + mermaid). No need to locate the graph object
-  in the target's source.
+| Flag | Command | Meaning |
+|---|---|---|
+| `--only C1,D2` | apply | Try just these findings, then stop |
+| `--evals FILE` | both | Eval cases to use. Their inputs are what the agent is run on |
+| `--fresh` | review | Review again although the code has not changed |
+| `--graph NAME` | both | Rarely needed. With several agents, fleetopt picks the one the team ships and says why. This overrides it |
+| `--max-usd N` | both | Cap on fleetopt's own spend (5 for apply, 1 for review). The agent's calls are the team's bill |
+| `--out DIR` | both | Where records go (default `./.fleetopt`) |
 
-The hook writes JSONL — append-only and lock-free, so nothing it does can
-deadlock someone else's program. The CLI ingests into SQLite after the process
-exits.
+`fleetopt capture <project>` is a diagnostic: it runs the agent under observation and
+says how much it saw.
 
-## Guardrails
+Settings, all optional, in the environment or `~/.config/fleetopt/env`: `FLEETOPT_MODEL`,
+`FLEETOPT_REVIEW_MODEL`, `FLEETOPT_JUDGE_MODEL`, `FLEETOPT_PARALLEL`, `FLEETOPT_PRICES`.
 
-These exist because each one is a way to produce a confident wrong number.
+## What keeps it safe
 
-- **Built-in tools by allowlist.** Read, Grep, Glob, Bash, Edit, Write, Skill. Claude Code's default set also includes web
-  fetch and search, cron, git worktrees, messaging and scheduling; none of it is loaded.
-- **Noise floor.** `compare` uses the baseline's own run-to-run spread. A delta
-  inside that spread reports as `within noise`, not as a saving.
-- **Code-state fingerprint.** Every session records `git HEAD` + a hash of the
-  working diff. Averaging sessions that ran against different source is refused
-  outright — otherwise re-using a label after an edit silently medians the before
-  and the after together.
-- **Labels are scoped to the project.** The capture db is shared, so `baseline`
-  from one repo must never pool with `baseline` from another. Enforced in
-  `tools._ids`, on top of the code-state fingerprint.
-- **Unpriced means `None`, never `$0`.** A savings figure built on a model with
-  no price is worse than no figure. Rates live in `evidence/pricing.py` and
-  **will rot**; override via `FLEETOPT_PRICES`.
-- **Measurements run concurrently.** Not for speed: the optimizer is an LLM session
-  whose prompt cache expires after 5 minutes of silence. Three serial 70-second
-  target runs blew through that and forced a full re-write of its 67K-token context -
-  three times in one run, a third of the optimizer's bill. `measure` now executes the
-  n runs at once (`FLEETOPT_PARALLEL`, default n, max 5) and ingests serially. Token
-  and dollar medians are identical to serial (verified on the fixture); `wall_ms`
-  picks up contention, so set `FLEETOPT_PARALLEL=1` when latency is the subject.
-- **The target runs only through `measure`.** A `PreToolUse` hook denies Bash commands
-  that would run it by hand (`pytest`, `python x.py`, `langgraph dev`, the driver
-  itself). Running it by hand spent the team's tokens twice, captured nothing, and fed
-  12K tokens of tracebacks into the optimizer's context.
-- **How the agent is started is not the optimizer's to decide.** fleetopt settles it
-  before the session begins (see Quick start) and the optimizer has no tool to change
-  it. It once spent 13 turns re-deriving a command that was already correct.
-- **The verdict is computed, not written.** After the agent's report fleetopt prints
-  what the recorded measurements support. Only a judged comparison of two different
-  code states counts, and one failed judgment of the final code is a failure. Every
-  comparison states which code each side ran. Observed 2026-09-28: an optimizer
-  measured its patched code under a label called `baseline-retest`, cited that as
-  proof the unmodified agent had the same defect, and reported the saving as real.
-- **Equivalence gates everything.** A cost reduction with a failed judge is a
-  regression nobody noticed yet.
-
-- **Correct, not only unchanged, when the team has eval cases.** The judge always
-  checks that the patch left the output equivalent to the previous run. When eval
-  cases with expected answers exist - a deepeval suite, JSONL, JSON, or `--evals` -
-  it also grades both baseline and candidate against them and reports pass rates;
-  a candidate that passes fewer cases than the baseline fails. Only runs whose
-  input matches a case are graded, and the rest are reported as unmatched. Without
-  cases the report says "correctness not checked" in so many words.
-- **Never changes the target's environment.** Installs and downloads (`pip install`,
-  `uv add`/`--with`, `poetry add`, `npm install`, `curl`, `wget`, ...) are denied in the
-  optimizer's shell. A missing dependency is a finding to report, not something to
-  fix. Observed 2026-09-24: handed an interpreter without langgraph,
-  the agent pulled the packages with `uv run --with`. Right for a sandbox, wrong on
-  someone's machine.
-- **A command that has never worked here is probed once** before the remaining runs
-  start, and a failed measurement returns the target's own last output lines to the
-  agent. Before this, a wrong interpreter cost 15 crashed runs and 20 turns of
-  guessing; the traceback had gone to the operator's terminal, not to the agent.
-
-## Permissions
-
-Nothing is asked, so nothing depends on somebody being there to answer. What keeps
-a run safe is enforced:
+Enforced, not asked. Each is a test in `tests/test_invariants.py`.
 
 | | Rule |
 |---|---|
-| Start the target | only fleetopt's own driver, against the entry settled for the project |
-| Shell | cannot install or download, cannot run the target by hand, cannot `git push` |
-| Edit, Write | only inside the project, and only once a new branch exists |
-| Read | never `.env*`, keys, certificates, `*secret*`, `*credential*`, `.netrc` and friends (`config.DENY_READS`; verified live 2026-09-24) |
-| Built-in tools | Read, Grep, Glob, Bash, Edit, Write, Skill. No web access, no scheduler, no subagents |
-| Spend | `--max-usd` caps fleetopt's own session; the target's API calls are not included |
+| The team's code | Edited only inside the project, and only on a new branch |
+| Publishing | No `git push`, no merge |
+| The team's machine | Nothing installed, nothing downloaded |
+| Secrets | `.env`, keys and certificates are never read |
+| The verdict | Computed from the measurements, not written by the session that made the change |
+| The session | No web access. Loads nothing from the operator's Claude Code or the project's `.claude/` |
 
-A session loads nothing from the operator's Claude Code (plugins, skills, hooks, MCP
-servers) and nothing from the target repo's `.claude/`, so another team's hooks,
-permissions and CLAUDE.md never run inside it; only the credential-bearing keys of
-`~/.claude/settings.json` are passed through. Subprocesses are spawned with telemetry
-and auto-memory off. Each of these is a test in `tests/test_invariants.py`.
+## Known limits
 
-## Setup
-
-```bash
-pip install -e ".[dev]"                   # fleetopt + the fixture's langgraph
-```
-
-**Credentials: none to configure.** The optimizer and the judge run through the
-Claude Code binary bundled with the Agent SDK, so they authenticate the way Claude
-Code on the machine does, in Claude Code's own precedence: cloud-provider
-switches, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `apiKeyHelper`, then the
-claude.ai login. Those variables can sit in the shell or in the `env` block of
-`~/.claude/settings.json`, which is how a company gateway is usually distributed.
-Only that `env` block and `apiKeyHelper` are read from the file: the operator's own
-plugins, skills, hooks and MCP servers never enter a run, and neither does the
-target repo's `.claude/`.
-`fleetopt apply` prints which one it found. The target agent is separate: it
-runs with the operator's real environment and its own keys, and never inherits
-anything fleetopt read from its own config files.
-
-Knobs are optional and live in `.env` (per project) or `~/.config/fleetopt/env`
-(per machine); real environment wins over both. `FLEETOPT_MODEL` drives the
-sessions (default `claude-sonnet-5`), `FLEETOPT_REVIEW_MODEL` the reviewer alone,
-`FLEETOPT_JUDGE_MODEL` the equivalence check (default Haiku 4.5),
-`FLEETOPT_PARALLEL` sets measurement concurrency.
-
-**What a claude.ai login covers:** the optimizer and the judge, not the agent
-under test. The fixture uses a fake model, so its runs are free of API spend.
-A real target makes its own provider calls with its own key.
+| | |
+|---|---|
+| No change kept on a real agent yet | Three real agents were run unattended on 2026-09-28. All started without help and every verdict was true. None left a change standing |
+| Cost of a run | About $3 to $4 per agent for a full `apply`. Too much for a fleet |
+| Frameworks | LangGraph, in Python. Nothing else |
+| Providers | Only Anthropic has been run. OpenAI and Gemini are priced and untested |
+| Eval cases | Four are run, spread over the file. Not every case |
+| The judge | Reads one run per side, of the three measured |
+| Design changes | One attempt. The judge's reasons are not used for a second |
+| Agents with outside tools | One request lost to a flaky web search fails the change |
+| Agents inside agents | Structural numbers cover the outer agent only |
+| New files | A file git does not track yet does not count as a change to the code |
 
 ## Testing
 
-Three layers, each the standard tool for what it checks. None of them touches a
-target's API key.
+| | Command | Cost |
+|---|---|---|
+| The code and the product's promises | `pytest -q` | None. About 30 seconds |
+| The seven skills | `claude plugin eval fleetopt/optimizer/plugin --trust-plugin` | A few dollars on your login |
+| Real agents | `tests/corpus/ledger.md` records every run | The team's key, and fleetopt's sessions |
 
-| Layer | What it checks | Command | Cost |
-|---|---|---|---|
-| invariants | the product's promises, one test each: a session inherits nothing from the operator, has no web access, cannot read secrets; nothing is installed or hand-run; the probe only observes; a change inside the noise is not a saving; the judge fails closed; the reviewer can only look; structural patches wait for eval cases | `pytest -q tests/test_invariants.py` | none, under 1 s |
-| pytest | the deterministic code: eval discovery, label scoping, the Bash guard, the noise floor, session isolation, and one capture of the fixture | `pytest -q` | none, about 2 s |
-| plugin eval | the six skills: with the plugin loaded the agent reaches each skill's conclusion (the 4,096-token Haiku minimum, effort before tier, the ~10K schema threshold...); the default with/without arm shows whether the skill made the difference | `claude plugin eval fleetopt/optimizer/plugin --trust-plugin` | 12 short agent runs on your login, a few dollars |
-| corpus ledger | the whole loop on real agents | `fleetopt apply targets/<repo>`, then a line in `tests/corpus/ledger.md` | the target's own tokens plus fleetopt's sessions |
+## More
 
-The skill evals live next to the skills because the runner looks for them below the
-plugin. `tests/corpus/corpus_build.py` regenerates the candidate list from GitHub
-search; export `GITHUB_TOKEN` for the full pass. Every break found on a real repo
-becomes a pytest case; every recurring pattern becomes a line in a skill.
-
-Two fixtures, both on a fake model so nothing costs anything: `fixture/agent.py` has a
-planted cost defect (a node that re-sends its whole history); `fixture/supervisor.py`
-has planted structural smells for the architecture review (a router that only ever
-takes one branch, a supervisor whose three workers always run in the same order, a
-reflection loop that never changes the draft).
-
-## Known gaps
-
-- **Agents nested inside agents blur the structural numbers.** The probe records which
-  node a call ran under, not which graph that node belongs to, and every tool-calling
-  agent names its nodes `model` and `tools`. The numbers are computed for the one graph
-  that accounts for most of what ran and leave nested agents out, so a supervisor whose
-  workers are themselves agents gets numbers for the supervisor only. Recording the
-  graph a node belongs to (LangGraph's checkpoint namespace) is the fix.
-
-- **No change has yet been proven on a real agent.** Three real agents were run
-  unattended on 2026-09-28 (`tests/corpus/ledger.md`). All three were started without
-  help, every finding was tried or correctly left alone, and every verdict was true.
-  None of them left a change standing. The nearest: a redesign that took a broken
-  agent from 0 of 6 finished requests to 4 of 6, undone because the supplied cases
-  had not been run (fixed since), and a redesign that made an agent 23% faster and
-  two of its four answers wrong.
-- **A run costs too much for a fleet.** On one agent: $1.22 on the team's key in 27
-  runs of the agent, $1.91 for fleetopt's own session and $0.72 for the review. Two
-  causes are known. Findings whose whole effect is under the noise floor are tried
-  anyway, at 3 runs and again at 5. And the session re-reads what the review read.
-- **A design change gets one attempt.** When the judge fails it, it is undone. The
-  judge's reasons (an answer cut off, a fact wrong) are not used for a second try.
-- **An agent whose tools reach outside fails at random.** One request lost to a web
-  search that timed out fails the change, by design: one failed request is a failed
-  change. Nothing yet tells a flaky tool from a broken agent.
-- **Only the first four cases are run.** Cases supplied or found are the inputs, spread
-  over the file, four of them. fleetopt does not run every case, and it cannot fetch
-  LangSmith, Galileo or promptfoo datasets: it reports their names for a human to export.
-- **The judge reads one run per side.** A measurement is three runs; the answers of
-  the first are the ones judged.
-- **Only Anthropic has been run.** The pricing table covers OpenAI and Gemini; no agent
-  has been run on either.
-- **The fixture cannot exercise the judge.** Its fake model returns fixed strings
-  regardless of input, so before/after outputs are byte-identical and the gate
-  passes trivially.
-- Pricing covers Anthropic, OpenAI and Gemini list rates as of 2026-09-23; hosted
-  variants (Bedrock/Vertex/Azure ids) and >200K-context tiers are not priced.
-- Only LangGraph. ADK emits OpenTelemetry natively (1.17+), so its adapter should
-  be an OTLP span processor installed the same way, not a second callback hook.
-- No train/test split. Measuring and editing against the same handful of cases
-  produces a beautiful number and a production regression.
-- Async and streaming invocation paths are untested.
+| | |
+|---|---|
+| `docs/design.md` | Why it is built this way, how it observes without editing, how it starts an agent, every guardrail and the incident behind it |
+| `docs/fleetopt-overview.html` | A one-screen briefing |
+| `tests/corpus/ledger.md` | Every run on a real agent: what was found, what broke, what was fixed |
