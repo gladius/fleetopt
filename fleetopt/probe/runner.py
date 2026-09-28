@@ -8,6 +8,7 @@ has exited, so nothing in the target's address space can hit a database lock.
 import hashlib
 import os
 import pathlib
+import signal
 import subprocess
 import tempfile
 
@@ -15,6 +16,20 @@ from fleetopt import config
 from fleetopt.probe import store
 
 HOOKS_DIR = pathlib.Path(__file__).parent / "hooks"
+TIMED_OUT = 124  # the exit code of a run that was stopped for not ending
+
+
+def _stop(proc):
+    """Stop a run and everything it started. The command goes through a shell, so
+    killing that process alone would leave the agent itself running."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        proc.kill()
+    proc.wait()
 
 
 def code_state(project):
@@ -40,8 +55,10 @@ def code_state(project):
 
 def execute(project, run_cmd, out_dir, with_io=False, timeout=None):
     """Run run_cmd under instrumentation. Touches no database, so several can run
-    at once. Returns (raw_dir, traces_path, graphs_path, returncode). Raises
-    subprocess.TimeoutExpired past `timeout` seconds."""
+    at once. Returns (raw_dir, traces_path, graphs_path, returncode). A run that has
+    not ended after `timeout` seconds is stopped and returns TIMED_OUT: an agent
+    waiting for a keyboard or a service that never answers must not hold fleetopt
+    for ever."""
     out = pathlib.Path(out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
@@ -62,9 +79,15 @@ def execute(project, run_cmd, out_dir, with_io=False, timeout=None):
     # failure they are the diagnosis (returned to the agent by measure), on success
     # they are noise.
     with (raw / "target.log").open("wb") as log:  # raw bytes, whatever the target emits
-        result = subprocess.run(run_cmd, shell=True, cwd=project, env=env,
-                                stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
-    return raw, traces, graphs, result.returncode
+        proc = subprocess.Popen(run_cmd, shell=True, cwd=project, env=env, stdout=log,
+                                stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
+        try:
+            code = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _stop(proc)
+            log.write(f"\n[fleetopt] stopped: it had not ended after {timeout / 60:g} minutes\n".encode())
+            code = TIMED_OUT
+    return raw, traces, graphs, code
 
 
 def output_tail(raw, lines=25):

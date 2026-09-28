@@ -276,3 +276,62 @@ def test_a_comparison_says_which_code_each_side_ran():
     same = tools.sides("baseline", "baseline-retest", "abc+1", "abc+1")
     assert "SAME code" in same and "says nothing about the effect of a change" in same
     assert "SAME code" not in tools.sides("baseline", "patched", "abc+1", "abc+2")
+
+
+# --- a run ends, whatever the agent or the session does --------------------------------
+
+def test_a_run_of_the_agent_that_does_not_end_is_stopped_with_what_it_started(tmp_path):
+    import time
+
+    from fleetopt.probe import runner
+
+    marker = tmp_path / "still-alive"
+    # a shell that starts a child which would write a file after 3 seconds: if only the
+    # shell were killed, the child would live on and the file would appear
+    child = f'{sys.executable} -c "import time, pathlib; time.sleep(3); pathlib.Path(r\'{marker}\').write_text(\'x\')"'
+    began = time.time()
+    raw, _, _, code = runner.execute(tmp_path, child, tmp_path / "out", timeout=1)
+    assert code == runner.TIMED_OUT and time.time() - began < 3
+    assert "had not ended" in (raw / "target.log").read_text(encoding="utf-8")
+    time.sleep(3)
+    assert not marker.exists()
+
+
+def test_the_teams_money_and_the_clock_both_end_a_run(tmp_path, monkeypatch, capsys):
+    import time
+
+    project = tmp_path / "p"
+    tools.CTX.clear()
+    tools.CTX.update(out=tmp_path, project=project, events=[], first_session=0, max_team_usd=5.0,
+                     deadline=time.time() + 60, max_minutes=120)
+    monkeypatch.setattr(measure, "spent", lambda out, proj, after: (12, 4.99))
+    assert tools.over() is None
+    monkeypatch.setattr(measure, "spent", lambda out, proj, after: (13, 5.01))
+    assert "limit on the team's key is reached: $5.01 spent in 13 runs" in tools.over()
+    monkeypatch.setattr(measure, "spent", lambda out, proj, after: (3, None))   # no price: the clock still holds
+    assert tools.over() is None
+    tools.CTX["deadline"] = time.time() - 1
+    assert "time limit for a run is reached: 120 minutes" in tools.over()
+
+    def never(*a, **k):
+        raise AssertionError("the agent must not be run past a limit")
+
+    monkeypatch.setattr(measure, "collect", never)
+    reply = asyncio.run(tools.measure.handler({"label": "C3", "n": 3}))["content"][0]["text"]
+    assert reply.startswith("refused:") and "write your report now" in reply
+    assert "stopping here" in capsys.readouterr().out and tools.CTX["events"][-1]["event"] == "limit"
+    tools.CTX.clear()
+
+
+def test_what_is_shown_is_for_a_person():
+    assert measure.plain("baseline") == measure.plain("baseline-clean") == "the agent as it is"
+    assert measure.plain("review-20260928-173438") == "a first look" and measure.plain("D1-n5") == "D1-n5"
+    line = tools.compared("D1", {
+        "cost_usd": {"delta_pct": -14.6, "verdict": "within noise"},
+        "wall_ms": {"delta_pct": -23.4, "verdict": "improved"},
+        "llm_calls": {"delta_pct": None, "verdict": "unpriced"},
+        "completed": {"before": 0, "after": 2, "verdict": "improved"}})
+    assert line == ("[fleetopt] D1 against the original: cost -15% (no real change), time -23% (better), "
+                    "requests finished per run 0 to 2 (better)")
+    shown = " ".join(pathlib.Path(session.__file__).read_text(encoding="utf-8").split())
+    assert 'print(f" - {name}")' in shown and "if everything:" in shown  # tool names only when asked for

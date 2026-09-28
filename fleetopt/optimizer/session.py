@@ -14,9 +14,11 @@ all, and nothing is installed or pushed.
 import datetime
 import importlib.metadata
 import json
+import os
 import pathlib
 import re
 import subprocess
+import time
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -184,14 +186,14 @@ def _git(project, *args):
         return ""
 
 
-def _write_record(run_dir, project, start_sha, started, meta, texts, calls, skills, result):
-    """What this run did: report.md for a human, run.json for the ledger and for
-    improving fleetopt, patch.diff when the branch changed anything. No prompts or
-    outputs of the target are stored; the 120-char input excerpts in judge rows and
-    the diff are the only target content, so sharing a run folder is the operator's
-    call, not automatic."""
+def _write_record(run_dir, project, start_sha, started, meta, texts, calls, skills, result, log=()):
+    """What this run did: report.md for a human, log.txt for whoever has to find out
+    why, run.json for the ledger and for improving fleetopt, patch.diff when the branch
+    changed anything. No prompts or outputs of the target are stored; the 120-char
+    input excerpts in judge rows and the diff are the only target content, so sharing
+    a run folder is the operator's call, not automatic."""
     (run_dir / "report.md").write_text("\n\n".join(texts), encoding="utf-8")
-    (run_dir / "log.txt").write_text("\n".join(calls), encoding="utf-8")
+    (run_dir / "log.txt").write_text("\n".join(log or calls), encoding="utf-8")
     diff = _git(project, "diff", start_sha) if start_sha else ""
     if diff:
         (run_dir / "patch.diff").write_text(diff + "\n", encoding="utf-8")
@@ -333,10 +335,18 @@ def build_options(project, run_cmd=None, model=None, max_turns=120, max_usd=None
     )
 
 
+MAX_MINUTES = 120  # the whole run; FLEETOPT_MAX_MINUTES overrides
+
+
 async def run(project, out_dir, run_cmd, review, findings, model=None, max_turns=120, max_usd=None,
-              evals=None, fenced=False):
+              evals=None, fenced=False, first_session=0):
     """Try `findings` (from review.findings, already chosen) of the `review` text, then
-    keep looking unless `fenced`: a person who names findings gets those and no others."""
+    keep looking unless `fenced`: a person who names findings gets those and no others.
+
+    Four things end a run that would not end itself. The SDK stops the session at
+    `max_turns` and at `max_usd` of its own spend. `measure` refuses once the agent's
+    runs since `first_session` have cost the team `max_usd`, or the run has lasted
+    MAX_MINUTES. And one run of the agent is stopped after measure.RUN_MINUTES."""
     project = pathlib.Path(project).resolve()
     out = pathlib.Path(out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -346,10 +356,14 @@ async def run(project, out_dir, run_cmd, review, findings, model=None, max_turns
     run_dir.mkdir(parents=True, exist_ok=True)
     start_sha = _git(project, "rev-parse", "HEAD")
     start_state = runner.code_state(project)
+    minutes = float(os.environ.get("FLEETOPT_MAX_MINUTES") or MAX_MINUTES)
     tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd,
-                      "events": [], "model": model, "run_dir": run_dir})
+                      "events": [], "model": model, "run_dir": run_dir, "findings": findings,
+                      "max_team_usd": max_usd, "first_session": first_session, "max_minutes": minutes,
+                      "deadline": time.time() + 60 * minutes, "announced": set(), "said_at": time.time()})
     tools.CTX.pop("baseline_state", None)
     tools.CTX.pop("eval_cases", None)
+    everything = bool(os.environ.get("FLEETOPT_VERBOSE"))
     design = any(f["kind"] != "cost" for f in findings)
     mission = MISSION.format(ids=", ".join(f["id"] for f in findings) or "none: the review listed nothing to try",
                              review=review, after=ONLY_THESE if fenced else LOOK_AGAIN,
@@ -363,7 +377,11 @@ async def run(project, out_dir, run_cmd, review, findings, model=None, max_turns
     async def prompt():
         yield {"type": "user", "message": {"role": "user", "content": mission}}
 
-    texts, calls, skills, result = [], [], [], {}
+    # Shown to whoever watches: what the tools established, then the report. The names
+    # of the tools and what the session thinks aloud on the way go to log.txt; a person
+    # reading "- Bash - query_traces - Edit" learns nothing, and a session saying it
+    # "made an unintended change" halfway alarms for no reason once it has put it right.
+    texts, calls, skills, result, log, closing = [], [], [], {}, [], []
     try:
         async with ClaudeSDKClient(options=options) as client:
             await client.query(prompt())
@@ -371,21 +389,34 @@ async def run(project, out_dir, run_cmd, review, findings, model=None, max_turns
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
-                            print(block.text)
                             texts.append(block.text)
+                            closing.append(block.text)
+                            log.append(block.text)
+                            if everything:
+                                print(block.text)
                         elif isinstance(block, ToolUseBlock):
                             name = block.name.replace("mcp__fleetopt__", "")
-                            print(f"  - {name}")
+                            closing.clear()  # what came before a tool call was not the report
                             calls.append(name)
+                            log.append(f"  - {name}")
                             if block.name == "Skill":
                                 skills.append((block.input or {}).get("skill", "?"))
+                            if everything:
+                                print(f"  - {name}")
+                            elif time.time() - tools.CTX["said_at"] > 120:
+                                tools.say(f"[fleetopt] still working (step {len(calls)}, "
+                                          f"{(datetime.datetime.now() - started).seconds // 60} minutes)")
                 elif isinstance(message, ResultMessage):
                     cost = getattr(message, "total_cost_usd", None)
                     result = {"turns": message.num_turns, "optimizer_cost_usd": cost,
                               "status": message.subtype,
                               "error": message.result if message.is_error else None}
-                    print(f"\n--- done in {message.num_turns} turns" +
-                          (f", ${cost:.4f}" if cost else "") + " ---")
+                    if not everything and closing:
+                        print("\n--- report ---\n" + "\n\n".join(closing))
+                    ended = {"error_max_turns": f", stopped at the limit of {max_turns} steps",
+                             "error_max_budget_usd": ", stopped at the limit of its own spend"}.get(message.subtype, "")
+                    print(f"\n--- done in {message.num_turns} steps" +
+                          (f", ${cost:.2f} of fleetopt's own" if cost else "") + ended + " ---")
     finally:
         final_state = runner.code_state(project)
         events = tools.CTX.get("events", [])
@@ -399,7 +430,7 @@ async def run(project, out_dir, run_cmd, review, findings, model=None, max_turns
         meta = {"model": model, "evals_path": evals, "max_turns": max_turns, "max_usd": max_usd,
                 "findings": findings, "fenced": fenced, "code_state_after": final_state, **facts}
         try:
-            _write_record(run_dir, project, start_sha, started, meta, texts, calls, skills, result)
+            _write_record(run_dir, project, start_sha, started, meta, closing or texts, calls, skills, result, log)
         except OSError as exc:  # never let the record mask what the run itself did
             print(f"[fleetopt] could not write the run record: {exc}")
     return facts

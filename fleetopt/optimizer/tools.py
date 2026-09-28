@@ -9,6 +9,8 @@ team, and a claim has to be reproducible.
 import datetime
 import json
 import pathlib
+import re
+import time
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
@@ -24,6 +26,55 @@ CTX = {}
 
 def _ok(text):
     return {"content": [{"type": "text", "text": text}]}
+
+
+def say(line):
+    """A line for whoever is watching the run. What the tools established, in words a
+    person outside fleetopt reads; the names of tools and what a session thinks aloud
+    go to the log."""
+    CTX["said_at"] = time.time()
+    print(line, flush=True)
+
+
+WORDS = {"improved": "better", "regressed": "worse", "within noise": "no real change",
+         "baseline finished nothing": "the original finished nothing"}
+SHOWN = (("cost_usd", "cost"), ("wall_ms", "time"), ("llm_calls", "model calls"))
+
+
+def compared(name, result):
+    """One line for a comparison: what moved, and whether it is past the noise."""
+    parts = [f"{word} {v['delta_pct']:+.0f}% ({WORDS.get(v['verdict'], v['verdict'])})"
+             for key, word in SHOWN if (v := result.get(key)) and v.get("delta_pct") is not None]
+    done = result.get("completed") or {}
+    if done.get("before") is not None and done.get("after") is not None and done["before"] != done["after"]:
+        parts.append(f"requests finished per run {done['before']:g} to {done['after']:g} "
+                     f"({WORDS.get(done['verdict'], done['verdict'])})")
+    return f"[fleetopt] {name} against the original: " + (", ".join(parts) or "nothing could be compared")
+
+
+def announce(label):
+    """Say which finding a measurement belongs to, once, by the name the review gave it."""
+    found = re.match(r"([CDN]\d+)", label)
+    if not found or found.group(1) in CTX.setdefault("announced", set()):
+        return
+    CTX["announced"].add(found.group(1))
+    title = next((f["title"] for f in CTX.get("findings") or [] if f["id"] == found.group(1)),
+                 "found while applying the others")
+    say(f"\n[fleetopt] {found.group(1)}: {title}")
+
+
+def over():
+    """Why no further run of the agent may start, or None. The session's own spend and
+    turns are capped by the SDK; these two are what it could otherwise spend without
+    end: the team's money, and time."""
+    limit = CTX.get("max_team_usd")
+    if limit is not None:
+        runs, cost = measure_mod.spent(CTX["out"], CTX["project"], CTX.get("first_session", 0))
+        if cost is not None and cost >= limit:
+            return f"the limit on the team's key is reached: ${cost:.2f} spent in {runs} runs of the agent, limit ${limit:.2f}"
+    if CTX.get("deadline") and time.time() >= CTX["deadline"]:
+        return f"the time limit for a run is reached: {CTX.get('max_minutes', 0):g} minutes"
+    return None
 
 
 def _record(event, **data):
@@ -89,10 +140,18 @@ def _ids(label):
 )
 async def measure(args):
     label, n = args["label"], args.get("n", 3)
+    stop = over()
+    if stop:
+        _record("limit", label=label, reason=stop)
+        say(f"[fleetopt] stopping here: {stop}")
+        return _ok(f"refused: {stop}. No further measurement is possible in this run. Undo any change "
+                   "that has not been measured and judged, and write your report now.")
+    announce(label)
     try:
-        measure_mod.collect(CTX["project"], CTX["run_cmd"], CTX["out"], n, label)
+        measure_mod.collect(CTX["project"], CTX["run_cmd"], CTX["out"], n, label, say=say)
     except RuntimeError as e:
         _record("measure_failed", label=label, error=str(e)[:300])
+        say(f"[fleetopt] {measure_mod.plain(label)}: could not be measured")
         return _ok(f"measurement failed: {e}")
     with _conn() as conn:
         ids = _ids(label)
@@ -100,6 +159,9 @@ async def measure(args):
     state = _state(ids)
     original = CTX.setdefault("baseline_state", state)  # the first measurement of a run is the unmodified code
     _record("measure", label=label, n=n, sessions=len(ids), stats=stats, code_state=state)
+    cost = "no price for its model" if stats.get("cost_usd") is None else f"${stats['cost_usd']:.4f} per run"
+    done = "" if stats.get("completed") is None else f", {stats['completed']:g} requests finished per run"
+    say(f"[fleetopt] {measure_mod.plain(label)}: {cost}{done}")
     note = f"\ncode state {state}"
     if state != original:
         note += (f" - this is CHANGED code (the run's first measurement was {original})."
@@ -166,6 +228,8 @@ async def compare(args):
     b, c = _state(base), _state(cand)
     _record("compare", baseline=args["baseline"], candidate=args["candidate"], result=comparison,
             baseline_state=b, candidate_state=c)
+    if b != c:  # the same code twice is the agent's own variation, of no interest to who is watching
+        say(compared(args["candidate"], comparison))
     return _ok(sides(args["baseline"], args["candidate"], b, c) + "\n\n" + measure_mod.render(comparison))
 
 
@@ -189,6 +253,9 @@ async def judge(args):
     b, c = _state(base), _state(cand)
     _record("judge", baseline=args["baseline"], candidate=args["candidate"],
             passed=passed, equivalence=results, correctness=correctness, baseline_state=b, candidate_state=c)
+    if b != c:
+        say(f"[fleetopt] {args['candidate']} judged: {sum(bool(r['kept_on']) for r in results)} of {len(results)} "
+            f"requests passed. {'Passed' if passed else 'Failed'}")
     lines = [sides(args["baseline"], args["candidate"], b, c), "", "per request (what it passed on):"]
     lines += [f"  [{'PASS: ' + r['kept_on'] if r['kept_on'] else 'FAIL'}] "
               f"{'unchanged' if r['equivalent'] else 'changed'}: {r['reason']}" for r in results]

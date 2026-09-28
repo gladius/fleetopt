@@ -53,17 +53,10 @@ def _newest(out):
 
 
 def spent(out, project, after):
-    """(runs of the agent, what they cost on the team's key) since capture `after`.
-    The cost is None when a model it used has no price here."""
+    """(runs of the agent, what they cost on the team's key) since capture `after`."""
     from fleetopt.evidence import measure as measure_mod
 
-    if not (out / "fleetopt.db").exists():
-        return 0, 0.0
-    with store.connect(out / "fleetopt.db") as conn:
-        ids = [r["id"] for r in conn.execute("SELECT id FROM sessions WHERE id > ? AND project = ?",
-                                             (after, str(project)))]
-        costs = [measure_mod.session_stats(conn, i)["cost_usd"] for i in ids]
-    return len(ids), (None if None in costs else sum(costs))
+    return measure_mod.spent(out, project, after)
 
 
 def summary(agent, record, facts, runs, team_cost, own_cost):
@@ -308,6 +301,7 @@ def apply(args):
             max_usd=args.max_usd,
             evals=args.evals,
             fenced=bool(args.only),
+            first_session=before,
         )
     )
     runs, team_cost = spent(out, project, before)
@@ -357,8 +351,8 @@ def _parser():
                      help="try just these findings of the review and nothing else, e.g. C1,D2. Without it, "
                           "everything the review marked safe to try, then whatever those fixes uncover")
     app.add_argument("--max-usd", type=float, default=5.0,
-                     help="stop fleetopt's own session once its spend reaches this (default 5). "
-                          "Does not cover the target's API calls.")
+                     help="the most this run may spend on either side (default 5): fleetopt's own session "
+                          "stops at it, and so does running the agent on the team's key")
     app.set_defaults(fn=apply)
 
     cap = sub.add_parser("capture", help="[debug] run a project under instrumentation")

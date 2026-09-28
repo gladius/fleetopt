@@ -253,10 +253,10 @@ def prove(entry_path, entry, timeout=600):
     from fleetopt.probe import runner
 
     out = pathlib.Path(entry_path).parent.parent
-    try:
-        raw, traces, _, code = runner.execute(entry["project"], command(entry_path, entry, limit=1), out,
-                                              timeout=timeout)
-    except subprocess.TimeoutExpired:
+    raw, traces, _, code = runner.execute(entry["project"], command(entry_path, entry, limit=1), out,
+                                          timeout=timeout)
+    if code == runner.TIMED_OUT:
+        shutil.rmtree(raw, ignore_errors=True)
         return False, f"no answer within {timeout} seconds"
     text = (raw / "target.log").read_text(encoding="utf-8", errors="replace")
     answered = 0

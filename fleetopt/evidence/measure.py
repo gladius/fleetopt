@@ -14,7 +14,32 @@ from fleetopt.evidence import pricing
 from fleetopt.probe import runner, store
 
 
-def collect(project, run_cmd, out_dir, n, label, with_io=True):
+RUN_MINUTES = 15  # one run of the agent, all its inputs; FLEETOPT_RUN_MINUTES overrides
+
+
+def plain(label):
+    """A label as somebody outside fleetopt would say it."""
+    if label.startswith("review-"):
+        return "a first look"
+    if label.startswith("baseline"):
+        return "the agent as it is"
+    return label
+
+
+def spent(out_dir, project, after=0):
+    """(runs of the agent, what they cost on the team's key) since capture `after`.
+    The cost is None when a model it used has no price here."""
+    db = pathlib.Path(out_dir).resolve() / "fleetopt.db"
+    if not db.exists():
+        return 0, 0.0
+    with store.connect(db) as conn:
+        ids = [r["id"] for r in conn.execute("SELECT id FROM sessions WHERE id > ? AND project = ?",
+                                             (after, str(project)))]
+        costs = [session_stats(conn, i)["cost_usd"] for i in ids]
+    return len(ids), (None if None in costs else sum(costs))
+
+
+def collect(project, run_cmd, out_dir, n, label, with_io=True, say=print):
     """Run the target n times under one label. Returns the session ids.
 
     The runs execute concurrently (FLEETOPT_PARALLEL, default n, max 5). This is
@@ -26,7 +51,8 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True):
     so set FLEETOPT_PARALLEL=1 when latency is the thing being measured.
     """
     workers = min(n, int(os.environ.get("FLEETOPT_PARALLEL", n) or 1), 5)
-    run_one = lambda _=None: runner.execute(project, run_cmd, out_dir, with_io)
+    minutes = float(os.environ.get("FLEETOPT_RUN_MINUTES") or RUN_MINUTES)
+    run_one = lambda _=None: runner.execute(project, run_cmd, out_dir, with_io, timeout=60 * minutes)
 
     # A command that has never succeeded on this project gets one probe run before
     # the rest start: a wrong interpreter then costs one crash, not n, and the
@@ -50,11 +76,18 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True):
         session_id, n_runs, _ = runner.ingest(
             project, run_cmd, out_dir, label, raw, traces, graphs, code
         )
-        print(f"[fleetopt] {label} {i + 1}/{n}: session {session_id}, {n_runs} runs, exit {code}")
+        ended = ("stopped, it had not ended" if code == runner.TIMED_OUT else
+                 "done" if code == 0 and n_runs else "failed")
+        say(f"[fleetopt] {plain(label)}: run {i + 1} of {n} {ended}")
         # A run that crashed produced a truncated trace. Averaging it in drags the
         # median toward "cheaper" for the worst possible reason - the work didn't
         # happen. Refuse the whole measurement rather than quietly discount it.
-        if not n_runs:
+        if code == runner.TIMED_OUT:
+            failure = failure or (
+                f"{label} run {i + 1} had not ended after {minutes:g} minutes and was stopped. An agent that "
+                f"waits for a keyboard or for a service does this. Its last output lines:\n{tail}"
+            )
+        elif not n_runs:
             failure = failure or (
                 f"{label} run {i + 1} captured nothing (exit {code}). The target's last "
                 f"output lines:\n{tail}\n(full output: {raw}/target.log)"

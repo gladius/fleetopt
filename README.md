@@ -122,14 +122,27 @@ A run folder holds no prompts and no outputs of the agent.
 | `--evals FILE` | both | Eval cases to use. Their inputs are what the agent is run on |
 | `--fresh` | review | Review again although the code has not changed |
 | `--graph NAME` | both | Rarely needed. With several agents, fleetopt picks the one the team ships and says why. This overrides it |
-| `--max-usd N` | both | Cap on fleetopt's own spend (5 for apply, 1 for review). The agent's calls are the team's bill |
+| `--max-usd N` | both | The most a run may spend on either side (5 for apply, 1 for review): fleetopt's own, and the agent's calls on the team's key |
 | `--out DIR` | both | Where records go (default `./.fleetopt`) |
 
 `fleetopt capture <project>` is a diagnostic: it runs the agent under observation and
 says how much it saw.
 
 Settings, all optional, in the environment or `~/.config/fleetopt/env`: `FLEETOPT_MODEL`,
-`FLEETOPT_REVIEW_MODEL`, `FLEETOPT_JUDGE_MODEL`, `FLEETOPT_PARALLEL`, `FLEETOPT_PRICES`.
+`FLEETOPT_REVIEW_MODEL`, `FLEETOPT_JUDGE_MODEL`, `FLEETOPT_PARALLEL`, `FLEETOPT_PRICES`,
+`FLEETOPT_RUN_MINUTES`, `FLEETOPT_MAX_MINUTES`, and `FLEETOPT_VERBOSE=1` to see every step.
+
+## What ends a run
+
+A run ends by itself when nothing is left to try. These end one that would not:
+
+| Limit | Default | Then |
+|---|---|---|
+| Steps the session may take | 120 | It stops. The verdict covers what was judged |
+| fleetopt's own spend | `--max-usd`, $5 | It stops |
+| Spend on the team's key | `--max-usd`, $5 | No further run of the agent. It reports what it has |
+| One run of the agent | 15 minutes | That run is stopped, with everything it started, and counts as failed |
+| The whole run | 2 hours | No further run of the agent. It reports what it has |
 
 ## What keeps it safe
 

@@ -130,6 +130,26 @@ Each one is a way to produce a confident wrong number, and most were found by ru
   the inputs came from a file in the project. No request matched a case, and a redesign
   that took an agent from 0 of 6 finished requests to 4 of 6 had nothing to be judged on.
 
+**About a run that would not end**
+
+- **One run of the agent is stopped after 15 minutes**, with everything it started: the
+  command goes through a shell, and killing the shell alone leaves the agent running.
+  Before this nothing limited it, and an agent waiting for a keyboard would have held
+  fleetopt for ever.
+- **The team's money has the same cap as ours.** The SDK stops the session at its own
+  spend and at its turns; nothing stopped it measuring. Observed: 27 runs of one agent,
+  $1.22, in a run that kept nothing. `measure` now refuses once the cap or two hours is
+  reached, and tells the session to undo what it has not proven and report.
+
+**About what is shown**
+
+- **What the tools established, not what the session did.** A person watching saw
+  `- Bash`, `- query_traces`, `- Edit` and "session 24, 56 runs, exit 0", and a session
+  saying halfway that it had "made an unintended change". None of it means anything
+  outside fleetopt. Shown now: each finding by the name the review gave it, each run of
+  the agent, each comparison and judgment in words, a line every two minutes of silence,
+  then the report. Everything else goes to `log.txt`; `FLEETOPT_VERBOSE=1` shows it all.
+
 **About the sessions**
 
 - **Built-in tools by allowlist.** Read, Grep, Glob, Bash, Edit, Write, Skill. Claude
