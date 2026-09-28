@@ -8,7 +8,6 @@ team, and a claim has to be reproducible.
 
 import datetime
 import json
-import os
 import pathlib
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
@@ -17,7 +16,7 @@ from fleetopt.evidence import evals as evals_mod
 from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
 from fleetopt.evidence import shape as shape_mod
-from fleetopt.probe import runner, store
+from fleetopt.probe import store
 
 # Set once by session.py before the agent starts.
 CTX = {}

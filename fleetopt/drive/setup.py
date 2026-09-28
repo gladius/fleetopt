@@ -9,7 +9,6 @@ checks by running it, never a command.
 import asyncio
 import json
 import os
-import pathlib
 import re
 
 from fleetopt import config

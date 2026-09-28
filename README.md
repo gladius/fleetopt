@@ -141,10 +141,16 @@ The run also prints which credential it is using as its first line.
 starts the agent under instrumentation and nothing more. If it shows `0 runs`, the agent ran
 without going through LangChain's callbacks.
 
-**When it stops early:** a declined prompt is final for that session and it
-reports from read-only evidence. `within noise` means the change did not clear
-the baseline's own spread and is not a saving. Hitting `--max-usd` ends the run
-with whatever was measured so far.
+**When it ends with nothing changed:** `within noise` means the change did not clear
+the baseline's own spread and is not a saving, so it was undone. A failed judge means
+an answer got worse, so it was undone. Hitting `--max-usd` or the turn limit ends the
+run with whatever was measured so far, and the verdict says whether the code that was
+left had been judged.
+
+**The last thing printed** is a summary computed from what was recorded, also saved as
+`summary.txt`: the agent, its level, what was found, how many changed versions were
+tried, kept and undone, what was gained, the verdict, what was spent on the team's key
+and by fleetopt, and the branch.
 
 ## Why it is built this way
 

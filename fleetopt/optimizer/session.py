@@ -11,11 +11,9 @@ fleetopt's own driver, an edit lands inside the project on a new branch or not a
 all, and nothing is installed or pushed.
 """
 
-import asyncio
 import datetime
 import importlib.metadata
 import json
-import os
 import pathlib
 import re
 import subprocess
