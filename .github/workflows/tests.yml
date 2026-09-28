@@ -1,5 +1,7 @@
 name: tests
-on: [push, pull_request]
+# Manual only: nothing runs on a push. Start it from the Actions tab when you want
+# the tests run on Linux and Windows.
+on: workflow_dispatch
 jobs:
   pytest:
     strategy:
