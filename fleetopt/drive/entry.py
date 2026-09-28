@@ -291,6 +291,26 @@ def preflight(entry_path, entry):
     return problems, report
 
 
+KEY_NAME = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_API_KEY\b")
+SWITCH = """
+
+The provider the agent called has no key. Keys that ARE set in the project's environment
+(names only): {keys}. If the project supports one of those providers and a plain setting
+selects it, set that in "env", together with a model of that provider that exists today
+if the project's default for it may be retired. If no setting can switch it, reply
+{{"cannot": "..."}}."""
+
+
+def other_provider(tail, report):
+    """The keys that are set, when the call was refused for want of a different one.
+    Observed: a project that supports two providers, defaults to the one it has no key
+    for, and needs one setting to use the other. Which setting is fleetopt's to work
+    out; a key that is wrong or absent altogether is the team's."""
+    present = list((report or {}).get("keys_present") or [])
+    wanted = set(KEY_NAME.findall(tail))
+    return present if present and wanted and not wanted & set(present) else []
+
+
 def refused(tail):
     """A failed trial that no change to the entry can fix, as a line for the team."""
     lines = [l.strip() for l in tail.splitlines() if l.strip()]
@@ -353,7 +373,7 @@ def ensure(project, out, wanted=None, say=print):
     say(f"[fleetopt] runs on {why}")
 
     save(path, entry)
-    problems, _ = preflight(path, entry)
+    problems, report = preflight(path, entry)
     if problems:
         raise NotReady(problems)
     if not inputs:  # only now: nothing is spent on a project that cannot start
@@ -361,12 +381,20 @@ def ensure(project, out, wanted=None, say=print):
         entry["inputs_source"] = "fleetopt, written from the README and the graph's source"
     say(f"[fleetopt] {len(entry['inputs'])} inputs from {entry['inputs_source']}")
 
-    tail = ""
+    tail, switched = "", False
     for attempt in range(3):
         save(path, entry)
         ok, tail = prove(path, entry)
         if not ok and refused(tail):
-            raise NotReady([refused(tail)])
+            keys = [] if switched else other_provider(tail, report)
+            fix = keys and setup.repair(project, entry, tail + SWITCH.format(keys=", ".join(keys)))
+            if not fix or not fix.get("env"):
+                raise NotReady([refused(tail)])
+            say(f"[fleetopt] it called a provider it has no key for; using the one it has: "
+                f"{', '.join(f'{k}={v}' for k, v in fix['env'].items())}")
+            entry.update(fix)
+            switched = True
+            continue
         if ok:
             entry["proven"] = datetime.datetime.now().isoformat(timespec="seconds")
             save(path, entry)

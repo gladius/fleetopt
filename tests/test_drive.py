@@ -241,3 +241,35 @@ def test_a_relative_output_folder_still_finds_its_entry(project, tmp_path, monke
     monkeypatch.chdir(tmp_path)
     path, found = entry.ensure(project, "out", say=lambda line: None)
     assert path.is_absolute() and found["proven"]
+
+
+def test_a_project_with_two_providers_is_switched_to_the_one_it_has_a_key_for(project, tmp_path, monkeypatch):
+    missing = "[driver] FAILED 'x'\n   OpenAIError: Missing credentials. Set the OPENAI_API_KEY environment variable."
+    report = {"keys_present": ["ANTHROPIC_API_KEY"]}
+    assert entry.other_provider(missing, report) == ["ANTHROPIC_API_KEY"]
+    assert entry.other_provider(missing, {"keys_present": ["OPENAI_API_KEY"]}) == []   # it has that key: the key is wrong
+    assert entry.other_provider("AuthenticationError: invalid x-api-key", report) == []  # names no key: the team's to fix
+    assert entry.other_provider(missing, {"keys_present": []}) == []
+
+    tried, asked, said = [], [], []
+
+    def prove(path, found):
+        tried.append(dict(found["env"]))
+        return (True, "") if found["env"].get("MODEL_PROVIDER") == "anthropic" else (False, missing)
+
+    def repair(project, found, failure):
+        asked.append(failure)
+        return {"env": {"MODEL_PROVIDER": "anthropic"}}
+
+    monkeypatch.setattr(entry, "preflight", lambda path, found: ([], report))
+    monkeypatch.setattr(entry, "prove", prove)
+    monkeypatch.setattr(setup, "repair", repair)
+    _, found = entry.ensure(project, tmp_path / "out", say=said.append)
+    assert found["proven"] and tried == [{}, {"MODEL_PROVIDER": "anthropic"}]
+    assert "ANTHROPIC_API_KEY" in asked[0] and "names only" in asked[0]
+    assert any("MODEL_PROVIDER=anthropic" in line for line in said)
+
+    # one switch, not a loop: refused again, it is the team's
+    monkeypatch.setattr(entry, "prove", lambda path, found: (False, missing))
+    with pytest.raises(entry.NotReady, match="The model provider refused the call"):
+        entry.ensure(project, tmp_path / "out2", say=lambda line: None)
