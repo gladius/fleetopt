@@ -102,14 +102,22 @@ fleetopt cannot start this agent yet. 2 things to set up, then run the same comm
 ```
 
 It then starts the agent once with one input to prove the answer, and saves it as a
-small JSON file under `.fleetopt/entries/` (never in the team's repo). A call the
-provider refuses, or a service that cannot be reached, is reported the same way. What
-is fleetopt's to work out is worked out: if the agent loads and still does not run,
-a read-only session reads the source and the error, proposes what to change (which
-graph, a setting, a tenant id, the shape of the input), and fleetopt tries that by
-running it, twice at most. From then on fleetopt runs its own driver
-(`fleetopt/drive/driver.py`) against that entry and nothing else: never a command
-somebody guessed. Another framework is another way of filling in the same entry.
+small JSON file under `.fleetopt/entries/` (never in the team's repo). From then on
+fleetopt runs its own driver (`fleetopt/drive/driver.py`) against that entry and
+nothing else: never a command somebody guessed. Another framework is another way of
+filling in the same entry.
+
+What is the team's to provide is reported and fleetopt stops. What is fleetopt's to
+work out, it works out, by reading the source in a read-only session and trying the
+answer by running it, twice at most:
+
+| The first request | fleetopt |
+|---|---|
+| is refused by the provider (a wrong key, no credit), or a service cannot be reached | stops and says so: the team's to fix |
+| is refused for want of a key the project does not have, while it has one for another provider it supports | finds the setting that selects that provider and uses it. Key names only, never values |
+| fails on how the agent was called (which graph, a tenant id, the shape of the input) | changes the entry and tries again |
+| fails because the agent expects a hosting platform to hand it a store or a run context | attaches an empty in-memory store and passes the context, as `langgraph dev` does |
+| fails on the agent's own bug, after the model had answered | carries on. That agent starts; it does not finish. It is reviewed as **broken** (level 4), and fixing it comes before making it cheaper |
 
 | Flag | Meaning |
 |---|---|

@@ -40,7 +40,10 @@ Fields you may set:
   user's text goes. Needed when the input is not just messages or one text field.
 - "inputs": only if the current ones cannot work for this agent.
 
-Rules: change as little as possible. Prefer what the project's own entry point does
+Rules: change as little as possible. A user id, tenant id or name that you have to
+make up is a neutral placeholder such as "fleetopt-user", unless the project's own data
+or tests name one; never anything about whoever is running this tool. Prefer what the
+project's own entry point does
 (its CLI, its API handler, its tests). If nothing can make it start - a missing
 dependency, a service it needs, a key that is absent - reply {"cannot": "<the reason>"}.
 """
@@ -65,7 +68,10 @@ repo; a sales agent's user asks about roses and delivery.
 Work it out first by reading: the agent's system prompt, its tools, and the data it
 works over (a catalogue, a policy folder, a database). Then write {n} messages in that
 person's voice that differ in kind, so that they exercise different tools and paths.
-Use names, products and ids that exist in the project's own data.
+Use names, products and ids that exist in the project's own data. Where the person
+writing has to have a name, a city or an employer, invent them. Never use the name,
+email or anything else about whoever is running this tool: these texts are sent to the
+agent's model provider.
 
 Reply with a JSON list of {n} strings and nothing else."""
 

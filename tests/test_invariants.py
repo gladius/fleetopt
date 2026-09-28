@@ -203,6 +203,15 @@ def test_structural_patches_wait_for_eval_cases():
     assert "what must survive" in guide
 
 
+def test_nothing_about_the_operator_goes_into_what_is_sent_to_the_agent():
+    # Observed 2026-09-28: inputs written for an agent opened with the operator's first
+    # name, and the same name was set as the agent's user id.
+    from fleetopt.drive import setup
+
+    for prompt in (setup.INPUTS, setup.REPAIR):
+        assert "whoever is running this tool" in " ".join(prompt.split())
+
+
 def test_a_refusal_is_an_answer_not_an_obstacle():
     # Observed 2026-09-28: edits were refused, and the session spent 50 turns getting the
     # same change in through sed, a glob and git plumbing. It succeeded. That is the fault.
