@@ -306,3 +306,18 @@ def test_a_trial_counts_the_calls_the_model_answered(project, tmp_path):
     worked, tail = entry.prove(path, found)
     assert worked and "1 finished" in tail and "the model answered" not in tail  # said only when the request failed
     assert not list(out.glob("fleetopt-*"))  # a trial leaves nothing behind
+
+
+def test_an_agent_built_to_be_hosted_gets_a_store_and_its_context():
+    class Hosted:
+        store = None
+
+    graph = Hosted()
+    assert driver.platform(graph, {"context": {"user_id": "u1"}, "store": "memory"}) == {"context": {"user_id": "u1"}}
+    assert type(graph.store).__name__ == "InMemoryStore"
+    kept = graph.store
+    driver.platform(graph, {"store": "memory"})
+    assert graph.store is kept                      # the agent's own store is never replaced
+    plain = Hosted()
+    assert driver.platform(plain, {}) == {} and plain.store is None  # nothing is handed to an agent that did not need it
+    assert {"context", "store"} <= set(setup.ALLOWED)

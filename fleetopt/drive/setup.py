@@ -14,13 +14,13 @@ import re
 
 from fleetopt import config
 
-ALLOWED = ("graph", "paths", "env", "config", "input_template", "inputs")
+ALLOWED = ("graph", "paths", "env", "config", "context", "store", "input_template", "inputs")
 
 REPAIR = """You work out how to start a LangGraph agent so that a measurement tool can run it.
 
 The tool runs a small driver inside the project's own interpreter. The driver reads an
 entry (JSON), puts `paths` on sys.path, loads `env_file`, sets `env`, imports `graph`,
-and for each text in `inputs` calls graph.ainvoke(input, config). The entry it tried
+and for each text in `inputs` calls graph.ainvoke(input, config, context=...). The entry it tried
 and what happened are below. Read the project's source and reply with the fields to
 change, as one JSON object and nothing else.
 
@@ -31,6 +31,11 @@ Fields you may set:
 - "env": plain settings the agent needs (a provider name, a model, a data folder).
   NEVER a key, token or password: those come from the project's env file.
 - "config": extra values for config["configurable"] (a tenant id, a user id).
+- "context": the run context, for a graph built with a context_schema whose nodes read
+  runtime.context (a user id, a model name). Passed as graph.ainvoke(..., context=...).
+- "store": "memory", for a graph whose nodes read runtime.store or take a store
+  argument and which is compiled without one, because a hosting platform supplies it.
+  The driver then attaches an empty in-memory store, as `langgraph dev` does.
 - "input_template": the graph's input as JSON, with the string "{input}" where the
   user's text goes. Needed when the input is not just messages or one text field.
 - "inputs": only if the current ones cannot work for this agent.

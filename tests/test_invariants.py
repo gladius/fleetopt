@@ -71,8 +71,8 @@ def test_the_driver_needs_nothing_but_the_projects_own_packages():
     import ast
 
     tree = ast.parse(entry.DRIVER.read_text(encoding="utf-8"))
-    # The one exception: the project's own framework, tried and done without. It is
-    # how a user message is made the way the project makes one.
+    # The one exception: the project's own framework, tried and done without. It is how a
+    # user message is made the way the project makes one, and where a store comes from.
     optional = {id(n) for t in ast.walk(tree) if isinstance(t, ast.Try)
                 and any(isinstance(h.type, ast.Name) and h.type.id == "ImportError" for h in t.handlers)
                 for n in t.body}
@@ -82,7 +82,7 @@ def test_the_driver_needs_nothing_but_the_projects_own_packages():
                  {(node.module or "").split(".")[0]} if isinstance(node, ast.ImportFrom) else set())
         (tried if id(node) in optional else imported).update(names)
     assert imported <= set(sys.stdlib_module_names), imported - set(sys.stdlib_module_names)
-    assert tried == {"langchain_core"}
+    assert tried == {"langchain_core", "langgraph"}
 
 
 def test_an_edit_lands_inside_the_project_on_a_new_branch_or_not_at_all(tmp_path):

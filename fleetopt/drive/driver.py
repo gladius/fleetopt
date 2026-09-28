@@ -122,6 +122,22 @@ def build_input(graph, text, template=None):
     return payload
 
 
+def platform(graph, entry):
+    """What a hosting platform hands an agent at run time, for an agent built to be
+    hosted: a store, and the run's context. Observed: an agent compiled without a store
+    whose nodes read runtime.store and runtime.context; both arrive as None from a bare
+    ainvoke. The store is in memory and empty at the start of every run, as it is under
+    `langgraph dev`. Returns the extra arguments for ainvoke."""
+    if entry.get("store") == "memory" and getattr(graph, "store", None) is None:
+        try:
+            from langgraph.store.memory import InMemoryStore
+        except ImportError:
+            pass
+        else:
+            graph.store = InMemoryStore()
+    return {"context": entry["context"]} if entry.get("context") else {}
+
+
 def check(entry, root, paths):
     """Load the agent, call nothing, say what was found. One line of JSON for fleetopt."""
     report = {"loaded": False, "error": None, "error_type": None, "missing_module": None, "input": None}
@@ -168,11 +184,13 @@ def main(argv):
         return 2
 
     inputs = entry["inputs"][:limit]
+    extra = platform(graph, entry)
     finished = paused = 0
     for text in inputs:
         config = {"configurable": {"thread_id": str(uuid.uuid4()), **(entry.get("config") or {})}}
         try:
-            result = asyncio.run(graph.ainvoke(build_input(graph, text, entry.get("input_template")), config=config))
+            result = asyncio.run(graph.ainvoke(build_input(graph, text, entry.get("input_template")), config=config,
+                                               **extra))
         except Exception as exc:  # noqa: BLE001 - one bad input must not hide the others
             print(f"[driver] FAILED {text[:70]!r}\n         {type(exc).__name__}: {str(exc)[:400]}")
             continue
