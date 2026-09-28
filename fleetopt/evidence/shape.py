@@ -26,15 +26,19 @@ def _in(ids):
     return f"({','.join('?' * len(ids))})"
 
 
-def declared(conn, session_ids):
-    """Nodes and edges as compiled, from the newest graph snapshot in these sessions."""
-    row = conn.execute(
-        f"SELECT nodes, edges FROM graphs WHERE session_id IN {_in(session_ids)}"
-        " ORDER BY session_id DESC LIMIT 1", session_ids,
-    ).fetchone()
-    if not row:
-        return [], []
-    return json.loads(row["nodes"] or "[]"), json.loads(row["edges"] or "[]")
+def declared(conn, session_ids, ran=()):
+    """Nodes and edges as compiled. An agent built from other agents compiles several
+    graphs; the numbers are about one of them, the one that accounts for the most of
+    what actually ran (ties go to the larger graph)."""
+    best, rank = ([], []), (-1, -1)
+    for row in conn.execute(
+        f"SELECT nodes, edges FROM graphs WHERE session_id IN {_in(session_ids)} ORDER BY session_id DESC", session_ids,
+    ):
+        nodes = json.loads(row["nodes"] or "[]")
+        score = (len(set(nodes) & set(ran)), len(nodes))
+        if score > rank:
+            best, rank = (nodes, json.loads(row["edges"] or "[]")), score
+    return best
 
 
 def node_sequences(conn, session_ids):
@@ -74,7 +78,7 @@ def distinct_inputs(conn, session_ids, trace_ids):
     return len({seen.get(t) or t for t in trace_ids})
 
 
-def calls_per_tool_round(conn, session_ids):
+def calls_per_tool_round(conn, session_ids, nodes=()):
     """Model calls spent per round of tool use. A tool-calling agent spends one per
     round, plus one to give the answer: the same call picks the tool, writes its
     arguments and decides whether to stop. A graph that asks one model call what to do,
@@ -82,12 +86,18 @@ def calls_per_tool_round(conn, session_ids):
 
     Counted per trace, over traces that used a tool, leaving out one call per trace for
     the final answer. (The first version divided all calls by all rounds and called a
-    plain two-node agent over-built: traces that needed no tool inflated it.)"""
+    plain two-node agent over-built: traces that needed no tool inflated it.)
+
+    Only this graph's own nodes are counted. An agent nested inside one of them has
+    its own loop, and its calls are not this graph's waste."""
+    own = set(nodes)
     llm, rounds, nodes = Counter(), defaultdict(set), set()
     for r in conn.execute(
         f"SELECT trace_id, run_type, node, step FROM runs WHERE session_id IN {_in(session_ids)}"
         " AND run_type IN ('llm', 'tool')", session_ids,
     ):
+        if own and r["node"] not in own:
+            continue
         if r["run_type"] == "llm":
             llm[r["trace_id"]] += 1
             nodes.add(r["node"])
@@ -151,8 +161,11 @@ def _transitions(seq):
 
 
 def analyze(conn, session_ids):
-    nodes, edges = declared(conn, session_ids)
     seqs = node_sequences(conn, session_ids)
+    nodes, edges = declared(conn, session_ids, {node for seq in seqs.values() for _, node in seq})
+    if nodes:  # steps of agents nested inside this one are theirs, not this graph's
+        seqs = {t: [(step, node) for step, node in seq if node in nodes] for t, seq in seqs.items()}
+        seqs = {t: seq for t, seq in seqs.items() if seq}
     replies = llm_replies(conn, session_ids)
     n = len(seqs)
     findings = []
@@ -224,7 +237,7 @@ def analyze(conn, session_ids):
                 "text": f"{node}: the model's reply is identical across all rounds in {n}/{n} traces",
             })
 
-    findings += calls_per_tool_round(conn, session_ids)
+    findings += calls_per_tool_round(conn, session_ids, nodes)
     findings = node_failures(conn, session_ids, n) + findings  # a node that raises comes first
 
     return {

@@ -324,8 +324,9 @@ def ensure(project, out, wanted=None, say=print):
     }
     say(f"[fleetopt] agent: {name} ({spec})")
     if others:
-        say(f"[fleetopt] this project has {len(others) + 1} agents and this is the first. The others: "
-            f"{', '.join(others[:8])}. Pick one with --graph")
+        which = "this is the one you named" if wanted else "this is the first"
+        say(f"[fleetopt] this project has {len(others) + 1} agents and {which}. The others: "
+            f"{', '.join(others[:8])}." + ("" if wanted else " Pick one with --graph"))
     say(f"[fleetopt] runs on {why}")
 
     save(path, entry)

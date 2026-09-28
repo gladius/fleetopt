@@ -378,6 +378,13 @@ roughly $0.55-0.65. The target's own calls are separate (memory-agent: $0.13/run
 
 ## Known gaps
 
+- **Agents nested inside agents blur the structural numbers.** The probe records which
+  node a call ran under, not which graph that node belongs to, and every tool-calling
+  agent names its nodes `model` and `tools`. The numbers are computed for the one graph
+  that accounts for most of what ran and leave nested agents out, so a supervisor whose
+  workers are themselves agents gets numbers for the supervisor only. Recording the
+  graph a node belongs to (LangGraph's checkpoint namespace) is the fix.
+
 - **The fixture cannot exercise the judge.** Its fake model returns fixed strings
   regardless of input, so before/after outputs are byte-identical and the gate
   passes trivially. The real repo does exercise it, and it passes correctly there.
