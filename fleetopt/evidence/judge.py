@@ -153,11 +153,14 @@ async def judge_sessions(conn, task, baseline_session, candidate_session, cases=
     """
 
     def roots(session_id):
+        # A request that did not finish has no output. It is kept, with None: leaving it
+        # out would pair the third request of one side with the second of the other, and
+        # an agent none of whose requests finish could never be judged at all.
         return [
-            (r["inputs"], r["outputs"])
+            (r["inputs"], None if r["error"] else r["outputs"])
             for r in conn.execute(
-                "SELECT inputs, outputs FROM runs"
-                " WHERE session_id = ? AND parent_run_id IS NULL AND outputs IS NOT NULL"
+                "SELECT inputs, outputs, error FROM runs"
+                " WHERE session_id = ? AND parent_run_id IS NULL AND inputs IS NOT NULL"
                 " ORDER BY start_time",
                 (session_id,),
             )
@@ -177,7 +180,13 @@ async def judge_sessions(conn, task, baseline_session, candidate_session, cases=
 
     results = []
     for (agent_input, baseline_out), (_, candidate_out) in zip(before, after):
-        verdict = await judge(task, agent_input, baseline_out, candidate_out)
+        if candidate_out is None:
+            verdict = {"equivalent": False, "reason": "the changed agent did not finish this request"}
+        elif baseline_out is None:
+            verdict = {"equivalent": False, "reason": "the original did not finish this request, so there is "
+                                                      "no answer to compare with"}
+        else:
+            verdict = await judge(task, agent_input, baseline_out, candidate_out)
         verdict["input"] = (agent_input or "")[:120]
         results.append(verdict)
 
@@ -193,8 +202,9 @@ async def judge_sessions(conn, task, baseline_session, candidate_session, cases=
             case = evals_mod.match(cases, agent_input)
             if case is None:
                 continue
-            b = await judge_expected(task, case["input"], case["expected"], baseline_out)
-            c = await judge_expected(task, case["input"], case["expected"], candidate_out)
+            unfinished = {"pass": False, "reason": "the request did not finish"}
+            b = unfinished if baseline_out is None else await judge_expected(task, case["input"], case["expected"], baseline_out)
+            c = unfinished if candidate_out is None else await judge_expected(task, case["input"], case["expected"], candidate_out)
             rows.append({
                 "input": case["input"][:120],
                 "baseline_pass": b["pass"],

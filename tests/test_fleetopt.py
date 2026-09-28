@@ -191,6 +191,21 @@ def test_judge_sessions_pairs_by_position_and_counts_correctness(tmp_path, monke
     wrong = captured([("capital of France?", "Lyon"), ("2+2", "4")])
     assert asyncio.run(judge_mod.judge_sessions(conn, "qa", wrong, captured([("capital of France?", "Lyon"), ("2+2", "4")]), cases))[0]
     assert not asyncio.run(judge_mod.judge_sessions(conn, "qa", wrong, captured([("capital of France?", "Nice"), ("2+2", "4")]), cases))[0]
+    # A request the original never finished: judged on the team's case, since there is no old answer.
+    def with_failure(pairs):
+        sid = captured(pairs)
+        conn.execute("UPDATE runs SET outputs = NULL, error = 'IndexError()' WHERE session_id = ? AND inputs = '2+2'", (sid,))
+        return sid
+
+    broken = with_failure([("capital of France?", "Paris"), ("2+2", "x")])
+    fixed = captured([("capital of France?", "Paris"), ("2+2", "4")])
+    passed, results, correctness = asyncio.run(judge_mod.judge_sessions(conn, "qa", broken, fixed, cases))
+    assert passed and results[1]["kept_on"] == "correct on the team's case" and "did not finish" in results[1]["reason"]
+    assert (correctness["baseline_pass"], correctness["candidate_pass"]) == (1, 2)
+    assert not asyncio.run(judge_mod.judge_sessions(conn, "qa", broken, fixed))[0]     # no case: finishing is not yet being right
+    assert not asyncio.run(judge_mod.judge_sessions(conn, "qa", fixed, broken, cases))[0]  # and breaking a request never passes
+    assert not asyncio.run(judge_mod.judge_sessions(conn, "qa", broken, broken, cases))[0]  # still broken is not proven
+
     # It was right and now it is not: fails, however alike a judge finds the two.
     monkeypatch.setattr(judge_mod, "judge", lambda *a, **k: _always_equivalent())
     assert not asyncio.run(judge_mod.judge_sessions(conn, "qa", base, captured([("capital of France?", "Lyon"), ("2+2", "4")]), cases))[0]

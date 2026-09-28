@@ -18,6 +18,7 @@ import json
 import pathlib
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -232,15 +233,45 @@ def command(entry_path, entry, limit=None):
     return subprocess.list2cmdline(parts) if sys.platform == "win32" else shlex.join(parts)
 
 
+DONE = re.compile(r"^\[driver\] (\d+) finished, (\d+) paused", re.M)
+ANSWERED = "[fleetopt] the model answered {n} call(s) before the request failed"
+
+
 def prove(entry_path, entry, timeout=600):
-    """One input, for real. Returns (worked, what the agent printed last)."""
+    """One input, for real, under the probe. Returns (worked, what the agent printed
+    last). When the request failed after the model had answered, the last line says so:
+    that agent starts, and what it does next is its own."""
+    from fleetopt.probe import runner
+
+    out = pathlib.Path(entry_path).parent.parent
     try:
-        done = subprocess.run(command(entry_path, entry, limit=1), shell=True, cwd=entry["project"],
-                              env=config.child_env(), capture_output=True, timeout=timeout)
+        raw, traces, _, code = runner.execute(entry["project"], command(entry_path, entry, limit=1), out,
+                                              timeout=timeout)
     except subprocess.TimeoutExpired:
         return False, f"no answer within {timeout} seconds"
-    text = (done.stdout + done.stderr).decode("utf-8", errors="replace")
-    return done.returncode == 0, "\n".join(text.splitlines()[-30:])
+    text = (raw / "target.log").read_text(encoding="utf-8", errors="replace")
+    answered = 0
+    if traces.exists():
+        for line in traces.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                run = json.loads(line)
+            except ValueError:
+                continue
+            answered += run.get("run_type") == "llm" and not run.get("error")
+    shutil.rmtree(raw, ignore_errors=True)
+    done = DONE.search(text)
+    worked = code == 0 and bool(done) and int(done.group(1)) + int(done.group(2)) > 0
+    tail = "\n".join(text.splitlines()[-30:])
+    return worked, tail + ("\n" + ANSWERED.format(n=answered) if answered and not worked else "")
+
+
+def starts_but_fails(tail):
+    """The agent's own failure, when the model had answered before it: one line."""
+    if ANSWERED.split("{n}")[0] not in tail:
+        return None
+    lines = [l.strip() for l in tail.splitlines() if l.strip()]
+    failed = next((i for i, l in enumerate(lines) if l.startswith("[driver] FAILED")), None)
+    return lines[failed + 1][:300] if failed is not None and failed + 1 < len(lines) else "it raised"
 
 
 def install_hint(project):
@@ -353,6 +384,8 @@ def ensure(project, out, wanted=None, say=print):
         entry = json.loads(path.read_text(encoding="utf-8"))
         if entry.get("proven") and pathlib.Path(entry["interpreter"]).exists():
             say(f"[fleetopt] agent: {name} ({entry['graph']}), {len(entry['inputs'])} inputs from {entry['inputs_source']}")
+            if entry.get("broken"):
+                say(f"[fleetopt] when it was last started no request finished. Its own failure: {entry['broken']}")
             return path, entry
 
     python, why = interpreter(project)
@@ -400,11 +433,21 @@ def ensure(project, out, wanted=None, say=print):
             save(path, entry)
             say("[fleetopt] started it once with one input: it runs")
             return path, entry
-        if attempt == 2:
-            break
-        say(f"[fleetopt] it did not start (attempt {attempt + 1}); working out why")
-        fix = setup.repair(project, entry, tail)
+        fix = None
+        if attempt < 2:
+            say(f"[fleetopt] it did not finish a request (attempt {attempt + 1}); working out why")
+            fix = setup.repair(project, entry, tail)
         if not fix:
+            # Nothing about how it is started can be changed to help. If the model had
+            # answered, it does start: the failure is the agent's own, and the agent that
+            # does not finish is the one that most needs a review.
+            broken = starts_but_fails(tail)
+            if broken:
+                entry.update(proven=datetime.datetime.now().isoformat(timespec="seconds"), broken=broken)
+                save(path, entry)
+                say(f"[fleetopt] it starts, and no request finishes. Its own failure: {broken}")
+                say("[fleetopt] carrying on: this is reviewed as a broken agent, and fixing it comes first")
+                return path, entry
             break
         entry.update(fix)
     raise Unstartable(f"fleetopt could not start {name} ({entry['graph']}). The last thing it printed:\n{tail}\n"

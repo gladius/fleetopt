@@ -3,6 +3,7 @@
 import json
 import pathlib
 import shutil
+import sys
 
 import pytest
 
@@ -274,3 +275,34 @@ def test_a_project_with_two_providers_is_switched_to_the_one_it_has_a_key_for(pr
     monkeypatch.setattr(entry, "prove", lambda path, found: (False, missing))
     with pytest.raises(entry.NotReady, match="The model provider refused the call"):
         entry.ensure(project, tmp_path / "out2", say=lambda line: None)
+
+
+def test_an_agent_that_starts_and_never_finishes_is_carried_on_with_as_broken(project, tmp_path, monkeypatch):
+    own_bug = ("[driver] FAILED 'Build a briefing'\n         BadRequestError: tool_result without a tool_use before it\n"
+               "[driver] 0 finished, 0 paused, 1 failed, of 1 inputs\n" + entry.ANSWERED.format(n=5))
+    assert entry.starts_but_fails(own_bug) == "BadRequestError: tool_result without a tool_use before it"
+    assert entry.starts_but_fails("[driver] FAILED 'x'\n   KeyError: 'tenant'\n[driver] 0 finished") is None  # no model call: it never started
+
+    said = []
+    monkeypatch.setattr(entry, "preflight", lambda path, found: ([], {}))
+    monkeypatch.setattr(entry, "prove", lambda path, found: (False, own_bug))
+    monkeypatch.setattr(setup, "repair", lambda project, found, failure: None)  # nothing about the entry helps
+    _, found = entry.ensure(project, tmp_path / "out", say=said.append)
+    assert found["proven"] and "tool_result" in found["broken"]
+    assert any("no request finishes" in line for line in said) and any("fixing it comes first" in line for line in said)
+
+    # the same failure with no model call behind it is still a start that did not work
+    monkeypatch.setattr(entry, "prove", lambda path, found: (False, "[driver] FAILED 'x'\n   KeyError: 'tenant'"))
+    with pytest.raises(entry.Unstartable):
+        entry.ensure(project, tmp_path / "out2", say=lambda line: None)
+
+
+def test_a_trial_counts_the_calls_the_model_answered(project, tmp_path):
+    out = tmp_path / "out"
+    path = entry.path_for(out, project, "agent")
+    found = {"project": str(project), "interpreter": sys.executable, "graph": "agent.py:graph", "paths": ["."],
+             "env_file": None, "env": {}, "config": {}, "input_template": None, "inputs": ["battery degradation"]}
+    entry.save(path, found)
+    worked, tail = entry.prove(path, found)
+    assert worked and "1 finished" in tail and "the model answered" not in tail  # said only when the request failed
+    assert not list(out.glob("fleetopt-*"))  # a trial leaves nothing behind

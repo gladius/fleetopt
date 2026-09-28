@@ -38,9 +38,10 @@ def code_state(project):
     return f"{head[:12]}+{hashlib.sha1(diff.encode()).hexdigest()[:8]}"
 
 
-def execute(project, run_cmd, out_dir, with_io=False):
+def execute(project, run_cmd, out_dir, with_io=False, timeout=None):
     """Run run_cmd under instrumentation. Touches no database, so several can run
-    at once. Returns (raw_dir, traces_path, graphs_path, returncode)."""
+    at once. Returns (raw_dir, traces_path, graphs_path, returncode). Raises
+    subprocess.TimeoutExpired past `timeout` seconds."""
     out = pathlib.Path(out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
@@ -62,7 +63,7 @@ def execute(project, run_cmd, out_dir, with_io=False):
     # they are noise.
     with (raw / "target.log").open("wb") as log:  # raw bytes, whatever the target emits
         result = subprocess.run(run_cmd, shell=True, cwd=project, env=env,
-                                stdout=log, stderr=subprocess.STDOUT)
+                                stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
     return raw, traces, graphs, result.returncode
 
 

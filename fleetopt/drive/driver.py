@@ -183,7 +183,9 @@ def main(argv):
             finished += 1
             print(f"[driver] OK {text[:70]!r}")
     print(f"[driver] {finished} finished, {paused} paused, {len(inputs) - finished - paused} failed, of {len(inputs)} inputs")
-    return 0 if finished or paused else 1
+    # Every input was put to the agent, so the run is complete whatever became of them.
+    # An agent none of whose requests finish is a finding to measure, not a run to discard.
+    return 0
 
 
 if __name__ == "__main__":
