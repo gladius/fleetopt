@@ -18,8 +18,10 @@ def project(tmp_path):
     return target
 
 
-def test_what_the_project_declares_comes_first_then_what_its_source_shows(project):
-    assert [name for name, _ in entry.candidates(project)] == ["agent", "supervisor"]
+def test_what_the_project_declares_is_the_list_otherwise_what_its_source_shows(project):
+    (project / "helper.py").write_text("from langgraph.graph import StateGraph\nspare = StateGraph(dict).compile()\n", encoding="utf-8")
+    assert [name for name, _ in entry.candidates(project)] == ["agent", "supervisor"]  # declared: that is the list
+    (project / "helper.py").unlink()
     (project / "langgraph.json").unlink()
     (project / "patterns.py").write_text("import re  # used by langgraph code\nWORD = re.compile('a+')\n", encoding="utf-8")
     (project / "factory.py").write_text(
@@ -75,7 +77,7 @@ def test_an_entry_is_proven_once_and_remembered(project, tmp_path, monkeypatch):
     path, first = entry.ensure(project, tmp_path / "out", say=said.append)
     assert first["proven"] and first["graph"] == "agent.py:graph" and first["inputs"] == ["battery degradation", "route optimization"]
     assert path.is_relative_to(tmp_path / "out") and not (project / "entries").exists()  # fleetopt's folder, not the repo
-    assert any("also here: supervisor" in line for line in said) and any("it runs" in line for line in said)
+    assert any("2 agents" in line and "supervisor" in line for line in said) and any("it runs" in line for line in said)
 
     def never(*a, **k):
         raise AssertionError("a proven entry is not proven again")

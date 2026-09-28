@@ -177,7 +177,10 @@ def analyze(conn, session_ids):
             # Self-loops are the loop's own rounds (see constant_rounds), not a dispatch order.
             order_per_source[src].append(tuple(d for s, d in pairs if s == src and d != src))
 
+    ran = {node for seq in seqs.values() for _, node in seq}
     for src, targets in sorted(cond_targets.items()):
+        if src not in ran:
+            continue  # it never ran, so it never had a branch to take; the node that skipped it is the finding
         counts = {t: taken[(src, t)] for t in sorted(targets)}
         never = [t for t, c in counts.items() if c == 0]
         always = [t for t, c in counts.items() if c == n]

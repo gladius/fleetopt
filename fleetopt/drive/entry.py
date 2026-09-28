@@ -102,10 +102,9 @@ def scanned(project, limit=600):
 def candidates(project):
     """[(name, spec)]: what the project declares first, then what the source shows."""
     graphs, _ = declared(project)
-    out = list(graphs.items())
-    known = {spec for _, spec in out}
-    out += [(spec, spec) for spec in scanned(project) if spec not in known]
-    return out
+    if graphs:  # the project has said which agents it has; its helpers and factories are not more of them
+        return list(graphs.items())
+    return [(spec, spec) for spec in scanned(project)]
 
 
 def choose(found, wanted=None):
@@ -228,7 +227,10 @@ def ensure(project, out, wanted=None, say=print):
         "env": {}, "config": {}, "input_template": None,
         "inputs": inputs, "inputs_source": source, "proven": None,
     }
-    say(f"[fleetopt] agent: {name} ({spec})" + (f"; also here: {', '.join(others[:8])} (pick one with --graph)" if others else ""))
+    say(f"[fleetopt] agent: {name} ({spec})")
+    if others:
+        say(f"[fleetopt] this project has {len(others) + 1} agents and this is the first. The others: "
+            f"{', '.join(others[:8])}. Pick one with --graph")
     say(f"[fleetopt] runs on {why}; {len(inputs)} inputs from {source}")
 
     tail = ""
