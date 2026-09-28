@@ -61,7 +61,7 @@ def test_fleetopt_starts_an_agent_only_through_its_own_driver(tmp_path):
     assert command.split()[:2] == ["/proj/.venv/bin/python", str(entry.DRIVER)]
     for gone in ("--run", "--auto"):  # nobody hands fleetopt a command, and nobody is asked to approve one
         with pytest.raises(SystemExit):
-            cli._parser().parse_args(["optimize", "repo", gone, "x"])
+            cli._parser().parse_args(["apply", "repo", gone, "x"])
     assert "set_run_command" not in {t.name for t in tools._TOOLS}
 
 
@@ -109,7 +109,7 @@ def test_nothing_is_published():
 
 
 def test_the_optimizers_own_spend_is_capped_by_default():
-    assert cli._parser().parse_args(["optimize", "repo"]).max_usd == 5.0
+    assert cli._parser().parse_args(["apply", "repo"]).max_usd == 5.0
 
 
 def test_the_probe_only_observes():
@@ -189,9 +189,32 @@ def test_the_reviewer_gets_no_network_only_local_references():
 
 def test_structural_patches_wait_for_eval_cases():
     guide = " ".join((session.PLUGIN / "skills" / "patterns" / "SKILL.md").read_text(encoding="utf-8").split())
-    assert "only if eval cases are loaded" in " ".join(session.REVIEW_MISSION.split())
+    assert "only if the eval cases you loaded cover the path" in " ".join(session.DESIGN_ON.split())
     assert "only when eval cases are loaded" in guide
     assert "what must survive" in guide
+
+
+def test_a_refusal_is_an_answer_not_an_obstacle():
+    # Observed 2026-09-28: edits were refused, and the session spent 50 turns getting the
+    # same change in through sed, a glob and git plumbing. It succeeded. That is the fault.
+    prompt = " ".join(options().system_prompt.split())
+    assert "never look for another way to make the same change" in prompt
+
+
+def test_the_loop_stays_open_unless_a_person_fenced_it():
+    again, only = " ".join(session.LOOK_AGAIN.split()), " ".join(session.ONLY_THESE.split())
+    assert "look again" in again and "A change to the design that the review did not list is reported, never tried" in again
+    assert "Stop there" in only and "leave it alone" in only
+    assert "review_architecture" not in {t.name for t in tools._TOOLS}  # whoever patches does not also review
+
+
+def test_the_reviewer_covers_cost_and_design_and_measures_nothing():
+    assert "# Part one: cost" in review.SYSTEM and "# Part two: design" in review.SYSTEM
+    assert "minimum prefix" in review.SYSTEM.lower()          # the mechanics travel with it, no skill to load
+    rules = " ".join(review.FORMAT.split())
+    assert "never a measured saving" in rules
+    assert "never hold a finding back" in rules  # caution goes on the risk line, not in a veto
+    assert set(review.APPLY_KINDS) == {"yes", "needs cases", "human decides"}
 
 
 # --- the verdict belongs to the measurements, not to the agent that wants it --------------
@@ -216,6 +239,19 @@ def test_nothing_is_proven_without_a_judged_change():
     assert session.verdict([]).startswith("NOTHING PROVEN")
     assert session.verdict([_judged("again", True, cand_state="v1")]).startswith("NOTHING PROVEN")
     assert session.verdict([_judged("patched", True)]).startswith("PROVEN ON THIS EVIDENCE")
+
+
+def test_the_verdict_is_about_the_code_left_on_the_branch():
+    events = [_judged("C1", True, cand_state="v2"), _judged("C2", False, cand_state="v3", after=2)]
+    # C2 failed and was undone: the branch holds v2, and v2 passed
+    assert session.verdict(events, final="v2", start="v1").startswith("PROVEN ON THIS EVIDENCE")
+    # the same events with the failed change still on the branch
+    assert session.verdict(events, final="v3", start="v1").startswith("NOT PROVEN SAFE")
+    # code nobody judged is not proven by its neighbours
+    text = session.verdict(events, final="v4", start="v1")
+    assert text.startswith("NOT PROVEN") and "never judged" in text and "v4" in text
+    # everything undone
+    assert session.verdict(events, final="v1", start="v1").startswith("NOTHING LEFT STANDING")
 
 
 def test_a_comparison_says_which_code_each_side_ran():

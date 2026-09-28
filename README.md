@@ -1,14 +1,15 @@
 # fleetopt
 
-Finds cost savings in a LangGraph project, **without editing it to observe it**,
-and proves the saving is real before claiming it.
+Makes a LangGraph agent cheaper and simpler, **without editing it to observe it**,
+and proves each change before claiming it.
 
 ```bash
-fleetopt optimize <project>
+fleetopt apply <project>      # review it, change it on a new branch, prove each change
+fleetopt review <project>     # look only: the first half of the above, changes nothing
 ```
 
-That is the whole user surface. Everything else — capturing, querying, measuring,
-comparing, judging — is a tool the optimizer calls itself.
+`apply` is the whole loop and needs nothing run before it. Everything else —
+capturing, querying, measuring, comparing, judging — is a tool it calls itself.
 
 ## Quick start
 
@@ -25,22 +26,47 @@ pip install -e ".[dev]"            # fleetopt + the fixture's langgraph; ~250 MB
 # smoke test on a copy of the bundled fixture: 3-5 min, no API spend. Keep the venv
 # active - the fixture runs on this venv's langgraph.
 T=$(mktemp -d) && cp -r fixture/. "$T" && git -C "$T" init -q && git -C "$T" add -A && git -C "$T" commit -qm base
-fleetopt optimize "$T"
+fleetopt apply "$T"
 ```
 
-The last line should end with an `equivalence: PASSED` block and a `--- done in N
-turns, $x ---` line, and leave an `opt/...` branch in that temp repo. The copy
-matters: the optimizer branches whatever git repo the target is in, and
-`fixture/` inside this checkout would mean branching fleetopt itself.
+It prints the review (numbered findings), then the changes it tries, and ends with a
+`fleetopt verdict` line computed from the measurements. It leaves a new branch in
+that temp repo with one commit per finding left standing. The copy matters: the
+branch is made in whatever git repo the target is in, and `fixture/` inside this
+checkout would mean branching fleetopt itself.
 
 **On a real project** (must be a git repo; the patch lands on a new branch, the branch
 you were on is never touched):
 
 ```bash
-fleetopt review ~/work/their-agent              # does the design fit the job? the cheaper of the two
-fleetopt optimize ~/work/their-agent            # find waste, patch on a branch, prove it
-fleetopt optimize ~/work/their-agent --review   # both
+fleetopt apply ~/work/their-agent                # the whole loop
+fleetopt review ~/work/their-agent               # look first; apply then starts from this review
+fleetopt apply ~/work/their-agent --only C1,D2   # just the findings a person chose, nothing else
 ```
+
+**Look, then change.** `review` runs the agent once and reports two things, as
+numbered findings with the trace numbers they rest on: where the agent wastes money
+(`C1`, `C2`, ...) and whether its design fits its job (`D1`, ...). It changes nothing
+and claims no saving: it saw one run. `apply` tries the findings on a new branch, one
+commit each, measures and judges each one, undoes what fails, and then looks again,
+because a fix often uncovers the next cost. The review is where it starts, not a fence.
+
+| A finding that is | `apply` does |
+|---|---|
+| cost (`C`): the graph keeps its nodes and edges | tries it, keeps it only if the saving clears the noise and the judge passes |
+| design, tier one (`D`): a node or edge removed, merged or rewired mechanically | tries it only when the team's eval cases exist and cover that path |
+| design, tier two (`D`): a redesign | nothing, unless a person names it with `--only`, and then only with eval cases |
+
+These rules are applied in code before the session starts. The reviewer says what
+kind of change a finding is and what could go wrong; it does not get to decide what is
+tried (left to choose, one marked every cost finding "needs cases" and nothing was).
+**The person decides at the merge:** nothing is ever merged or pushed, and one commit
+per finding means a team can keep some and drop others.
+
+**The same code is never reviewed twice.** Every capture records a fingerprint of the
+code (commit plus uncommitted changes). While it has not changed, `review` shows the
+saved review and `apply` starts from it; neither runs the agent or a reviewer again.
+(A new file git does not track yet does not change the fingerprint.)
 
 There is no run command to pass and nothing to approve. **How an agent is started is a
 fact about the project, so fleetopt works it out once per project and remembers it**:
@@ -78,25 +104,25 @@ somebody guessed. Another framework is another way of filling in the same entry.
 | Flag | Meaning |
 |---|---|
 | `--graph NAME` | Rarely needed. When a project has several agents, fleetopt reads its README, code and the team's own tests, picks the one the team ships, says why in one line and remembers the choice. `--graph` overrides that: a name from its `langgraph.json`, or `file.py:variable`. |
-| `--review` | Also review the architecture: a separate read-only session names the design patterns, checks each against structural numbers from the traces (branches never taken, fixed dispatch order, loops that always run the same number of rounds, critics that never change anything, nodes that raise) and reports whether a simpler design would do, under its own heading. Recommendations with evidence, not patches. |
+| `--only IDS` | `apply` only. Try just these findings of the review, for example `C1,D2`, and stop. Without it: everything the review marked safe to try, then whatever those fixes uncover. |
+| `--fresh` | `review` only. Run the agent and review again although the code has not changed. |
 | `--evals FILE` | Eval cases (input + expected answer) as JSONL/JSON, a LangSmith dataset export, or deepeval tests. Optional: they are looked for in the repo otherwise. With cases, the judge reports correctness pass rates before and after, not just "unchanged". |
-| `--max-usd N` | Stop fleetopt's own session once its spend reaches N (default 5 for optimize, 1 for review). The target's API calls are its own bill. |
+| `--max-usd N` | Stop fleetopt's own session once its spend reaches N (default 5 for apply, 1 for review). The target's API calls are its own bill. |
 | `--out DIR` | Where captures, entries and run records go (default `./.fleetopt`, relative to where you run it). |
-| `--label NAME` | `review` only: review an earlier capture again without running the agent. |
 
-**What you get:** the report in the terminal (finding, measured before/after in
-dollars first, judge verdict), the patch committed on a branch in the target repo,
+**What you get:** the report in the terminal (one row per finding: what happened,
+measured before/after in dollars first, judge verdict), the changes committed on a branch in the target repo,
 every measurement in `.fleetopt/fleetopt.db`, and a run folder at
 `.fleetopt/runs/<timestamp>-<project>/` with `report.md`, `run.json` (what every
 tool established: medians, compare, judge, skills used, turns, cost, and the computed verdict),
-`patch.diff`, `log.txt`, and with `--review` the reviewer's `review.md`. The run folder is what feeds the ledger and what you
+`patch.diff` and `log.txt`; a review leaves its own folder with `review.md` and the findings in `run.json`. The run folder is what feeds the ledger and what you
 would send back to the central team; it holds no prompts or outputs of the target.
 The run also prints which credential it is using as its first line.
 
-**Two debug commands**, for when the optimizer comes back empty on a repo:
+**Two debug commands**, for when a run comes back empty on a repo:
 `fleetopt capture <project>` starts the agent under instrumentation and nothing
 more, and `fleetopt report` prints a token and cost breakdown of what was captured
-(it is not the optimizer's report). If `capture` shows `0 runs`, the agent ran
+(it is not the report of a run). If `capture` shows `0 runs`, the agent ran
 without going through LangChain's callbacks.
 
 **When it stops early:** a declined prompt is final for that session and it
@@ -247,7 +273,7 @@ claude.ai login. Those variables can sit in the shell or in the `env` block of
 Only that `env` block and `apiKeyHelper` are read from the file: the operator's own
 plugins, skills, hooks and MCP servers never enter a run, and neither does the
 target repo's `.claude/`.
-`fleetopt optimize` prints which one it found. The target agent is separate: it
+`fleetopt apply` prints which one it found. The target agent is separate: it
 runs with the operator's real environment and its own keys, and never inherits
 anything fleetopt read from its own config files.
 
@@ -272,7 +298,7 @@ target's API key.
 | invariants | the product's promises, one test each: a session inherits nothing from the operator, has no web access, cannot read secrets; nothing is installed or hand-run; the probe only observes; a change inside the noise is not a saving; the judge fails closed; the reviewer can only look; structural patches wait for eval cases | `pytest -q tests/test_invariants.py` | none, under 1 s |
 | pytest | the deterministic code: eval discovery, label scoping, the Bash guard, the noise floor, session isolation, and one capture of the fixture | `pytest -q` | none, about 2 s |
 | plugin eval | the six skills: with the plugin loaded the agent reaches each skill's conclusion (the 4,096-token Haiku minimum, effort before tier, the ~10K schema threshold...); the default with/without arm shows whether the skill made the difference | `claude plugin eval fleetopt/optimizer/plugin --trust-plugin` | 12 short agent runs on your login, a few dollars |
-| corpus ledger | the whole loop on real agents | `fleetopt optimize targets/<repo>`, then a line in `tests/corpus/ledger.md` | the target's own tokens plus the optimizer's |
+| corpus ledger | the whole loop on real agents | `fleetopt apply targets/<repo>`, then a line in `tests/corpus/ledger.md` | the target's own tokens plus fleetopt's sessions |
 
 The skill evals live next to the skills because the runner looks for them below the
 plugin. `tests/corpus/corpus_build.py` regenerates the candidate list from GitHub

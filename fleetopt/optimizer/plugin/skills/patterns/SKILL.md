@@ -1,6 +1,6 @@
 ---
 name: patterns
-description: Architecture review of a LangGraph agent - name the design patterns it uses, check each against the numbers from graph_shape, and say whether a simpler design would do the same job. Use when the run has --review, or when asked whether an agent's design fits its use case. Findings are recommendations with evidence, never patches; tier-one changes may become patches only when eval cases are loaded.
+description: Architecture review of a LangGraph agent - name the design patterns it uses, check each against the numbers from graph_shape, and say whether a simpler design would do the same job. Use when reviewing an agent, when asked whether its design fits its use case, or before applying a design finding from a review. Findings are recommendations with evidence; a tier-one change may be applied only when eval cases are loaded, a redesign only when a person names it.
 ---
 
 # Does the design fit the job?
@@ -8,7 +8,7 @@ description: Architecture review of a LangGraph agent - name the design patterns
 Optimization keeps the design and makes it cheaper. This review asks a different
 question: is this the right design at all. The bar is the same. Every finding is a
 number from the traces plus a line of source, or it is not a finding. A pattern that
-fits is a finding too - "supervisor justified: 4 distinct worker orders in 12 traces"
+fits is worth a line too - "supervisor justified: 4 distinct worker orders in 12 traces"
 saves the team a debate.
 
 ## How to work
@@ -35,20 +35,25 @@ saves the team a debate.
    why the structure earns its keep. Defects are not a reason to skip this: a design can
    be both broken and over-built, and fixing the defects inside a design that should not
    exist is wasted work.
-6. **Never patch.** The optimizer owns the branch. Mark each recommendation tier one or
+6. **Never patch.** `fleetopt apply` owns the branch. Mark each recommendation tier one or
    tier two so it knows what to do with it.
 
 ## Tiers
 
+- **Not design at all.** A change that keeps the graph's nodes and edges - an early
+  exit from a loop that already exists, a smaller model on a node, a trimmed prompt -
+  is a cost finding. It is tried on the evidence of the run and gated by the judge.
 - **Tier one - mechanical, measurable.** Hardwire a branch that is always taken, drop a
-  reflection round that never changes the output, add an early exit, merge two
-  sequential model calls into one prompt, flatten a fixed-order supervisor into edges,
-  demote a node's model. The optimizer may try these as patches - only when eval cases
+  reflection round that never changes the output, merge two sequential model calls
+  into one prompt, flatten a fixed-order supervisor into edges. These remove or rewire
+  nodes or edges. `fleetopt apply` may try them - only when eval cases
   are loaded and cover the affected path, because "unchanged on 3 runs" is weak evidence
   for a structural change and removing a path removes capability for inputs the sample
   never contained. Without cases: report, and say which cases would unlock it.
 - **Tier two - redesign.** "These five agents should be one", "this should not be an
-  agent". Report with evidence. A human decides.
+  agent". Report with evidence. A human decides: it is attempted only when a person
+  names that finding, and only with eval cases loaded, because being equivalent to a
+  design that was wrong proves nothing.
 
 ## Before recommending a redesign: what must survive
 
@@ -91,18 +96,20 @@ raises in every trace is broken, and one marked as caught inside the node means 
 graph carried on without that step's result - report it first, as a reliability finding. Anything else in the
 table needs a `query_traces` number of your own; write the query into the finding.
 
-## Report format
+## What a design finding says
 
-For each pattern found:
+One numbered block per pattern that is over-built, under-built or broken:
 
 ```
-<pattern> on <node(s)> - fits | over-built | under-built
+### D1 - <short title>
+pattern: <pattern> on <node(s)> - over-built | under-built | broken
 evidence: <the number, e.g. "route -> technical in 12/12 traces; billing, other never taken">
 source: <file:line>
-change: <what> (tier one|two; needs eval cases covering <path> | no cases needed)
+change: <what>; for tier one, the path the team's eval cases must cover
 effect: cost <calls or tokens saved per trace>, latency <hops removed>, reliability <retries/errors>
 risk: <what an input outside the sample could do>
+tier: one | two
 ```
 
-Close with one line: how many traces and inputs the review rests on, and whether eval
-cases were loaded. No number, no finding.
+A pattern that fits gets one line with its number under "Checked and fine". No
+number, no finding.

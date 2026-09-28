@@ -21,7 +21,7 @@ import pytest
 
 from fleetopt import cli, config
 from fleetopt.evidence import evals, measure, shape
-from fleetopt.optimizer import session, tools
+from fleetopt.optimizer import review, session, tools
 from fleetopt.probe import runner, store
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -274,13 +274,15 @@ def test_supervisor_fixture_captures_its_planted_smells(tmp_path):
 
 def test_out_is_accepted_before_and_after_the_subcommand():
     parse = cli._parser().parse_args
-    assert parse(["optimize", "repo"]).out == ".fleetopt"
-    assert parse(["optimize", "repo", "--out", "after"]).out == "after"
-    assert parse(["--out", "before", "optimize", "repo"]).out == "before"
+    assert parse(["apply", "repo"]).out == ".fleetopt"
+    assert parse(["apply", "repo", "--out", "after"]).out == "after"
+    assert parse(["--out", "before", "apply", "repo"]).out == "before"
     assert parse(["--out", "before", "capture", "repo", "--out", "after"]).out == "after"
     args = parse(["review", "repo"])
-    assert (args.out, args.label, args.graph, args.max_usd, args.fn.__name__) == (".fleetopt", None, None, 1.0, "review")
-    assert parse(["review", "repo", "--label", "earlier", "--graph", "supervisor"]).graph == "supervisor"
+    assert (args.out, args.fresh, args.graph, args.max_usd, args.fn.__name__) == (".fleetopt", False, None, 1.0, "review")
+    assert parse(["review", "repo", "--fresh", "--graph", "supervisor"]).graph == "supervisor"
+    args = parse(["apply", "repo", "--only", "C1,D2"])
+    assert (args.only, args.evals, args.max_usd, args.fn.__name__) == ("C1,D2", None, 5.0, "apply")
 
 
 # --- structural smells: numbers, not opinions ------------------------------------------
@@ -321,12 +323,6 @@ def test_graph_shape_tool_renders_the_fixtures_smells(tmp_path):
     assert "2 traces" in reply and "never taken" in reply and "same order" in reply
     assert tools.CTX["events"][-1]["event"] == "graph_shape"
     assert "no completed measurement" in json.dumps(asyncio.run(tools.graph_shape.handler({"label": "nope"})))
-
-
-def test_review_tool_is_off_unless_the_run_asked_for_it():
-    tools.CTX.update(review=False, events=[])
-    reply = json.dumps(asyncio.run(tools.review_architecture.handler({"label": "baseline", "purpose": "x"})))
-    assert "review is off" in reply
 
 
 def test_shape_counts_distinct_inputs_not_just_traces(tmp_path):
@@ -440,3 +436,124 @@ def test_review_stops_when_there_is_no_agent_to_start(tmp_path, capsys, monkeypa
     monkeypatch.setattr(review_mod, "run", never)
     code = cli.main(["review", str(target), "--out", str(tmp_path / "out")])
     assert code == 1 and "no graph found" in capsys.readouterr().out
+
+
+# --- a review is a list of numbered findings, kept against the code it saw -----------------
+
+REPORT = """Job: answers questions about orders.
+Evidence: 4 traces of 4 distinct inputs, from one capture. Eval cases: 12 found in the repository
+
+## Cost
+
+### C1 - System prompt is never cached
+pattern: caching not used on assistant
+evidence: cache_read_tokens = 0 across 9 calls, 2,310-token prefix repeated
+source: agent.py:41
+risk: none seen
+
+### C2 - Router on a frontier model
+evidence: 4 calls, completions of 1 token
+risk: it may route differently; I would want the team's cases before trusting this
+apply: needs cases
+
+## Design
+
+### D1 — Hand-built agent loop
+evidence: calls_per_tool_round 3.0
+**tier:** two
+
+### D2 - Reflection never changes the draft
+evidence: repeated_identical_reply on reflect in 4/4 traces
+change: drop the round
+tier: one
+
+### D3 - Planner nobody reads
+change: drop the planner call
+
+### C3 - Nothing to cache here
+change: none - there is no stable prefix
+
+## Checked and fine
+
+- supervisor: 3 distinct worker orders in 4 traces
+"""
+
+
+def test_what_may_be_tried_is_a_rule_not_the_reviewers_opinion():
+    found = review.findings(REPORT)
+    assert [(f["id"], f["apply"]) for f in found] == [
+        ("C1", "yes"), ("C2", "yes"),            # cost is tried, however cautious the reviewer felt about it
+        ("D1", "human decides"), ("D2", "needs cases"),
+        ("D3", "human decides")]                 # a design finding without a readable tier is left to a person
+    assert "C3" not in {f["id"] for f in found}  # something checked and cleared is not a finding to try
+    assert found[0]["title"] == "System prompt is never cached"
+    assert review.findings("Nothing here has a number.") == []
+
+
+def test_what_apply_tries_is_decided_in_code_not_by_the_session():
+    found = review.findings(REPORT)
+    ids = lambda picked: [f["id"] for f in picked]
+    picked, left = cli.chosen(found, None, has_cases=True)
+    assert ids(picked) == ["C1", "C2", "D2"] and "D1" in left[0]    # a redesign is never tried unasked
+    picked, left = cli.chosen(found, None, has_cases=False)
+    assert ids(picked) == ["C1", "C2"] and "no eval cases" in " ".join(left)  # no cases, no change to the design
+    assert ids(cli.chosen(found, "d1, c1", has_cases=True)[0]) == ["C1", "D1"]  # a person named it
+    assert ids(cli.chosen(found, "D1", has_cases=False)[0]) == []
+    with pytest.raises(ValueError, match="no finding C9"):
+        cli.chosen(found, "C1,C9", has_cases=True)
+
+
+def _a_saved_review(tmp_path, state="abc+1"):
+    project, out = tmp_path / "p", tmp_path / "out"
+    run_dir = out / "runs" / "review-x-p"
+    project.mkdir()
+    run_dir.mkdir(parents=True)
+    (run_dir / "review.md").write_text(REPORT, encoding="utf-8")
+    review.remember(out, project, "cmd", state, "review-x", run_dir, review.findings(REPORT))
+    return project, out
+
+
+def _nothing_may_run(monkeypatch, state):
+    def never(*a, **k):
+        raise AssertionError("nothing may be run or spent here")
+
+    monkeypatch.setattr(cli, "_start", lambda args: "cmd")
+    monkeypatch.setattr(runner, "code_state", lambda project: state)
+    monkeypatch.setattr(config, "auth_summary", lambda: "test")
+    monkeypatch.setattr(review, "run", never)
+    monkeypatch.setattr(measure, "collect", never)
+    monkeypatch.setattr(session, "run", never)
+
+
+def test_a_review_is_reused_while_the_code_has_not_changed(tmp_path, capsys, monkeypatch):
+    project, out = _a_saved_review(tmp_path)
+    _nothing_may_run(monkeypatch, "abc+1")
+    assert cli.main(["review", str(project), "--out", str(out)]) == 0
+    text = capsys.readouterr().out
+    assert "has not changed since the review" in text and "C1 - System prompt is never cached" in text
+    assert f"fleetopt apply {project}" in text and "D1 (Hand-built agent loop)" in text
+    assert review.saved(out, project, "cmd", "abc+2") is None       # the code moved: that review no longer answers
+    assert review.saved(out, project, "other agent", "abc+1") is None  # and it was a review of one agent, not the project
+
+
+def test_apply_stops_before_spending_when_a_named_finding_does_not_exist(tmp_path, capsys, monkeypatch):
+    project, out = _a_saved_review(tmp_path)
+    _nothing_may_run(monkeypatch, "abc+1")
+    assert cli.main(["apply", str(project), "--out", str(out), "--only", "C7"]) == 1
+    assert "no finding C7" in capsys.readouterr().out
+    assert cli.main(["apply", str(project), "--out", str(out), "--only", "D1"]) == 1  # a redesign, and no cases
+    assert "nothing to try" in capsys.readouterr().out
+
+
+def test_a_capture_that_never_got_its_review_is_not_run_again(tmp_path):
+    out, project = tmp_path, tmp_path / "p"
+    with store.connect(out / "fleetopt.db") as conn:
+        row = dict(project=str(project), run_cmd="cmd", code_state="abc+1", exit_code=0)
+        _session(conn, label="review-1", **row)
+        _session(conn, label="review-2", **{**row, "exit_code": 1})          # crashed: not evidence to reuse
+        _session(conn, label="baseline", **row)                              # a measurement, not a review capture
+        _session(conn, label="review-3", **{**row, "run_cmd": "another agent"})
+    assert cli._captured(out, project, "cmd", "abc+1") == "review-1"
+    assert cli._captured(out, project, "cmd", "abc+2") is None               # the code moved
+    assert cli._captured(out, project, "cmd", None) is None                  # not a git repo: nothing to go by
+    assert cli._captured(tmp_path / "nowhere", project, "cmd", "abc+1") is None

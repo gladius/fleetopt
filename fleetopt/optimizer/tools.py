@@ -1,4 +1,4 @@
-"""Tools the optimizer agent calls.
+"""Tools the sessions call.
 
 Everything here is deterministic. The agent decides *what* to look at and *what*
 to change; it does not get to decide what the numbers are. Measurement and the
@@ -255,35 +255,8 @@ async def graph_shape(args):
     return _ok(shape_mod.render(result))
 
 
-@tool(
-    "review_architecture",
-    "Run the architecture reviewer on the traces under a label: a separate read-only "
-    "session with its own context that names the design patterns, checks each against "
-    "graph_shape numbers and returns a report with tiers. Call once, after the baseline, "
-    "with one sentence on what the agent is for. Put the report verbatim under an "
-    "'Architecture review' heading in your final report.",
-    {"label": str, "purpose": str},
-)
-async def review_architecture(args):
-    if not CTX.get("review"):
-        return _ok("architecture review is off for this run (start with --review)")
-    if not _ids(args["label"]):
-        return _ok(f"no completed measurement under label {args['label']!r} - measure first")
-    from fleetopt.optimizer import review as review_mod
-
-    try:
-        report, cost = await review_mod.run(CTX["project"], args["label"], args["purpose"], model=CTX.get("model"))
-    except RuntimeError as e:
-        _record("review_failed", label=args["label"], error=str(e)[:300])
-        return _ok(f"architecture review failed: {e}")
-    if CTX.get("run_dir"):
-        (CTX["run_dir"] / "review.md").write_text(report + "\n", encoding="utf-8")
-    _record("review", label=args["label"], words=len(report.split()), reviewer_cost_usd=cost)
-    return _ok(report)
-
-
 _TOOLS = [measure, query_traces, graph_topology, graph_shape, compare, judge,
-          load_eval_cases, review_architecture]
+          load_eval_cases]
 
 
 def server(names=None):

@@ -1,13 +1,14 @@
-"""The optimizer agent.
+"""The session behind `fleetopt apply`.
 
-The agent drives. There is no step list here - it reads the project, decides what
-to look at, and proves whatever it claims using the tools in tools.py. What this
-module owns is the boundary: where the agent runs, what it may touch, and the two
-things it has to ask about.
+It is handed the findings of a review a person has seen, tries them one at a time on
+a new branch, and proves whatever it claims using the tools in tools.py. What this
+module owns is the boundary: where the agent runs, what it may touch, and the
+verdict, which is computed from what the tools recorded and not from what the agent
+wrote.
 
-Permission is gated by class of side effect, not per tool. Reading, querying,
-measuring and judging are free. Running the target's own command is asked once.
-Touching the repository is asked once, and after that git is the undo.
+Nothing is asked. What keeps a run safe is enforced: the target is started only by
+fleetopt's own driver, an edit lands inside the project on a new branch or not at
+all, and nothing is installed or pushed.
 """
 
 import asyncio
@@ -31,44 +32,70 @@ from claude_agent_sdk import (
 
 from fleetopt import config
 from fleetopt.optimizer import tools
+from fleetopt.probe import runner
 
 _HERE = pathlib.Path(__file__).parent
-SKILL = (_HERE / "SKILL.md").read_text(encoding="utf-8")
+SKILL = "\n\n".join((_HERE / name).read_text(encoding="utf-8") for name in ("SKILL.md", "COST.md"))
 PLUGIN = _HERE / "plugin"  # decision skills, loaded by the harness, triggered by description
 # Only fleetopt's skills are listed to the model; the CLI's built-in ones are noise here.
 SKILLS = sorted(f"fleetopt:{p.name}" for p in (PLUGIN / "skills").iterdir() if p.is_dir())
 
-MISSION = """Optimize the LangGraph agent in this project so it costs less to run,
-without changing what it produces.
+MISSION = """Apply the findings of a review to the LangGraph agent in this project, and
+prove each one.
 
-Work in this order, but use your judgement - the project decides the details:
+The review below was made on this exact code. It saw one capture and measured nothing,
+so it is where you start, not the last word. Try these findings first, in this order:
+{ids}.
 
-1. Understand it. Read the source and the graph topology. What is this agent for?
+1. Understand it. Read the review, then the source it points to.
 2. Establish a baseline. fleetopt already knows how to start this agent and which
-   inputs to give it, so call measure. Without a baseline nothing you do afterwards
-   is provable. Before that, look for eval cases (see fleetopt:evals) and load them
-   with load_eval_cases.
-3. Find the cost. Query the traces. Go where the tokens are.
-4. Change one thing. Create a git branch first (edits are refused until you are on a
-   new branch), then apply a single optimization.
-5. Prove it. Measure again under a new label, compare, and judge equivalence.
+   inputs to give it, so call measure with the label "baseline". Before that, look for
+   eval cases (see fleetopt:evals) and load them with load_eval_cases.
+3. Create one git branch for this run. Edits are refused until you are on a new branch.
+4. For each finding, in the order given:
+   - make that one change and commit it, the finding's id first in the message
+     ("C1: cache the system prompt");
+   - measure under a label that starts with the id, compare it with the code just
+     before it to see what this finding did on its own, and judge it against the
+     baseline;
+   - if the saving is within noise or the judge fails, undo the commit with
+     git reset --hard HEAD~1 before you go on, and report the finding as not proven;
+   - if the baseline contradicts the finding, skip it and give the number that does.
+5. {after}
+6. If more than one change is left standing, measure and judge the code as you leave
+   it against the baseline once more. The team merges the branch, not single commits.
 
-Report at the end: what you changed, the measured difference (dollars first, then
-latency, then tokens), the equivalence verdict, and the correctness pass rate before and after if eval cases were loaded
-(say "correctness not checked" if none were found). If the saving was within
-noise, or equivalence or correctness failed, say so plainly and leave the branch
-for review. A cost reduction that broke the agent is a
-regression, not a result."""
+{design}
 
-REVIEW_MISSION = """
+Report at the end, one row per finding you were given or found: its id, what happened (stands,
+undone, skipped and why), the measured difference (dollars first, then latency, then
+tokens), the equivalence verdict, and the correctness pass rate before and after if
+eval cases were loaded (say "correctness not checked" if none were found). A cost
+reduction that broke the agent is a regression, not a result.
 
-ARCHITECTURE REVIEW IS ON. Once the baseline is measured and before any patch, call
-review_architecture once with the baseline label and one sentence on what this agent is
-for. It runs a separate read-only reviewer and returns its report. Put that report
-verbatim under a heading "Architecture review" in your final report, separate from the
-savings. Do not act on tier-two items. Act on a tier-one item only if eval cases are
-loaded and cover the affected path; otherwise leave it as a recommendation and say what
-would unlock it."""
+--- the review ---
+
+{review}"""
+
+# The loop stays open: some waste only shows once the first fix is in, and the review
+# saw one run where the baseline has three.
+LOOK_AGAIN = """Then look again. Query the traces of the code as it now stands: a fix often
+   uncovers the next cost. If something the review did not list is worth trying and
+   keeps the design as it is, give it the next free id (N1, N2, ...) and treat it like
+   any other finding. A change to the design that the review did not list is reported,
+   never tried: nobody has seen the case for it. Stop when nothing is left that the
+   numbers support."""
+
+# With --only a person chose a list, and a list is a fence.
+ONLY_THESE = """Stop there. A person chose exactly these findings. If you notice anything else,
+   say so at the end and leave it alone."""
+
+DESIGN_ON = """Findings marked "needs cases" or "human decides" change the design, not just its cost.
+Try one only if the eval cases you loaded cover the path it touches; if they do not,
+skip it and say which cases would unlock it. For a redesign, first list what must
+survive (see fleetopt:patterns) and keep every item on it."""
+
+DESIGN_OFF = "None of the findings you were given changes the design. Keep the design as it is."
 
 # Eval runners count as running the target too: a deepeval or promptfoo suite
 # invokes the agent on every case and bills the team for its own graders.
@@ -190,16 +217,27 @@ def _write_record(run_dir, project, start_sha, started, meta, texts, calls, skil
     print(f"[fleetopt] run record: {run_dir}")
 
 
-def verdict(events):
+def verdict(events, final=None, start=None):
     """What the measurements support, computed from what the tools recorded. Printed
     after the agent's report and stored in the run record, so a report cannot argue
     with a failed gate. Only a judged comparison of two different code states counts,
-    and every judgment of the final code counts: one failure is a failure."""
+    and every judgment of the final code counts: one failure is a failure.
+
+    `final` is the code as the run left it and `start` the code it began on. With
+    them the verdict is about what is on the branch, not about the last thing that
+    happened to be judged: a change that failed and was undone does not condemn the
+    ones left standing, and code nobody judged is not proven by its neighbours."""
     real = [e for e in events if e["event"] == "judge" and e.get("baseline_state") != e.get("candidate_state")]
     if not real:
         return "NOTHING PROVEN: no change was judged against the code it started from."
-    final = real[-1]["candidate_state"]
+    if final and final == start:
+        return (f"NOTHING LEFT STANDING: {len({e['candidate_state'] for e in real})} changed version(s) were "
+                "judged and undone. The branch holds the code it started from.")
+    final = final or real[-1]["candidate_state"]
     judged = [e for e in real if e["candidate_state"] == final]
+    if not judged:
+        return (f"NOT PROVEN: the code as it was left ({final}) was never judged. The last code judged was "
+                f"{real[-1]['candidate_state']}. The branch is left for review.")
 
     def detail(e):
         ok = sum(bool(r["equivalent"]) for r in e["equivalence"])
@@ -221,7 +259,7 @@ def verdict(events):
     return f"PROVEN ON THIS EVIDENCE: the judge passed ({details}).{saving}"
 
 
-def build_options(project, run_cmd=None, model=None, max_turns=60, max_usd=None, effort=None):
+def build_options(project, run_cmd=None, model=None, max_turns=120, max_usd=None, effort=None):
     """Everything a session is allowed to be. Apart from run() so the product's
     promises can be read off it in a test without starting a session
     (tests/test_invariants.py)."""
@@ -229,17 +267,19 @@ def build_options(project, run_cmd=None, model=None, max_turns=60, max_usd=None,
         cwd=str(project),
         model=model,
         system_prompt=(
-            "You are a cost optimizer for LangGraph agents, run by a central AI "
-            "team on another team's project. Evidence beats intuition: every claim "
+            "You apply the findings of a review to LangGraph agents, run by a central "
+            "AI team on another team's project. Evidence beats intuition: every claim "
             "you make must cite trace data or a measurement. Never report a saving "
-            "you have not measured.\n\n" + SKILL
+            "you have not measured. If an edit or a command is refused, that is an answer, "
+            "not an obstacle: never look for another way to make the same change (another "
+            "tool, a shell write, git plumbing). Say what was refused and why, skip that "
+            "finding, and go on.\n\n" + SKILL
         ),
         mcp_servers={"fleetopt": tools.server()},
         # Built-ins by allowlist. The CLI default is 26 tools including web fetch and
         # search, cron, worktrees, messaging and wake-up scheduling: egress and mutation
         # surfaces an optimizer has no business with, and schema tokens on every turn.
-        # Observed before this: a run called ScheduleWakeup to "wait" for its reviewer.
-        # The reviewer is a separate query() behind review_architecture, not a subagent.
+        # Observed before this: a run called ScheduleWakeup to "wait" for a subagent.
         tools=["Read", "Grep", "Glob", "Bash", "Edit", "Write", "Skill"],
         # No questions are asked, so none of these needs a person. What keeps them safe
         # is enforced below, not confirmed: the target is started only by fleetopt's own
@@ -273,7 +313,10 @@ def build_options(project, run_cmd=None, model=None, max_turns=60, max_usd=None,
     )
 
 
-async def run(project, out_dir, run_cmd, model=None, max_turns=60, max_usd=None, effort=None, evals=None, review=False):
+async def run(project, out_dir, run_cmd, review, findings, model=None, max_turns=120, max_usd=None, effort=None,
+              evals=None, fenced=False):
+    """Try `findings` (from review.findings, already chosen) of the `review` text, then
+    keep looking unless `fenced`: a person who names findings gets those and no others."""
     project = pathlib.Path(project).resolve()
     out = pathlib.Path(out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -282,15 +325,18 @@ async def run(project, out_dir, run_cmd, model=None, max_turns=60, max_usd=None,
     run_dir = out / "runs" / f"{started:%Y%m%d-%H%M%S}-{project.name}"
     run_dir.mkdir(parents=True, exist_ok=True)
     start_sha = _git(project, "rev-parse", "HEAD")
+    start_state = runner.code_state(project)
     tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd,
-                      "events": [], "review": review, "model": model, "run_dir": run_dir})
+                      "events": [], "model": model, "run_dir": run_dir})
     tools.CTX.pop("baseline_state", None)
-    mission = MISSION
+    tools.CTX.pop("eval_cases", None)
+    design = any(f["apply"] != "yes" for f in findings)
+    mission = MISSION.format(ids=", ".join(f["id"] for f in findings) or "none: the review listed nothing to try",
+                             review=review, after=ONLY_THESE if fenced else LOOK_AGAIN,
+                             design=DESIGN_ON if design else DESIGN_OFF)
     if evals:
         mission += (f"\n\nEval cases were supplied at `{evals}`. Call load_eval_cases with that "
                     "path before measuring.")
-    if review:
-        mission += REVIEW_MISSION
 
     options = build_options(project, run_cmd, model, max_turns, max_usd, effort)
 
@@ -321,10 +367,10 @@ async def run(project, out_dir, run_cmd, model=None, max_turns=60, max_usd=None,
                     print(f"\n--- done in {message.num_turns} turns" +
                           (f", ${cost:.4f}" if cost else "") + " ---")
     finally:
-        computed = verdict(tools.CTX.get("events", []))
+        computed = verdict(tools.CTX.get("events", []), runner.code_state(project), start_state)
         print(f"\n--- fleetopt verdict (computed from the measurements, not written by the agent) ---\n{computed}")
         meta = {"model": model, "evals_path": evals, "max_turns": max_turns, "max_usd": max_usd,
-                "review": review, "verdict": computed}
+                "findings": findings, "fenced": fenced, "code_state_after": runner.code_state(project), "verdict": computed}
         try:
             _write_record(run_dir, project, start_sha, started, meta, texts, calls, skills, result)
         except OSError as exc:  # never let the record mask what the run itself did
