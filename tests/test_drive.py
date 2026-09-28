@@ -19,9 +19,7 @@ def project(tmp_path):
 
 
 def test_what_the_project_declares_is_the_list_otherwise_what_its_source_shows(project):
-    (project / "helper.py").write_text("from langgraph.graph import StateGraph\nspare = StateGraph(dict).compile()\n", encoding="utf-8")
-    assert [name for name, _ in entry.candidates(project)] == ["agent", "supervisor"]  # declared: that is the list
-    (project / "helper.py").unlink()
+    assert [name for name, _ in entry.candidates(project)] == ["agent"]  # declared: that is the list
     (project / "langgraph.json").unlink()
     (project / "patterns.py").write_text("import re  # used by langgraph code\nWORD = re.compile('a+')\n", encoding="utf-8")
     (project / "factory.py").write_text(
@@ -32,12 +30,16 @@ def test_what_the_project_declares_is_the_list_otherwise_what_its_source_shows(p
 
 
 def test_asking_for_an_agent_that_is_not_there_lists_the_ones_that_are(project):
-    found = entry.candidates(project)
+    found = [("agent", "agent.py:graph"), ("supervisor", "supervisor.py:graph")]
     assert entry.choose(found) == ("agent", "agent.py:graph")
     assert entry.choose(found, "supervisor")[1] == "supervisor.py:graph"
     assert entry.choose(found, "supervisor.py:graph")[0] == "supervisor"
     with pytest.raises(entry.Unstartable, match="agent, supervisor"):
         entry.choose(found, "billing")
+    declared = entry.candidates(project)  # only `agent`; a file named outright is still accepted
+    assert entry.choose(declared, "supervisor.py:graph", project) == ("supervisor.py:graph", "supervisor.py:graph")
+    with pytest.raises(entry.Unstartable):
+        entry.choose(declared, "missing.py:graph", project)
     with pytest.raises(entry.Unstartable, match="no graph found"):
         entry.choose([])
     (project / "langgraph.json").unlink()
@@ -84,7 +86,7 @@ def test_an_entry_is_proven_once_and_remembered(project, tmp_path, monkeypatch):
     path, first = entry.ensure(project, tmp_path / "out", say=said.append)
     assert first["proven"] and first["graph"] == "agent.py:graph" and first["inputs"] == ["battery degradation", "route optimization"]
     assert path.is_relative_to(tmp_path / "out") and not (project / "entries").exists()  # fleetopt's folder, not the repo
-    assert any("2 agents" in line and "supervisor" in line for line in said) and any("it runs" in line for line in said)
+    assert any("it runs" in line for line in said)
 
     def never(*a, **k):
         raise AssertionError("a proven entry is not proven again")
@@ -183,3 +185,59 @@ def test_a_credential_never_travels_through_an_entry(monkeypatch):
     monkeypatch.setattr(setup, "_ask", answer)
     fix = setup.repair(pathlib.Path("."), {"graph": "a.py:g", "env": {}}, "failed")
     assert fix == {"config": {"tenant_id": "demo"}}  # the whole env is dropped, and the interpreter is not the model's to choose
+
+
+def _two_agents(project):
+    declared = json.loads((project / "langgraph.json").read_text(encoding="utf-8"))
+    declared["graphs"] = {"agent": "./agent.py:graph", "supervisor": "./supervisor.py:graph"}
+    (project / "langgraph.json").write_text(json.dumps(declared), encoding="utf-8")
+
+
+def test_with_several_agents_it_picks_the_one_the_team_ships_says_why_and_remembers(project, tmp_path, monkeypatch):
+    _two_agents(project)
+    asked = []
+    monkeypatch.setattr(setup, "choose_agent", lambda project, found: asked.append(found) or
+                        ("supervisor", "the team's eval runner builds it and the other is one of its parts"))
+    said = []
+    _, first = entry.ensure(project, tmp_path / "out", say=said.append)
+    assert first["name"] == "supervisor" and first["proven"]
+    assert any("2 agents" in line and "the team's eval runner builds it" in line for line in said)
+    assert any("the others: agent" in line and "--graph picks another" in line for line in said)
+
+    _, again = entry.ensure(project, tmp_path / "out", say=said.append)
+    assert again["name"] == "supervisor" and len(asked) == 1     # asked once, remembered
+    _, named = entry.ensure(project, tmp_path / "out", "agent", say=said.append)
+    assert named["name"] == "agent" and len(asked) == 1          # naming one is never second-guessed
+    assert any("because you named it" in line for line in said)
+
+
+def test_when_nothing_tells_them_apart_it_takes_the_first_and_says_so(project, tmp_path, monkeypatch):
+    _two_agents(project)
+    monkeypatch.setattr(setup, "choose_agent", lambda project, found: None)
+    said = []
+    _, found = entry.ensure(project, tmp_path / "out", say=said.append)
+    assert found["name"] == "agent" and any("nothing told them apart" in line for line in said)
+
+
+def test_the_choice_must_be_one_of_the_projects_agents(monkeypatch):
+    async def answer(*a, **k):
+        return json.dumps({"name": "an_agent_that_is_not_there", "why": "it sounded right"})
+
+    monkeypatch.setattr(setup, "_ask", answer)
+    assert setup.choose_agent(pathlib.Path("."), [("agent", "agent.py:graph"), ("supervisor", "supervisor.py:graph")]) is None
+
+
+def test_the_reason_for_a_choice_is_one_short_line(monkeypatch):
+    async def answer(*a, **k):
+        return json.dumps({"name": "supervisor", "why": "The CI gate builds exactly this agent. " + "and more words " * 30})
+
+    monkeypatch.setattr(setup, "_ask", answer)
+    name, why = setup.choose_agent(pathlib.Path("."), [("agent", "agent.py:graph"), ("supervisor", "supervisor.py:graph")])
+    assert name == "supervisor" and why.startswith("the CI gate builds exactly this agent") and why.endswith("...")
+    assert len(why.split()) <= 31
+
+
+def test_a_relative_output_folder_still_finds_its_entry(project, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path, found = entry.ensure(project, "out", say=lambda line: None)
+    assert path.is_absolute() and found["proven"]

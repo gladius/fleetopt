@@ -258,7 +258,7 @@ def _capture_fixture(tmp_path, script, *extra):
             subprocess.run(["git", "-C", str(target), *args], check=True, capture_output=True)
     return subprocess.run(
         [sys.executable, "-c", "from fleetopt.cli import main; main()", "capture", str(target),
-         "--graph", script.removesuffix(".py"), "--out", str(tmp_path / "out"), *extra],
+         "--graph", f"{script}:graph", "--out", str(tmp_path / "out"), *extra],
         cwd=tmp_path, capture_output=True, text=True, timeout=300,
     )
 

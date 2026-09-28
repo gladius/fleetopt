@@ -267,8 +267,9 @@ def _parser():
     rev.set_defaults(fn=review)
 
     for p in (opt, cap, rev):
-        p.add_argument("--graph", help="which agent, when the project has several: a name from its "
-                                       "langgraph.json, or file.py:variable. Default: the first one found")
+        p.add_argument("--graph", help="rarely needed: with several agents in a project fleetopt picks the one the "
+                                       "team ships and says why. This overrides it: a name from its "
+                                       "langgraph.json, or file.py:variable")
     for p in (opt, cap, rep, rev):  # after the subcommand, where people put it
         p.add_argument("--out", default=argparse.SUPPRESS,
                        help="where captures and run records go (default ./.fleetopt)")

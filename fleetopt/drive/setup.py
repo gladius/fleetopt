@@ -40,6 +40,16 @@ Rules: change as little as possible. Prefer what the project's own entry point d
 dependency, a service it needs, a key that is absent - reply {"cannot": "<the reason>"}.
 """
 
+WHICH = """A project contains several LangGraph agents. Decide which ONE the team ships and
+tests: the top-level agent. Not a building block that another agent is made from, and
+not an earlier version kept for teaching or comparison.
+
+Read what a person would read: the README, the code that builds each agent, and above
+all the team's own tests and eval runner, which name the agent they care about.
+
+Reply with one JSON object and nothing else:
+{"name": "<exactly one of the names given>", "why": "<the reason in at most 20 words, starting with a lower-case word>"}"""
+
 INPUTS = """You write test inputs for an AI agent so that a measurement tool can run it.
 
 Write what the agent's END USER types to it: the customer, the employee, the person
@@ -96,6 +106,19 @@ def repair(project, entry, failure):
     if any(re.search(r"key|token|secret|password", k, re.I) for k in (fix.get("env") or {})):
         fix.pop("env")  # a credential never travels through an entry
     return fix or None
+
+
+def choose_agent(project, found):
+    """(name, why) for the agent the team ships, or None when it cannot be told."""
+    listed = "\n".join(f"- {name}: {spec}" for name, spec in found)
+    answer = _json(asyncio.run(_ask(WHICH, f"The agents in this project:\n{listed}", cwd=project,
+                                    tools=("Read", "Grep", "Glob"))))
+    if isinstance(answer, dict) and answer.get("name") in {name for name, _ in found}:
+        why = " ".join(str(answer.get("why", "")).split()).rstrip(".")
+        words = why.split()
+        why = " ".join(words[:30]) + (" ..." if len(words) > 30 else "")
+        return answer["name"], (why[:1].lower() + why[1:]) or "it is the agent the team ships"
+    return None
 
 
 def propose_inputs(project, spec, n=4):

@@ -154,6 +154,8 @@ def choose(found, wanted=None, project=None):
     for name, spec in found:
         if wanted in (name, spec) or spec.endswith(wanted):
             return name, spec
+    if project and ":" in wanted and (project / wanted.split(":")[0]).exists():
+        return wanted, wanted  # named by file: the user knows something the project does not declare
     raise Unstartable(f"no graph called {wanted!r} here. Found: " + ", ".join(name for name, _ in found))
 
 
@@ -207,6 +209,16 @@ def _spread(texts, n=MAX_INPUTS):
     """n of them, taken evenly across the list, so they differ in kind."""
     texts = list(dict.fromkeys(texts))
     return texts if len(texts) <= n else [texts[i * len(texts) // n] for i in range(n)]
+
+
+def settled(out, project, found):
+    """The agent picked for this project before, if it is still one of its agents."""
+    path = path_for(out, project, "which-agent")
+    if path.exists():
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        if saved.get("name") in {name for name, _ in found}:
+            return saved["name"], saved.get("why") or "it was picked for this project before"
+    return None
 
 
 def path_for(out, project, name):
@@ -301,8 +313,19 @@ def ensure(project, out, wanted=None, say=print):
     from fleetopt.drive import setup  # the two steps that need a model; imported late so tests can replace them
 
     project = pathlib.Path(project).resolve()
+    out = pathlib.Path(out).resolve()  # the driver runs from inside the project: a relative path would point nowhere
     found = candidates(project)
-    name, spec = choose(found, wanted, project)
+    chosen_because = None
+    if wanted is None and len(found) > 1:
+        wanted_now, chosen_because = settled(out, project, found) or (None, None)
+        if wanted_now is None:
+            picked = setup.choose_agent(project, found)
+            wanted_now, chosen_because = picked or (found[0][0], "it is the first one the project declares; "
+                                                                "nothing told them apart")
+            save(path_for(out, project, "which-agent"), {"name": wanted_now, "why": chosen_because})
+        name, spec = choose(found, wanted_now, project)
+    else:
+        name, spec = choose(found, wanted, project)
     path = path_for(out, project, name)
     others = [n for n, _ in found if n != name]
 
@@ -324,9 +347,9 @@ def ensure(project, out, wanted=None, say=print):
     }
     say(f"[fleetopt] agent: {name} ({spec})")
     if others:
-        which = "this is the one you named" if wanted else "this is the first"
-        say(f"[fleetopt] this project has {len(others) + 1} agents and {which}. The others: "
-            f"{', '.join(others[:8])}." + ("" if wanted else " Pick one with --graph"))
+        reason = "you named it" if wanted else chosen_because
+        say(f"[fleetopt] this project has {len(others) + 1} agents. Using this one because {reason}")
+        say(f"[fleetopt] the others: {', '.join(others[:8])}" + ("" if wanted else " (--graph picks another)"))
     say(f"[fleetopt] runs on {why}")
 
     save(path, entry)

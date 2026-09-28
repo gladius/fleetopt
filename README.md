@@ -47,7 +47,7 @@ fact about the project, so fleetopt works it out once per project and remembers 
 
 | What it needs | Where it looks |
 |---|---|
-| The agent | the project's `langgraph.json`; otherwise a compiled graph, or a graph factory that takes no arguments, in its source |
+| The agent | the project's `langgraph.json`; otherwise a compiled graph, or a graph factory that takes no arguments, in its source. With several, the one the team ships and tests |
 | The interpreter | the project's own `.venv` / `venv`. fleetopt never installs anything |
 | Keys and settings | the env file the project names, loaded inside the agent's own process. fleetopt never reads it |
 | Inputs | the team's eval cases; otherwise a file of inputs the project keeps; otherwise four written from its README |
@@ -77,7 +77,7 @@ somebody guessed. Another framework is another way of filling in the same entry.
 
 | Flag | Meaning |
 |---|---|
-| `--graph NAME` | Which agent, when the project has several: a name from its `langgraph.json`, or `file.py:variable`. Default: the first one found; the others are listed. |
+| `--graph NAME` | Rarely needed. When a project has several agents, fleetopt reads its README, code and the team's own tests, picks the one the team ships, says why in one line and remembers the choice. `--graph` overrides that: a name from its `langgraph.json`, or `file.py:variable`. |
 | `--review` | Also review the architecture: a separate read-only session names the design patterns, checks each against structural numbers from the traces (branches never taken, fixed dispatch order, loops that always run the same number of rounds, critics that never change anything, nodes that raise) and reports whether a simpler design would do, under its own heading. Recommendations with evidence, not patches. |
 | `--evals FILE` | Eval cases (input + expected answer) as JSONL/JSON, a LangSmith dataset export, or deepeval tests. Optional: they are looked for in the repo otherwise. With cases, the judge reports correctness pass rates before and after, not just "unchanged". |
 | `--max-usd N` | Stop fleetopt's own session once its spend reaches N (default 5 for optimize, 1 for review). The target's API calls are its own bill. |
