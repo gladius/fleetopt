@@ -38,7 +38,53 @@ def _start(args):
     except (entry.Unstartable, RuntimeError) as exc:
         print(f"[fleetopt] {exc}")
         return None
+    args.agent = found.get("name") or found["graph"]
     return entry.command(path, found)
+
+
+def _newest(out):
+    """The id of the newest capture, to tell afterwards which ones a run made."""
+    if not (out / "fleetopt.db").exists():
+        return 0
+    with store.connect(out / "fleetopt.db") as conn:
+        return conn.execute("SELECT COALESCE(MAX(id), 0) FROM sessions").fetchone()[0]
+
+
+def spent(out, project, after):
+    """(runs of the agent, what they cost on the team's key) since capture `after`.
+    The cost is None when a model it used has no price here."""
+    from fleetopt.evidence import measure as measure_mod
+
+    if not (out / "fleetopt.db").exists():
+        return 0, 0.0
+    with store.connect(out / "fleetopt.db") as conn:
+        ids = [r["id"] for r in conn.execute("SELECT id FROM sessions WHERE id > ? AND project = ?",
+                                             (after, str(project)))]
+        costs = [measure_mod.session_stats(conn, i)["cost_usd"] for i in ids]
+    return len(ids), (None if None in costs else sum(costs))
+
+
+def summary(agent, record, facts, runs, team_cost, own_cost):
+    """The run in a few lines, for someone who will not read the report. Every line is
+    computed from what was recorded; none of it is written by a session."""
+    from fleetopt.optimizer import review as review_mod
+
+    kinds = [f["kind"] for f in record["findings"]]
+    found = ", ".join(f"{kinds.count(k)} {k}" for k in review_mod.KINDS if k in kinds) or "nothing"
+    money = lambda usd: "not priced" if usd is None else f"${usd:.2f}"
+    undone = max(facts["tried"] - facts["kept"], 0)
+    lines = [
+        ("Agent", agent),
+        ("Level", f"{record['level']} of 4, {review_mod.LEVELS[record['level']]}"),
+        ("Found", found),
+        ("Tried", f"{facts['tried']} changed version(s): {facts['kept']} kept, {undone} undone"),
+        ("Gained", ", ".join(facts["gained"]) if facts["gained"] else "nothing proven"),
+        ("Verdict", facts["verdict"].split(":")[0].lower()),
+        ("Spent", f"{money(team_cost)} on the team's key in {runs} run(s) of the agent, {money(own_cost)} by fleetopt"),
+        ("Branch", facts["branch"] + ("" if facts["kept"] else ", the same code it started from")),
+        ("Read", facts["run_dir"] + "/report.md"),
+    ]
+    return "\n".join(f"{name:<8} {text}" for name, text in lines)
 
 
 def _model(*names):
@@ -145,7 +191,7 @@ def _reviewed(project, out, run_cmd, max_usd, fresh=False):
     record = review_mod.remember(out, project, run_cmd, state, label, run_dir, found, unfinished)
     print("\n--- review ---\n" + text)
     print(f"\n--- reviewer ${cost or 0:.4f} ---\n[fleetopt] run record: {run_dir}")
-    return {**record, "text": text}, True
+    return {**record, "text": text, "reviewer_cost_usd": cost}, True
 
 
 def _named(found):
@@ -223,6 +269,7 @@ def apply(args):
 
     project = pathlib.Path(args.project).resolve()
     out = pathlib.Path(args.out).resolve()
+    before = _newest(out)
     run_cmd = _start(args)
     if run_cmd is None:
         return 1
@@ -248,7 +295,7 @@ def apply(args):
     print(f"[fleetopt] trying: {_named(picked)}" + ("; only these" if args.only else "; then looking again"))
 
     print(f"[fleetopt] auth: {config.auth_summary() or 'unknown (could not run auth status)'}")
-    return asyncio.run(
+    facts = asyncio.run(
         session.run(
             project, out, run_cmd, record["text"], picked,
             model=_model("FLEETOPT_MODEL"),
@@ -257,6 +304,15 @@ def apply(args):
             fenced=bool(args.only),
         )
     )
+    runs, team_cost = spent(out, project, before)
+    own = (facts["own_cost_usd"] or 0) + ((record.get("reviewer_cost_usd") or 0) if new else 0)
+    text = summary(args.agent, record, facts, runs, team_cost, own)
+    print("\n--- summary (computed) ---\n" + text)
+    try:
+        (pathlib.Path(facts["run_dir"]) / "summary.txt").write_text(text + "\n", encoding="utf-8")
+    except OSError as exc:
+        print(f"[fleetopt] could not write the summary: {exc}")
+    return 0
 
 
 def capture(args):

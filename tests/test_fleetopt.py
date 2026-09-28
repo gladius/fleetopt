@@ -601,3 +601,37 @@ def test_a_capture_that_never_got_its_review_is_not_run_again(tmp_path):
     assert cli._captured(out, project, "cmd", "abc+2") is None               # the code moved
     assert cli._captured(out, project, "cmd", None) is None                  # not a git repo: nothing to go by
     assert cli._captured(tmp_path / "nowhere", project, "cmd", "abc+1") is None
+
+
+def test_the_summary_is_computed_and_claims_a_gain_only_under_a_proven_verdict(tmp_path):
+    def measured(label, state):
+        return {"event": "measure", "label": label, "code_state": state}
+
+    def compared(state, **verdicts):
+        return {"event": "compare", "baseline_state": "v1", "candidate_state": state,
+                "result": {k: {"verdict": v, "delta_pct": pct} for k, (v, pct) in verdicts.items()}}
+
+    events = [measured("baseline", "v1"), measured("C1", "v2"), measured("C1-n5", "v2"), measured("D1", "v3"),
+              compared("v3", cost_usd=("within noise", -14.6), wall_ms=("improved", -23.4), llm_calls=("improved", -33.3))]
+    assert session.numbers(events, "PROVEN ON THIS EVIDENCE: ...", "v1", "v3") == (2, ["time -23%", "model calls -33%"])
+    assert session.numbers(events, "NOT PROVEN SAFE: ...", "v1", "v3") == (2, [])    # measured, and not a gain
+    assert session.numbers(events, "NOTHING LEFT STANDING: ...", "v1", "v1") == (2, [])
+
+    record = {"findings": review.findings(REPORT), "level": 3}
+    facts = {"verdict": "NOTHING LEFT STANDING: 1 changed version(s) were judged and undone.", "tried": 3, "kept": 0,
+             "gained": [], "branch": "fleetopt/c1-c2-d1", "run_dir": "/runs/x"}
+    text = cli.summary("supervisor", record, facts, 27, 1.22, 2.31)
+    assert "Level    3 of 4, wrong shape" in text and "Found    2 cost, 1 design, 2 redesign" in text
+    assert "3 changed version(s): 0 kept, 3 undone" in text and "Gained   nothing proven" in text
+    assert "$1.22 on the team's key in 27 run(s)" in text and "the same code it started from" in text
+    assert "not priced" in cli.summary("a", record, facts, 1, None, 0.5)
+
+    out, project = tmp_path, tmp_path / "p"
+    with store.connect(out / "fleetopt.db") as conn:
+        for label in ("old", "baseline", "C1"):
+            sid = _session(conn, project=str(project), label=label, run_cmd="cmd", code_state="v1", exit_code=0)
+            conn.execute("INSERT INTO runs (session_id, run_type, model, input_tokens, output_tokens)"
+                         " VALUES (?, 'llm', 'claude-haiku-4-5', 1000000, 0)", (sid,))
+        _session(conn, project="another project", label="baseline", run_cmd="cmd", code_state="v1", exit_code=0)
+    runs, cost = cli.spent(out, project, after=1)
+    assert runs == 2 and cost == pytest.approx(2 * measure.session_stats(store.connect(out / "fleetopt.db"), 1)["cost_usd"])

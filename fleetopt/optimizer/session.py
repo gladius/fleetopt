@@ -264,6 +264,26 @@ def verdict(events, final=None, start=None):
     return f"PROVEN ON THIS EVIDENCE: the judge passed ({details}).{saving}"
 
 
+NAMES = {"cost_usd": "cost", "wall_ms": "time", "llm_calls": "model calls", "completed": "finished requests"}
+
+
+def numbers(events, computed, start, final):
+    """The run in numbers, from what the tools recorded: how many changed versions were
+    measured, and what the code left on the branch gained. A gain is stated only under
+    a verdict that says it is proven; an unproven number is not a saving."""
+    tried = len({e["code_state"] for e in events
+                 if e["event"] == "measure" and e.get("code_state") not in (None, start)})
+    gained = []
+    if computed.startswith("PROVEN"):
+        last = [e for e in events if e["event"] == "compare"
+                and e.get("baseline_state") == start and e.get("candidate_state") == final]
+        for key, name in NAMES.items():
+            v = (last[-1]["result"] if last else {}).get(key) or {}
+            if v.get("verdict") == "improved" and v.get("delta_pct") is not None:
+                gained.append(f"{name} {v['delta_pct']:+.0f}%")
+    return tried, gained
+
+
 def build_options(project, run_cmd=None, model=None, max_turns=120, max_usd=None):
     """Everything a session is allowed to be. Apart from run() so the product's
     promises can be read off it in a test without starting a session
@@ -369,12 +389,19 @@ async def run(project, out_dir, run_cmd, review, findings, model=None, max_turns
                     print(f"\n--- done in {message.num_turns} turns" +
                           (f", ${cost:.4f}" if cost else "") + " ---")
     finally:
-        computed = verdict(tools.CTX.get("events", []), runner.code_state(project), start_state)
+        final_state = runner.code_state(project)
+        events = tools.CTX.get("events", [])
+        computed = verdict(events, final_state, start_state)
         print(f"\n--- fleetopt verdict (computed from the measurements, not written by the agent) ---\n{computed}")
+        tried, gained = numbers(events, computed, start_state, final_state)
+        kept = _git(project, "rev-list", "--count", f"{start_sha}..HEAD") if start_sha else ""
+        facts = {"verdict": computed, "tried": tried, "kept": int(kept or 0), "gained": gained,
+                 "branch": _git(project, "rev-parse", "--abbrev-ref", "HEAD"),
+                 "own_cost_usd": result.get("optimizer_cost_usd"), "run_dir": str(run_dir)}
         meta = {"model": model, "evals_path": evals, "max_turns": max_turns, "max_usd": max_usd,
-                "findings": findings, "fenced": fenced, "code_state_after": runner.code_state(project), "verdict": computed}
+                "findings": findings, "fenced": fenced, "code_state_after": final_state, **facts}
         try:
             _write_record(run_dir, project, start_sha, started, meta, texts, calls, skills, result)
         except OSError as exc:  # never let the record mask what the run itself did
             print(f"[fleetopt] could not write the run record: {exc}")
-    return 0
+    return facts
