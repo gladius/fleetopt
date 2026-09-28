@@ -168,16 +168,25 @@ def interpreter(project):
     return sys.executable, "fleetopt's interpreter, because the project has no .venv of its own"
 
 
-def inputs_for(project):
-    """(inputs, where they came from). The team's eval cases first; then any file of
-    inputs the project keeps; nothing if it has neither."""
-    cases, _ = evals.load(project)
+def inputs_for(project, supplied=None):
+    """(inputs, where they came from). Eval cases that were supplied first, then the
+    team's own; then any file of inputs the project keeps; nothing if it has neither.
+
+    Cases are the inputs, not only the answers. Observed: cases supplied with --evals
+    while the inputs came from a file in the project. No request matched a case, a
+    redesign that took the agent from 0 of 6 finished requests to 4 of 6 had nothing to
+    be judged on, and it was undone."""
+    cases, _ = evals.load(pathlib.Path(supplied).resolve() if supplied else project)
     if cases:
         by_source = {}
         for case in cases:
             by_source.setdefault(case["source"], []).append(case["input"])
         source, texts = max(by_source.items(), key=lambda kv: len(kv[1]))
+        if supplied:
+            return _spread(texts), f"the eval cases you supplied, {pathlib.Path(source).name}"
         return _spread(texts), f"the team's eval cases, {pathlib.Path(source).relative_to(project)}"
+    if supplied:
+        raise Unstartable(f"no eval cases could be read from {supplied}. A case is an input and the answer expected for it")
     for f in sorted(project.rglob("*")):
         rel = f.relative_to(project)
         if f.suffix in (".jsonl", ".json") and re.search(r"input|question|prompt|quer", f.stem, re.I) \
@@ -358,9 +367,10 @@ def save(path, entry):
     path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
 
 
-def ensure(project, out, wanted=None, say=print):
+def ensure(project, out, wanted=None, say=print, supplied=None):
     """The proven entry for this project, settled now if it was not already.
-    Returns (path to the entry, the entry). Raises Unstartable."""
+    Returns (path to the entry, the entry). Raises Unstartable. `supplied` is a file or
+    folder of eval cases: its inputs are then the ones the agent is run on."""
     from fleetopt.drive import setup  # the two steps that need a model; imported late so tests can replace them
 
     project = pathlib.Path(project).resolve()
@@ -383,14 +393,21 @@ def ensure(project, out, wanted=None, say=print):
     if path.exists():
         entry = json.loads(path.read_text(encoding="utf-8"))
         if entry.get("proven") and pathlib.Path(entry["interpreter"]).exists():
+            asked = list(entry["inputs"])
+            if supplied:  # how it is started does not change; what it is asked does
+                entry["inputs"], entry["inputs_source"] = inputs_for(project, supplied)
+                save(path, entry)
             say(f"[fleetopt] agent: {name} ({entry['graph']}), {len(entry['inputs'])} inputs from {entry['inputs_source']}")
+            if entry["inputs"] != asked:
+                # a review of other requests is not a review of these. Not saved: true of this call only
+                entry = {**entry, "asked_anew": True}
             if entry.get("broken"):
                 say(f"[fleetopt] when it was last started no request finished. Its own failure: {entry['broken']}")
             return path, entry
 
     python, why = interpreter(project)
     _, env_file = declared(project)
-    inputs, source = inputs_for(project)
+    inputs, source = inputs_for(project, supplied)
     entry = {
         "adapter": "langgraph", "project": str(project), "name": name, "graph": spec,
         "paths": [".", "src"] if (project / "src").is_dir() else ["."],

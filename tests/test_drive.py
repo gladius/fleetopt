@@ -321,3 +321,24 @@ def test_an_agent_built_to_be_hosted_gets_a_store_and_its_context():
     plain = Hosted()
     assert driver.platform(plain, {}) == {} and plain.store is None  # nothing is handed to an agent that did not need it
     assert {"context", "store"} <= set(setup.ALLOWED)
+
+
+def test_eval_cases_that_are_supplied_are_what_the_agent_is_run_on(project, tmp_path, monkeypatch):
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text('{"input": "what is 17% of 2,340?", "expected": "397.8"}\n'
+                     '{"input": "draft an outreach email", "expected": "a short email"}\n', encoding="utf-8")
+    inputs, source = entry.inputs_for(project, cases)
+    assert inputs == ["what is 17% of 2,340?", "draft an outreach email"] and source == "the eval cases you supplied, cases.jsonl"
+    with pytest.raises(entry.Unstartable, match="no eval cases could be read"):
+        entry.inputs_for(project, tmp_path / "empty-folder-or-missing")
+
+    monkeypatch.setattr(entry, "preflight", lambda path, found: ([], {}))
+    monkeypatch.setattr(entry, "prove", lambda path, found: (True, ""))
+    out = tmp_path / "out"
+    _, first = entry.ensure(project, out, say=lambda line: None)                       # settled on the project's own inputs
+    assert not first.get("asked_anew")
+    _, found = entry.ensure(project, out, say=lambda line: None, supplied=cases)       # then cases arrive
+    assert found["inputs"] == inputs and found["asked_anew"] and found["proven"] == first["proven"]
+    _, again = entry.ensure(project, out, say=lambda line: None, supplied=cases)
+    assert again["inputs"] == inputs and not again.get("asked_anew")                   # the same cases: nothing is new
+    assert "asked_anew" not in json.loads(entry.path_for(out, project, first["name"]).read_text(encoding="utf-8"))

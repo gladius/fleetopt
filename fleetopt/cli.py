@@ -34,11 +34,13 @@ def _start(args):
     from fleetopt.drive import entry
 
     try:
-        path, found = entry.ensure(pathlib.Path(args.project).resolve(), pathlib.Path(args.out).resolve(), args.graph)
+        path, found = entry.ensure(pathlib.Path(args.project).resolve(), pathlib.Path(args.out).resolve(), args.graph,
+                                   supplied=getattr(args, "evals", None))
     except (entry.Unstartable, RuntimeError) as exc:
         print(f"[fleetopt] {exc}")
         return None
     args.agent = found.get("name") or found["graph"]
+    args.asked_anew = bool(found.get("asked_anew"))
     return entry.command(path, found)
 
 
@@ -114,7 +116,7 @@ def _captured(out, project, run_cmd, state):
     return row["label"] if row else None
 
 
-def _reviewed(project, out, run_cmd, max_usd, fresh=False):
+def _reviewed(project, out, run_cmd, max_usd, fresh=False, supplied=None):
     """The review of the code as it stands now: the saved one when the code has not
     changed since, a new one otherwise. Returns (record, new) or (None, False)."""
     from fleetopt.evidence import evals
@@ -163,9 +165,10 @@ def _reviewed(project, out, run_cmd, max_usd, fresh=False):
             return None, False
         print(f"\n--- structure, from the traces (label {label}) ---\n" + shape.render(facts))
 
-        cases, _ = evals.load(project)
+        cases, _ = evals.load(pathlib.Path(supplied).resolve() if supplied else project)
         purpose = ("What it is for: not stated - derive it from the README and the prompts. Eval cases: "
-                   + (f"{len(cases)} found in the repository" if cases else "none found in the repository"))
+                   + (f"{len(cases)} supplied with --evals, and the agent was run on their inputs" if supplied and cases
+                      else f"{len(cases)} found in the repository" if cases else "none found in the repository"))
         if failed:
             purpose += (f". NOTE: {failed} of {len(ids)} captured runs exited with an error, so the traces are "
                         "partial; say so, and treat the failure as the first finding")
@@ -238,7 +241,8 @@ def review(args):
     run_cmd = _start(args)
     if run_cmd is None:
         return 1
-    record, new = _reviewed(project, out, run_cmd, args.max_usd, fresh=args.fresh)
+    record, new = _reviewed(project, out, run_cmd, args.max_usd, fresh=args.fresh or args.asked_anew,
+                            supplied=args.evals)
     if record is None:
         return 1
     if not new:
@@ -246,7 +250,8 @@ def review(args):
               "Nothing was run, nothing was spent (--fresh runs it again)")
         print("\n--- review ---\n" + record["text"])
 
-    picked, left = chosen(record["findings"], None, bool(evals.load(project)[0]))
+    picked, left = chosen(record["findings"], None,
+                          bool(evals.load(pathlib.Path(args.evals).resolve() if args.evals else project)[0]))
     print("\n" + _level(record))
     print("\n--- what you can do next ---")
     if picked:
@@ -273,7 +278,8 @@ def apply(args):
     run_cmd = _start(args)
     if run_cmd is None:
         return 1
-    record, new = _reviewed(project, out, run_cmd, min(1.0, args.max_usd))
+    record, new = _reviewed(project, out, run_cmd, min(1.0, args.max_usd), fresh=args.asked_anew,
+                            supplied=args.evals)
     if record is None:
         return 1
     if not new:
@@ -350,8 +356,6 @@ def _parser():
     app.add_argument("--only", metavar="IDS",
                      help="try just these findings of the review and nothing else, e.g. C1,D2. Without it, "
                           "everything the review marked safe to try, then whatever those fixes uncover")
-    app.add_argument("--evals", help="file or folder of eval cases (input + expected answer): "
-                                     "JSONL/JSON or deepeval tests. Found automatically otherwise.")
     app.add_argument("--max-usd", type=float, default=5.0,
                      help="stop fleetopt's own session once its spend reaches this (default 5). "
                           "Does not cover the target's API calls.")
@@ -371,6 +375,10 @@ def _parser():
                           "target's API calls.")
     rev.set_defaults(fn=review)
 
+    for p in (app, rev):  # the same cases to look and to change, or the review saw other requests
+        p.add_argument("--evals", help="file or folder of eval cases (input + expected answer): JSONL/JSON or "
+                                       "deepeval tests. Their inputs are what the agent is run on. Found in "
+                                       "the project automatically otherwise.")
     for p in (app, cap, rev):
         p.add_argument("--graph", help="rarely needed: with several agents in a project fleetopt picks the one the "
                                        "team ships and says why. This overrides it: a name from its "

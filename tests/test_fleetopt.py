@@ -321,6 +321,7 @@ def test_out_is_accepted_before_and_after_the_subcommand():
     args = parse(["review", "repo"])
     assert (args.out, args.fresh, args.graph, args.max_usd, args.fn.__name__) == (".fleetopt", False, None, 1.0, "review")
     assert parse(["review", "repo", "--fresh", "--graph", "supervisor"]).graph == "supervisor"
+    assert parse(["review", "repo", "--evals", "cases.jsonl"]).evals == "cases.jsonl"  # the same cases to look and to change
     args = parse(["apply", "repo", "--only", "C1,D2"])
     assert (args.only, args.evals, args.max_usd, args.fn.__name__) == ("C1,D2", None, 5.0, "apply")
 
@@ -560,7 +561,7 @@ def _nothing_may_run(monkeypatch, state):
     def never(*a, **k):
         raise AssertionError("nothing may be run or spent here")
 
-    monkeypatch.setattr(cli, "_start", lambda args: "cmd")
+    monkeypatch.setattr(cli, "_start", lambda args: setattr(args, "asked_anew", False) or setattr(args, "agent", "a") or "cmd")
     monkeypatch.setattr(runner, "code_state", lambda project: state)
     monkeypatch.setattr(config, "auth_summary", lambda: "test")
     monkeypatch.setattr(review, "run", never)
