@@ -190,6 +190,9 @@ def test_the_reviewer_gets_no_network_only_local_references():
 def test_structural_patches_wait_for_eval_cases():
     guide = " ".join((session.PLUGIN / "skills" / "patterns" / "SKILL.md").read_text(encoding="utf-8").split())
     assert "only if the eval cases you loaded cover the path" in " ".join(session.DESIGN_ON.split())
+    design = [{"id": "D1", "title": "t", "kind": "redesign"}, {"id": "D2", "title": "t", "kind": "design"}]
+    assert cli.chosen(design, None, has_cases=False)[0] == []      # decided in code, before any session starts
+    assert cli.chosen(design, None, has_cases=True)[0] == design
     assert "only when eval cases are loaded" in guide
     assert "what must survive" in guide
 
@@ -214,7 +217,7 @@ def test_the_reviewer_covers_cost_and_design_and_measures_nothing():
     rules = " ".join(review.FORMAT.split())
     assert "never a measured saving" in rules
     assert "never hold a finding back" in rules  # caution goes on the risk line, not in a veto
-    assert set(review.APPLY_KINDS) == {"yes", "needs cases", "human decides"}
+    assert review.KINDS == ("cost", "design", "redesign")
 
 
 # --- the verdict belongs to the measurements, not to the agent that wants it --------------

@@ -51,11 +51,21 @@ and claims no saving: it saw one run. `apply` tries the findings on a new branch
 commit each, measures and judges each one, undoes what fails, and then looks again,
 because a fix often uncovers the next cost. The review is where it starts, not a fence.
 
-| A finding that is | `apply` does |
-|---|---|
-| cost (`C`): the graph keeps its nodes and edges | tries it, keeps it only if the saving clears the noise and the judge passes |
-| design, tier one (`D`): a node or edge removed, merged or rewired mechanically | tries it only when the team's eval cases exist and cover that path |
-| design, tier two (`D`): a redesign | nothing, unless a person names it with `--only`, and then only with eval cases |
+| A finding that is | `apply` tries it | and keeps it when |
+|---|---|---|
+| cost (`C`): the graph keeps its nodes and edges | always | the saving clears the noise and every request passes the judge |
+| design (`D`, tier one): a node or edge removed, merged or rewired mechanically | only when the team has eval cases | something got better and every request passes the judge |
+| redesign (`D`, tier two) | only when the team has eval cases | the same |
+
+**What the judge passes, per request:** where the team's eval case covers the request,
+the new answer is correct by that case (or both were wrong and the answer did not
+change); where no case covers it, the new answer is equivalent to the original. One
+failed request fails the change. Requiring equivalence everywhere made a design
+upgrade unprovable: a better design answers in other words.
+
+**The level** printed by every review is the largest kind of change it found: 0 fit,
+1 wasteful (cost), 2 over-built (design), 3 wrong shape (redesign), 4 broken (requests
+that do not finish). It is what a report across many agents would be sorted by.
 
 These rules are applied in code before the session starts. The reviewer says what
 kind of change a finding is and what could go wrong; it does not get to decide what is

@@ -51,9 +51,9 @@ saves the team a debate.
   for a structural change and removing a path removes capability for inputs the sample
   never contained. Without cases: report, and say which cases would unlock it.
 - **Tier two - redesign.** "These five agents should be one", "this should not be an
-  agent". Report with evidence. A human decides: it is attempted only when a person
-  names that finding, and only with eval cases loaded, because being equivalent to a
-  design that was wrong proves nothing.
+  agent". Report with evidence. It is attempted only with the team's eval cases
+  loaded, and judged on them, because being equivalent to a design that was wrong
+  proves nothing. A person reads the branch before anything is merged.
 
 ## Before recommending a redesign: what must survive
 

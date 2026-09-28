@@ -173,8 +173,33 @@ def test_judge_sessions_pairs_by_position_and_counts_correctness(tmp_path, monke
     assert not passed
     assert [r["equivalent"] for r in results] == [True, False]
     assert (correctness["matched"], correctness["baseline_pass"], correctness["candidate_pass"]) == (2, 2, 1)
+
+    # What passes, request by request. Reworded and still right by the team's case: passes.
+    reworded = captured([("capital of France?", "It is Paris"), ("2+2", "4")])
+
+    async def expected_contains(task, inputs, expected, output, model=None):
+        return {"pass": expected in output, "reason": "stub"}
+
+    monkeypatch.setattr(judge_mod, "judge_expected", expected_contains)
+    passed, results, _ = asyncio.run(judge_mod.judge_sessions(conn, "qa", base, reworded, cases))
+    assert passed and [r["equivalent"] for r in results] == [False, True]
+    assert results[0]["kept_on"] == "correct on the team's case"
+    # The same rewording with no case to say it is right: nothing to go on but the old answer.
+    passed, results, _ = asyncio.run(judge_mod.judge_sessions(conn, "qa", base, reworded))
+    assert not passed and results[0]["kept_on"] is None
+    # Both wrong: unchanged is no worse, a different wrong answer is not evidence of anything.
+    wrong = captured([("capital of France?", "Lyon"), ("2+2", "4")])
+    assert asyncio.run(judge_mod.judge_sessions(conn, "qa", wrong, captured([("capital of France?", "Lyon"), ("2+2", "4")]), cases))[0]
+    assert not asyncio.run(judge_mod.judge_sessions(conn, "qa", wrong, captured([("capital of France?", "Nice"), ("2+2", "4")]), cases))[0]
+    # It was right and now it is not: fails, however alike a judge finds the two.
+    monkeypatch.setattr(judge_mod, "judge", lambda *a, **k: _always_equivalent())
+    assert not asyncio.run(judge_mod.judge_sessions(conn, "qa", base, captured([("capital of France?", "Lyon"), ("2+2", "4")]), cases))[0]
     with pytest.raises(RuntimeError, match="different number"):
         asyncio.run(judge_mod.judge_sessions(conn, "qa", base, captured([("x", "y")])))
+
+
+async def _always_equivalent():
+    return {"equivalent": True, "reason": "stub"}
 
 
 # --- small things that each broke a real run once ---------------------------------
@@ -481,11 +506,14 @@ change: none - there is no stable prefix
 
 def test_what_may_be_tried_is_a_rule_not_the_reviewers_opinion():
     found = review.findings(REPORT)
-    assert [(f["id"], f["apply"]) for f in found] == [
-        ("C1", "yes"), ("C2", "yes"),            # cost is tried, however cautious the reviewer felt about it
-        ("D1", "human decides"), ("D2", "needs cases"),
-        ("D3", "human decides")]                 # a design finding without a readable tier is left to a person
+    assert [(f["id"], f["kind"]) for f in found] == [
+        ("C1", "cost"), ("C2", "cost"),          # cost stays cost, however cautious the reviewer felt about it
+        ("D1", "redesign"), ("D2", "design"),
+        ("D3", "redesign")]                      # a design finding without a readable tier is taken as the larger change
     assert "C3" not in {f["id"] for f in found}  # something checked and cleared is not a finding to try
+    assert review.level(found) == 3 and review.LEVELS[3] == "wrong shape"
+    assert review.level(found[:2]) == 1 and review.level([]) == 0
+    assert review.level([], unfinished=2) == 4   # an agent that does not finish its requests comes before everything
     assert found[0]["title"] == "System prompt is never cached"
     assert review.findings("Nothing here has a number.") == []
 
@@ -494,10 +522,10 @@ def test_what_apply_tries_is_decided_in_code_not_by_the_session():
     found = review.findings(REPORT)
     ids = lambda picked: [f["id"] for f in picked]
     picked, left = cli.chosen(found, None, has_cases=True)
-    assert ids(picked) == ["C1", "C2", "D2"] and "D1" in left[0]    # a redesign is never tried unasked
+    assert ids(picked) == ["C1", "C2", "D1", "D2", "D3"] and not left   # the team's cases judge a design change
     picked, left = cli.chosen(found, None, has_cases=False)
-    assert ids(picked) == ["C1", "C2"] and "no eval cases" in " ".join(left)  # no cases, no change to the design
-    assert ids(cli.chosen(found, "d1, c1", has_cases=True)[0]) == ["C1", "D1"]  # a person named it
+    assert ids(picked) == ["C1", "C2"] and "no eval cases" in left[0] and "D1" in left[0]  # no cases, no change to the design
+    assert ids(cli.chosen(found, "d1, c1", has_cases=True)[0]) == ["C1", "D1"]  # a fence: these and no others
     assert ids(cli.chosen(found, "D1", has_cases=False)[0]) == []
     with pytest.raises(ValueError, match="no finding C9"):
         cli.chosen(found, "C1,C9", has_cases=True)
@@ -532,6 +560,7 @@ def test_a_review_is_reused_while_the_code_has_not_changed(tmp_path, capsys, mon
     text = capsys.readouterr().out
     assert "has not changed since the review" in text and "C1 - System prompt is never cached" in text
     assert f"fleetopt apply {project}" in text and "D1 (Hand-built agent loop)" in text
+    assert "level 3 of 4, wrong shape: 2 cost, 1 design, 2 redesign" in text
     assert review.saved(out, project, "cmd", "abc+2") is None       # the code moved: that review no longer answers
     assert review.saved(out, project, "other agent", "abc+1") is None  # and it was a review of one agent, not the project
 

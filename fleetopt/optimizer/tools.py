@@ -172,9 +172,10 @@ async def compare(args):
 
 @tool(
     "judge",
-    "Check the optimized agent still answers the same. Runs as an isolated call "
-    "that sees only the task and the two outputs - not your patch or reasoning. "
-    "A cost saving with a failed judge is a regression.",
+    "Check the changed agent still answers as well. Runs as isolated calls that see "
+    "only the task and the outputs - not your patch or reasoning. A request passes "
+    "when its answer is correct by the team's eval case, or, where no case covers it, "
+    "when it is equivalent to the original answer. One failed request fails the change.",
     {"task": str, "baseline": str, "candidate": str},
 )
 async def judge(args):
@@ -189,8 +190,9 @@ async def judge(args):
     b, c = _state(base), _state(cand)
     _record("judge", baseline=args["baseline"], candidate=args["candidate"],
             passed=passed, equivalence=results, correctness=correctness, baseline_state=b, candidate_state=c)
-    lines = [sides(args["baseline"], args["candidate"], b, c), "", "equivalence (output unchanged?):"]
-    lines += [f"  [{'PASS' if r['equivalent'] else 'FAIL'}] {r['reason']}" for r in results]
+    lines = [sides(args["baseline"], args["candidate"], b, c), "", "per request (what it passed on):"]
+    lines += [f"  [{'PASS: ' + r['kept_on'] if r['kept_on'] else 'FAIL'}] "
+              f"{'unchanged' if r['equivalent'] else 'changed'}: {r['reason']}" for r in results]
     if correctness:
         m = correctness["matched"]
         lines.append(f"\ncorrectness against the team's eval cases ({correctness['cases']} loaded, {m} matched a captured run):")
@@ -199,7 +201,7 @@ async def judge(args):
         if m < correctness["cases"]:
             lines.append(f"  {correctness['cases'] - m} cases were not exercised by the run command and could not be graded.")
     else:
-        lines.append("\ncorrectness: not checked - no eval cases loaded. This verdict means unchanged, not correct.")
+        lines.append("\ncorrectness: not checked - no eval cases loaded. A pass here means unchanged, not correct.")
     lines.append(f"\nverdict: {'PASSED' if passed else 'FAILED'} ({len(results)} invocations)")
     return _ok("\n".join(lines))
 

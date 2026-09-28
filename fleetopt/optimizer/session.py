@@ -58,8 +58,9 @@ so it is where you start, not the last word. Try these findings first, in this o
    - measure under a label that starts with the id, compare it with the code just
      before it to see what this finding did on its own, and judge it against the
      baseline;
-   - if the saving is within noise or the judge fails, undo the commit with
-     git reset --hard HEAD~1 before you go on, and report the finding as not proven;
+   - if nothing got better (cost, time and finished requests all within noise) or
+     the judge fails, undo the commit with git reset --hard HEAD~1 before you go
+     on, and report the finding as not proven;
    - if the baseline contradicts the finding, skip it and give the number that does.
 5. {after}
 6. If more than one change is left standing, measure and judge the code as you leave
@@ -90,10 +91,13 @@ LOOK_AGAIN = """Then look again. Query the traces of the code as it now stands: 
 ONLY_THESE = """Stop there. A person chose exactly these findings. If you notice anything else,
    say so at the end and leave it alone."""
 
-DESIGN_ON = """Findings marked "needs cases" or "human decides" change the design, not just its cost.
-Try one only if the eval cases you loaded cover the path it touches; if they do not,
-skip it and say which cases would unlock it. For a redesign, first list what must
-survive (see fleetopt:patterns) and keep every item on it."""
+DESIGN_ON = """The D findings change the design, not just its cost. The team has eval cases, which is
+why you were given them: the judge grades a design change on those cases, since a
+different design will not word its answers like the old one. Try a D finding only if
+the eval cases you loaded cover the path it touches; if they do not, skip it and say
+which cases would unlock it. For a redesign, first list what must survive (see
+fleetopt:patterns) and keep every item on it. An agent that does not finish its
+requests is fixed before it is made cheaper."""
 
 DESIGN_OFF = "None of the findings you were given changes the design. Keep the design as it is."
 
@@ -241,10 +245,11 @@ def verdict(events, final=None, start=None):
 
     def detail(e):
         ok = sum(bool(r["equivalent"]) for r in e["equivalence"])
-        text = f"{e['candidate']}: equivalence {ok}/{len(e['equivalence'])}"
+        text = f"{e['candidate']}: answers unchanged {ok}/{len(e['equivalence'])}"
         c = e.get("correctness")
         if c:
-            return text + f", correctness {c['baseline_pass']}/{c['matched']} before and {c['candidate_pass']}/{c['matched']} after"
+            return text + (f", correct on the team's cases {c['baseline_pass']}/{c['matched']} before and "
+                           f"{c['candidate_pass']}/{c['matched']} after")
         return text + ", correctness not checked (no eval cases)"
 
     details = "; ".join(detail(e) for e in judged)
@@ -327,7 +332,7 @@ async def run(project, out_dir, run_cmd, review, findings, model=None, max_turns
                       "events": [], "model": model, "run_dir": run_dir})
     tools.CTX.pop("baseline_state", None)
     tools.CTX.pop("eval_cases", None)
-    design = any(f["apply"] != "yes" for f in findings)
+    design = any(f["kind"] != "cost" for f in findings)
     mission = MISSION.format(ids=", ".join(f["id"] for f in findings) or "none: the review listed nothing to try",
                              review=review, after=ONLY_THESE if fenced else LOOK_AGAIN,
                              design=DESIGN_ON if design else DESIGN_OFF)

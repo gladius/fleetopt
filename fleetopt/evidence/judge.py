@@ -137,6 +137,14 @@ async def judge_sessions(conn, task, baseline_session, candidate_session, cases=
     grade both sides against the expected answer for every run whose input matches
     a case. Returns (passed, equivalence_results, correctness_or_None).
 
+    What passes, per request. Where the team has said what a correct answer is, that is
+    the test: the new answer is correct, or both were wrong and the answer did not
+    change. Where nobody has, the only evidence is the old answer, so the new one must
+    be equivalent to it. Requiring equivalence everywhere made a change of design
+    unprovable: a better design answers in other words, and a broken one has no right
+    answer to be equivalent to (observed: team's cases 4/4 before and after, failed on
+    2 of 4 answers worded differently).
+
     Pairs by position, not by matching the input text. Real agents thread
     generated ids through their state - message uuids, thread ids, timestamps -
     so two runs of the same command produce inputs that never compare equal. Both
@@ -173,12 +181,15 @@ async def judge_sessions(conn, task, baseline_session, candidate_session, cases=
         verdict["input"] = (agent_input or "")[:120]
         results.append(verdict)
 
+    for r in results:
+        r["kept_on"] = "unchanged answer" if r["equivalent"] else None
+
     correctness = None
     if cases:
         from fleetopt.evidence import evals as evals_mod
 
         rows = []
-        for (agent_input, baseline_out), (_, candidate_out) in zip(before, after):
+        for result, (agent_input, baseline_out), (_, candidate_out) in zip(results, before, after):
             case = evals_mod.match(cases, agent_input)
             if case is None:
                 continue
@@ -190,6 +201,10 @@ async def judge_sessions(conn, task, baseline_session, candidate_session, cases=
                 "candidate_pass": c["pass"],
                 "reason": c["reason"],
             })
+            if c["pass"]:
+                result["kept_on"] = "correct on the team's case"
+            elif b["pass"]:
+                result["kept_on"] = None  # it was right and now it is not, however alike the two read
         correctness = {
             "cases": len(cases),
             "matched": len(rows),
@@ -198,7 +213,4 @@ async def judge_sessions(conn, task, baseline_session, candidate_session, cases=
             "rows": rows,
         }
 
-    passed = all(r["equivalent"] for r in results) and (
-        correctness is None or correctness["candidate_pass"] >= correctness["baseline_pass"]
-    )
-    return passed, results, correctness
+    return all(r["kept_on"] for r in results), results, correctness

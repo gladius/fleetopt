@@ -75,10 +75,9 @@ C or D is a fact about the change, not a judgement of its risk:
   (hardwire a branch always taken, drop a round that never changes anything, merge two
   calls, turn a fixed-order supervisor into edges). Tier two is a redesign.
 What happens to a finding afterwards is fleetopt's rule, not yours: a C finding is
-tried; a tier-one finding is tried only with the team's eval cases; a tier-two finding
-only when a person names it. Every change that is tried is measured and judged against
-the original answers before it is kept, and a person reads the branch before anything
-is merged. So never hold a finding back, or move it from C to D, because it feels
+tried; a D finding of either tier is tried only when the team has eval cases, and is
+judged on them. Every change that is tried is measured and judged before it is kept,
+and a person reads the branch before anything is merged. So never hold a finding back, or move it from C to D, because it feels
 risky: say what could go wrong on the risk line.
 Number the findings in the order you would apply them, largest effect first. The same
 change is one finding, not a C and a D. A pattern that fits is not a finding: it goes
@@ -100,20 +99,20 @@ SYSTEM = (
 READ_ONLY = ["Read", "Grep", "Glob", "mcp__fleetopt__graph_shape",
              "mcp__fleetopt__graph_topology", "mcp__fleetopt__query_traces"]
 
-APPLY_KINDS = ("yes", "needs cases", "human decides")
+KINDS = ("cost", "design", "redesign")
+LEVELS = ("fit", "wasteful", "over-built", "wrong shape", "broken")
 _FINDING = re.compile(r"^#{2,4}\s*\**([CD]\d+)\**\s*[-:\u2013\u2014]\s*(.+?)\s*$", re.M)
 _TIER = re.compile(r"^\W*tier\W*:\W*(one|two|1|2)\b", re.M | re.I)
 _NO_CHANGE = re.compile(r"^\W*change\W*:\W*(none|nothing|n/?a)\b", re.M | re.I)
 
 
 def findings(report):
-    """The numbered findings of a report: [{id, title, apply}].
+    """The numbered findings of a report: [{id, title, kind}].
 
-    What may be tried is a rule applied here, not an opinion of the reviewer's
-    (observed: left to choose, a reviewer marked every cost finding "needs cases" and
-    nothing was tried). Cost is tried. A mechanical change to the design needs the
-    team's cases. A redesign, or a design finding whose tier cannot be read, is left
-    to a person."""
+    The kind is read off the report by rule, and what may be tried follows from the
+    kind in cli.chosen, not from an opinion of the reviewer's (observed: left to
+    choose, a reviewer marked every cost finding "needs cases" and nothing was tried).
+    A design finding whose tier cannot be read is taken as the larger change."""
     parts = _FINDING.split(report)  # [before, id, title, body, id, title, body, ...]
     found = []
     for i in range(1, len(parts) - 2, 3):
@@ -121,11 +120,19 @@ def findings(report):
             continue
         name, tier = parts[i].upper(), _TIER.search(parts[i + 2])
         if name.startswith("C"):
-            kind = "yes"
+            kind = "cost"
         else:
-            kind = "needs cases" if tier and tier.group(1).lower() in ("one", "1") else "human decides"
-        found.append({"id": name, "title": parts[i + 1].strip("* "), "apply": kind})
+            kind = "design" if tier and tier.group(1).lower() in ("one", "1") else "redesign"
+        found.append({"id": name, "title": parts[i + 1].strip("* "), "kind": kind})
     return found
+
+
+def level(found, unfinished=0):
+    """How far the agent is from where it should be, 0 to 4: the largest kind of change
+    the review found, and above them all an agent that does not finish its requests."""
+    if unfinished:
+        return 4
+    return max([KINDS.index(f["kind"]) + 1 for f in found], default=0)
 
 
 def _pointer(out, project, run_cmd):
@@ -134,9 +141,10 @@ def _pointer(out, project, run_cmd):
     return entry.path_for(out, project, "review-" + hashlib.sha1(run_cmd.encode()).hexdigest()[:8])
 
 
-def remember(out, project, run_cmd, state, label, run_dir, found):
+def remember(out, project, run_cmd, state, label, run_dir, found, unfinished=0):
     """Note which code the newest review of this agent was made on. Returns the note."""
     record = {"code_state": state, "label": label, "run_dir": str(run_dir), "findings": found,
+              "unfinished": unfinished, "level": level(found, unfinished),
               "when": datetime.datetime.now().isoformat(sep=" ", timespec="minutes")}
     path = _pointer(out, project, run_cmd)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -157,7 +165,8 @@ def saved(out, project, run_cmd, state):
     if state is not None and record["code_state"] != state:
         return None
     report = text.read_text(encoding="utf-8")
-    return {**record, "text": report, "findings": findings(report)}  # the report is the record; the rule may have moved
+    found = findings(report)  # the report is the record; the rule may have moved
+    return {**record, "text": report, "findings": found, "level": level(found, record.get("unfinished", 0))}
 
 
 async def run(project, label, purpose, model=None, max_usd=1.0):

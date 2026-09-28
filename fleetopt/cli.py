@@ -102,11 +102,14 @@ def _reviewed(project, out, run_cmd, max_usd, fresh=False):
         if not ids:
             print(f"[fleetopt] nothing captured under {label!r} for this project - nothing to review")
             return None, False
+        marks = ",".join("?" * len(ids))
         with store.connect(out / "fleetopt.db") as conn:
             facts = shape.analyze(conn, ids)
             failed = conn.execute(
-                f"SELECT COUNT(*) FROM sessions WHERE exit_code != 0 AND id IN ({','.join('?' * len(ids))})",
-                ids).fetchone()[0]
+                f"SELECT COUNT(*) FROM sessions WHERE exit_code != 0 AND id IN ({marks})", ids).fetchone()[0]
+            unfinished = conn.execute(
+                "SELECT COUNT(*) FROM runs WHERE parent_run_id IS NULL AND (error IS NOT NULL OR outputs IS NULL)"
+                f" AND session_id IN ({marks})", ids).fetchone()[0]
         if not facts["traces"]:
             # Observed: an agent that failed at import, and a reviewer session spent
             # describing a graph that never ran.
@@ -136,42 +139,46 @@ def _reviewed(project, out, run_cmd, max_usd, fresh=False):
     (run_dir / "review.md").write_text(text + "\n", encoding="utf-8")
     (run_dir / "run.json").write_text(json.dumps({
         "kind": "review", "project": str(project), "run_cmd": run_cmd, "label": label, "code_state": state,
-        "model": model, "reviewer_cost_usd": cost, "findings": found, "shape": facts,
-        "events": tools.CTX["events"],
+        "model": model, "reviewer_cost_usd": cost, "findings": found, "unfinished": unfinished,
+        "level": review_mod.level(found, unfinished), "shape": facts, "events": tools.CTX["events"],
     }, indent=1, default=str), encoding="utf-8")
-    record = review_mod.remember(out, project, run_cmd, state, label, run_dir, found)
+    record = review_mod.remember(out, project, run_cmd, state, label, run_dir, found, unfinished)
     print("\n--- review ---\n" + text)
     print(f"\n--- reviewer ${cost or 0:.4f} ---\n[fleetopt] run record: {run_dir}")
     return {**record, "text": text}, True
 
 
-def _named(found, kinds):
-    return ", ".join(f"{f['id']} ({f['title']})" for f in found if f["apply"] in kinds)
+def _named(found):
+    return ", ".join(f"{f['id']} ({f['title']})" for f in found)
 
 
 def chosen(found, only, has_cases):
     """(the findings apply will try, why the others are left). Decided here, in code:
-    a change to the design is never tried without the team's eval cases, and a
-    redesign never unless a person named it."""
-    left = []
+    a change to the design, small or large, is tried only when the team has eval cases
+    to judge it on. Without them the only evidence would be the old answers, and a
+    different design does not give the old answers."""
     if only:
         ids = [i.strip().upper() for i in only.split(",") if i.strip()]
         unknown = [i for i in ids if i not in {f["id"] for f in found}]
         if unknown:
             raise ValueError(f"the review has no finding {', '.join(unknown)}. It has: "
                              f"{', '.join(f['id'] for f in found) or 'none'}")
-        picked = [f for f in found if f["id"] in ids]
-    else:
-        picked = [f for f in found if f["apply"] != "human decides"]
-        if len(picked) < len(found):
-            left.append(f"for a person to decide, tried only when named with --only: {_named(found, ('human decides',))}")
-    if not has_cases:
-        design = [f for f in picked if f["apply"] != "yes"]
-        if design:
-            left.append("they change the design and this project has no eval cases to check the answers against "
-                        f"(--evals supplies them): {_named(design, ('needs cases', 'human decides'))}")
-        picked = [f for f in picked if f["apply"] == "yes"]
-    return picked, left
+        found = [f for f in found if f["id"] in ids]
+    if has_cases:
+        return found, []
+    design = [f for f in found if f["kind"] != "cost"]
+    left = [f"they change the design and this project has no eval cases to judge the answers on "
+            f"(--evals supplies them): {_named(design)}"] if design else []
+    return [f for f in found if f["kind"] == "cost"], left
+
+
+def _level(record):
+    from fleetopt.optimizer import review as review_mod
+
+    kinds = [f["kind"] for f in record["findings"]]
+    counts = ", ".join(f"{kinds.count(k)} {k}" for k in review_mod.KINDS if k in kinds) or "no findings"
+    broken = f"; {record['unfinished']} request(s) did not finish" if record.get("unfinished") else ""
+    return f"[fleetopt] level {record['level']} of 4, {review_mod.LEVELS[record['level']]}: {counts}{broken}"
 
 
 def review(args):
@@ -194,10 +201,11 @@ def review(args):
         print("\n--- review ---\n" + record["text"])
 
     picked, left = chosen(record["findings"], None, bool(evals.load(project)[0]))
+    print("\n" + _level(record))
     print("\n--- what you can do next ---")
     if picked:
         print(f"fleetopt apply {args.project}")
-        print(f"  tries, on a new branch, one commit each: {_named(picked, ('yes', 'needs cases'))}")
+        print(f"  tries, on a new branch, one commit each: {_named(picked)}")
         print("  then looks again for what the first fixes uncover. --only C1,D2 tries just those and stops")
     else:
         print("The review found nothing for `fleetopt apply` to try on its own.")
@@ -236,8 +244,8 @@ def apply(args):
     if not picked:
         print("[fleetopt] nothing to try, so the agent was not run again and nothing was changed.")
         return 1 if args.only else 0
-    print(f"[fleetopt] trying: {_named(picked, ('yes', 'needs cases', 'human decides'))}"
-          + ("; only these" if args.only else "; then looking again"))
+    print(_level(record))
+    print(f"[fleetopt] trying: {_named(picked)}" + ("; only these" if args.only else "; then looking again"))
 
     print(f"[fleetopt] auth: {config.auth_summary() or 'unknown (could not run auth status)'}")
     return asyncio.run(
