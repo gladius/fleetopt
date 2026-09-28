@@ -10,7 +10,6 @@
     --accent: #0B6E69;
     --accent-soft: #DDEFEC;
     --warn: #8F5600;
-    --stop: #A5392B;
     --l0: #0B6E69; --l1: #5E8B3A; --l2: #A98312; --l3: #B8601C; --l4: #A5392B;
     --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
     --body: "Source Sans 3", "Segoe UI", Helvetica, Arial, sans-serif;
@@ -20,290 +19,156 @@
     :root:not([data-theme="light"]) {
       color-scheme: dark;
       --ground: #0E191E; --surface: #15242B; --ink: #E7EFF2; --muted: #9DB2BC; --line: #2A3E48;
-      --accent: #55C7BC; --accent-soft: #143A38; --warn: #E2AB50; --stop: #EA8775;
+      --accent: #55C7BC; --accent-soft: #143A38; --warn: #E2AB50;
       --l0: #55C7BC; --l1: #9CCB73; --l2: #E3C052; --l3: #EE9A5B; --l4: #EA8775;
     }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
     --ground: #0E191E; --surface: #15242B; --ink: #E7EFF2; --muted: #9DB2BC; --line: #2A3E48;
-    --accent: #55C7BC; --accent-soft: #143A38; --warn: #E2AB50; --stop: #EA8775;
+    --accent: #55C7BC; --accent-soft: #143A38; --warn: #E2AB50;
     --l0: #55C7BC; --l1: #9CCB73; --l2: #E3C052; --l3: #EE9A5B; --l4: #EA8775;
   }
 
-  body {
-    background: var(--ground);
-    color: var(--ink);
-    font-family: var(--body);
-    font-size: 18px;
-    line-height: 1.55;
-  }
+  body { background: var(--ground); color: var(--ink); font-family: var(--body); font-size: 18px; line-height: 1.45; }
   .page {
-    max-width: 940px;
-    margin-inline: auto;
-    padding-inline: 20px;
-    padding-block: 48px 72px;
-    display: flex;
-    flex-direction: column;
-    gap: 64px;
+    max-width: 1000px; margin-inline: auto; padding-inline: 20px; padding-block: 44px 56px;
+    display: flex; flex-direction: column; gap: 52px;
   }
-  h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; }
-  h1 { font-size: clamp(2.6rem, 7vw, 4rem); font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
-  h2 { font-size: 1.6rem; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; }
-  h3 { font-size: 1.05rem; font-weight: 600; }
-  p { margin: 0; max-width: 65ch; }
-  .label {
-    font-family: var(--display);
-    font-size: 0.78rem;
-    font-weight: 600;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: var(--muted);
+  h1, h2, h3 { font-family: var(--display); margin: 0; text-wrap: balance; }
+  h1 { font-size: clamp(2.8rem, 8vw, 4.4rem); font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
+  h2 {
+    font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
   }
-  section { display: flex; flex-direction: column; gap: 22px; }
-  .lede { font-size: 1.35rem; line-height: 1.45; max-width: 34em; }
-  .muted { color: var(--muted); }
+  p { margin: 0; }
+  section { display: flex; flex-direction: column; gap: 20px; }
 
-  /* opening */
-  .opening { gap: 18px; padding-bottom: 40px; border-bottom: 1px solid var(--line); }
-  .command {
-    font-family: var(--mono);
-    font-size: 1rem;
-    align-self: flex-start;
-    max-width: 100%;
-    overflow-x: auto;
-    white-space: nowrap;
-    background: var(--ink);
-    color: var(--ground);
-    padding: 10px 16px;
-    border-radius: 4px;
-  }
+  .opening { gap: 14px; }
+  .lede { font-size: clamp(1.25rem, 3vw, 1.6rem); line-height: 1.35; max-width: 26em; }
 
-  /* why */
-  .reasons { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 28px; }
-  .reasons p { font-size: 1.05rem; }
-  .reasons strong { display: block; font-family: var(--display); font-weight: 600; margin-bottom: 4px; }
-
-  /* the seven steps: a real sequence, so it is numbered */
-  .steps {
-    list-style: none; margin: 0; padding: 0;
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0;
-    border-top: 2px solid var(--ink);
-    border-bottom: 1px solid var(--line);
-    counter-reset: step;
+  /* the flow */
+  .flow { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(6, 1fr); counter-reset: step; }
+  .flow li {
+    counter-increment: step; position: relative;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-right: 14px;
   }
-  .steps li {
-    counter-increment: step;
-    padding: 18px 20px 22px 0;
-    margin-bottom: -1px;
-    border-bottom: 1px solid var(--line);
-    display: flex; flex-direction: column; gap: 6px;
-  }
-  .steps li::before {
+  .flow li::before {
     content: counter(step);
-    font-family: var(--mono); font-size: 0.85rem; font-weight: 500;
-    color: var(--accent);
+    width: 44px; height: 44px; border-radius: 50%;
+    display: grid; place-items: center;
+    font-family: var(--mono); font-weight: 500; font-size: 1rem;
+    background: var(--ink); color: var(--ground);
+    position: relative; z-index: 1;
   }
-  .steps h3 { font-size: 1.2rem; }
-  .steps p { font-size: 0.98rem; color: var(--muted); }
+  .flow li::after {
+    content: ""; position: absolute; top: 21px; left: 44px; right: 0; height: 2px; background: var(--line);
+  }
+  .flow li:last-child::after { display: none; }
+  .flow li.loop::before { background: var(--accent); }
+  .flow h3 { font-size: 1.15rem; font-weight: 600; }
+  .flow span { font-size: 0.95rem; color: var(--muted); }
+  .again {
+    display: grid; grid-template-columns: repeat(6, 1fr);
+  }
+  .again div {
+    grid-column: 4 / span 2; margin-right: 14px;
+    border: 2px solid var(--accent); border-top: 0; height: 14px;
+  }
+  .again p {
+    grid-column: 4 / span 2; font-size: 0.9rem; color: var(--accent); font-weight: 600; padding-top: 6px;
+  }
+  @media (max-width: 760px) {
+    .flow { grid-template-columns: 1fr; gap: 18px; }
+    .flow li { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 4px 14px; padding-left: 58px; min-height: 44px; }
+    .flow li::before { position: absolute; left: 0; top: 0; }
+    .flow li::after { top: 44px; left: 21px; right: auto; width: 2px; height: calc(100% - 26px); }
+    .flow h3 { width: 100%; }
+    .again { grid-template-columns: 1fr; }
+    .again div { display: none; }
+    .again p { grid-column: 1; padding-left: 58px; }
+  }
 
-  /* the level scale */
+  /* the level */
   .scale { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
-  .scale div { height: 12px; }
-  .scale .s0 { background: var(--l0); } .scale .s1 { background: var(--l1); }
-  .scale .s2 { background: var(--l2); } .scale .s3 { background: var(--l3); }
-  .scale .s4 { background: var(--l4); }
-  .levels { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
-  .levels li { display: flex; flex-direction: column; gap: 4px; padding-right: 14px; }
-  .levels .n { font-family: var(--mono); font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .levels p { font-size: 0.95rem; color: var(--muted); }
-  @media (max-width: 720px) {
-    .scale { display: none; }
-    .levels { grid-template-columns: 1fr; gap: 16px; }
-    .levels li { padding: 0 0 0 14px; border-left: 4px solid var(--line); }
-    .levels li:nth-child(1) { border-color: var(--l0); } .levels li:nth-child(2) { border-color: var(--l1); }
-    .levels li:nth-child(3) { border-color: var(--l2); } .levels li:nth-child(4) { border-color: var(--l3); }
-    .levels li:nth-child(5) { border-color: var(--l4); }
+  .scale div { display: flex; flex-direction: column; gap: 8px; }
+  .scale i { display: block; height: 14px; }
+  .scale b { font-family: var(--display); font-weight: 600; font-size: 1.05rem; }
+  .scale small { font-family: var(--mono); font-size: 0.85rem; color: var(--muted); }
+  .scale div:nth-child(1) i { background: var(--l0); } .scale div:nth-child(2) i { background: var(--l1); }
+  .scale div:nth-child(3) i { background: var(--l2); } .scale div:nth-child(4) i { background: var(--l3); }
+  .scale div:nth-child(5) i { background: var(--l4); }
+  @media (max-width: 520px) { .scale b { font-size: 0.85rem; } }
+
+  /* safe */
+  .safe { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .safe li {
+    background: var(--surface); border: 1px solid var(--line); padding: 18px 20px;
+    font-family: var(--display); font-weight: 600; font-size: 1.1rem; line-height: 1.3;
   }
 
-  /* rules */
-  .rules { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px 40px; }
-  .rules li { padding-left: 22px; position: relative; max-width: 46ch; }
-  .rules li::before { content: ""; position: absolute; left: 0; top: 0.62em; width: 9px; height: 9px; background: var(--accent); }
+  /* today */
+  .today { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 24px 32px; }
+  .today div { display: flex; flex-direction: column; gap: 2px; border-top: 2px solid var(--ink); padding-top: 12px; }
+  .today strong { font-family: var(--display); font-weight: 700; font-size: 3rem; line-height: 1; font-variant-numeric: tabular-nums; }
+  .today .open { border-color: var(--warn); }
+  .today .open strong { color: var(--warn); }
+  .today span { color: var(--muted); font-size: 1rem; }
+  .note { background: var(--accent-soft); padding: 14px 18px; font-size: 1.05rem; align-self: flex-start; }
 
-  /* give and get */
-  .exchange { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 32px 48px; }
-  .exchange ul, .status ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
-  .exchange li { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
-  .exchange > div, .status > div { display: flex; flex-direction: column; gap: 14px; }
-
-  .record { display: flex; flex-direction: column; gap: 8px; }
-  pre.summary {
-    margin: 0;
-    font-family: var(--mono); font-size: 0.9rem; line-height: 1.7;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    padding: 18px 20px;
-    overflow-x: auto;
-    font-variant-numeric: tabular-nums;
-  }
-  pre.summary b { font-weight: 500; color: var(--muted); }
-
-  /* status */
-  .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 32px 48px; }
-  .status li { padding-left: 24px; position: relative; }
-  .status li::before { content: ""; position: absolute; left: 0; top: 0.5em; width: 11px; height: 11px; border-radius: 50%; box-sizing: border-box; }
-  .status .shown li::before { background: var(--accent); }
-  .status .open li::before { border: 2px solid var(--warn); }
-  .status .open h3 { color: var(--warn); }
-  .status .shown h3 { color: var(--accent); }
-  .plain {
-    background: var(--accent-soft);
-    padding: 18px 22px;
-    font-size: 1.05rem;
-    max-width: 65ch;
-  }
-
-  /* next */
-  .next { list-style: none; margin: 0; padding: 0; counter-reset: next; display: flex; flex-direction: column; }
-  .next li { counter-increment: next; display: grid; grid-template-columns: 2.2em 1fr; padding-block: 12px; border-bottom: 1px solid var(--line); }
-  .next li::before { content: counter(next); font-family: var(--mono); font-size: 0.85rem; color: var(--muted); padding-top: 0.25em; }
-  .next strong { font-family: var(--display); font-weight: 600; }
-
-  footer { border-top: 1px solid var(--line); padding-top: 20px; font-size: 0.9rem; color: var(--muted); }
+  footer { border-top: 1px solid var(--line); padding-top: 16px; font-size: 0.85rem; color: var(--muted); }
 </style>
 
 <div class="page">
 
   <section class="opening">
-    <span class="label">Central AI team &middot; briefing</span>
+    <h2>Central AI team</h2>
     <h1>fleetopt</h1>
-    <p class="lede">It checks the AI agents our teams build, finds where they waste money or are more complicated than the job needs, fixes what it can prove, and leaves the decision to the team.</p>
-    <div class="command">fleetopt apply &lt;the team's project&gt;</div>
-    <p class="muted">One command. It runs from start to finish without anyone watching.</p>
+    <p class="lede">Finds waste in our AI agents, fixes what it can prove, and leaves the decision to the team.</p>
   </section>
 
   <section>
-    <span class="label">Why it exists</span>
-    <div class="reasons">
-      <p><strong>Every agent costs money each time it runs.</strong>Teams across the company build them. Small waste in one agent becomes a large bill across hundreds.</p>
-      <p><strong>Many are built bigger than the job.</strong>Several agents talking to each other where one would do. Steps that never change the answer.</p>
-      <p><strong>Nobody can review them all by hand.</strong>A central team can look closely at a few. It cannot look at thousands.</p>
+    <h2>How it works &middot; one command, nobody driving</h2>
+    <ol class="flow">
+      <li><h3>Start</h3><span>Finds the agent</span></li>
+      <li><h3>Watch</h3><span>Records a run</span></li>
+      <li><h3>Review</h3><span>Finds the waste</span></li>
+      <li class="loop"><h3>Change</h3><span>One fix, on a copy</span></li>
+      <li class="loop"><h3>Prove</h3><span>Keeps it or undoes it</span></li>
+      <li><h3>Report</h3><span>What it saved</span></li>
+    </ol>
+    <div class="again"><div></div><p>Repeats until nothing is left to fix</p></div>
+  </section>
+
+  <section>
+    <h2>Every agent gets a level</h2>
+    <div class="scale">
+      <div><i></i><small>0</small><b>Fit</b></div>
+      <div><i></i><small>1</small><b>Wasteful</b></div>
+      <div><i></i><small>2</small><b>Over-built</b></div>
+      <div><i></i><small>3</small><b>Wrong shape</b></div>
+      <div><i></i><small>4</small><b>Broken</b></div>
     </div>
   </section>
 
   <section>
-    <span class="label">How it works</span>
-    <h2>Seven steps, in order, with no one driving</h2>
-    <ol class="steps">
-      <li><h3>Start</h3><p>Finds the agent in the team's project and checks it can run. If something is missing, it lists what and stops.</p></li>
-      <li><h3>Watch</h3><p>Runs the agent on the team's own test questions and records every step. The team's code is not touched.</p></li>
-      <li><h3>Review</h3><p>Reports where money is wasted and whether the design fits the job. Gives the agent a level from 0 to 4.</p></li>
-      <li><h3>Change</h3><p>Makes one change at a time, on a separate copy of the code.</p></li>
-      <li><h3>Prove</h3><p>Runs the agent again and checks the answers. A change that does not hold up is undone.</p></li>
-      <li><h3>Repeat</h3><p>Looks again. One fix often uncovers the next.</p></li>
-      <li><h3>Report</h3><p>Says what changed, what it gained, and whether that is proven.</p></li>
-    </ol>
-    <p class="muted">A team that only wants to look can stop after step 3. Nothing is changed.</p>
-  </section>
-
-  <section>
-    <span class="label">The level</span>
-    <h2>One number says how far an agent is from where it should be</h2>
-    <div class="scale" aria-hidden="true"><div class="s0"></div><div class="s1"></div><div class="s2"></div><div class="s3"></div><div class="s4"></div></div>
-    <ul class="levels">
-      <li><span class="n">0</span><h3>Fit</h3><p>Nothing worth changing.</p></li>
-      <li><span class="n">1</span><h3>Wasteful</h3><p>Works, and costs more than it should.</p></li>
-      <li><span class="n">2</span><h3>Over-built</h3><p>Parts of the design do nothing.</p></li>
-      <li><span class="n">3</span><h3>Wrong shape</h3><p>A simpler design would do the whole job.</p></li>
-      <li><span class="n">4</span><h3>Broken</h3><p>Requests fail today.</p></li>
-    </ul>
-    <p>Across many agents the levels become the report: how many are fit, how many are wasteful, how many are broken, and what each group costs.</p>
-  </section>
-
-  <section>
-    <span class="label">What keeps it safe</span>
-    <h2>Rules it cannot break, rather than promises</h2>
-    <ul class="rules">
-      <li>The team's code is never edited in place. Every change goes to a separate copy.</li>
-      <li>Nothing is merged or published. A person on the team decides.</li>
-      <li>A change is kept only if it is measured to help and the answers are still right.</li>
-      <li>A change to the design is tried only when the team has test questions with known right answers.</li>
-      <li>The verdict is calculated from the measurements. The AI that made the change does not grade itself.</li>
-      <li>It installs nothing on a developer's machine and never reads passwords or keys.</li>
+    <h2>What keeps it safe</h2>
+    <ul class="safe">
+      <li>Never touches a team's live code</li>
+      <li>Keeps only changes it can prove</li>
+      <li>A person decides what is merged</li>
     </ul>
   </section>
 
   <section>
-    <span class="label">The exchange</span>
-    <div class="exchange">
-      <div>
-        <h3>What a team provides</h3>
-        <ul>
-          <li>A project that already runs</li>
-          <li>Test questions with the right answers, if they want design changes</li>
-        </ul>
-      </div>
-      <div>
-        <h3>What a team gets back</h3>
-        <ul>
-          <li>A review, with evidence for every finding</li>
-          <li>The proven changes, ready for them to accept or drop</li>
-          <li>A short summary, and a full record for audit</li>
-        </ul>
-      </div>
+    <h2>Where it stands &middot; 28 September 2026</h2>
+    <div class="today">
+      <div><strong>3 of 3</strong><span>real agents started with no help</span></div>
+      <div><strong>7</strong><span>problems found</span></div>
+      <div class="open"><strong>0</strong><span>changes kept so far</span></div>
     </div>
-    <div class="record">
-      <span class="label">The summary, from a real test run on 28 September 2026</span>
-<pre class="summary"><b>Agent    </b>customer support supervisor
-<b>Level    </b>3 of 4, wrong shape
-<b>Found    </b>2 cost, 1 redesign
-<b>Tried    </b>3 changed versions: 0 kept, 3 undone
-<b>Gained   </b>nothing proven
-<b>Verdict  </b>nothing left standing
-<b>Spent    </b>$1.22 on the team's key, $2.63 by fleetopt</pre>
-      <p class="muted">In this run it built a redesign that made the agent 23% faster. Two of four answers came out wrong, so it threw the redesign away and said so.</p>
-    </div>
+    <p class="note">It rejected every change it could not prove. One made an agent 23% faster and its answers wrong.</p>
   </section>
 
-  <section>
-    <span class="label">Where it stands &middot; 28 September 2026</span>
-    <h2>What has been shown, and what has not</h2>
-    <p class="plain">No change has yet been kept on a real agent. It has found real problems every time and has refused every change it could not prove.</p>
-    <div class="status">
-      <div class="shown">
-        <h3>Shown on real agents</h3>
-        <ul>
-          <li>Started 3 of 3 agents with no help from their authors</li>
-          <li>Found real problems in all 3, including one where no request finishes</li>
-          <li>Built a redesign on its own, measured it 23% faster, and rejected it for wrong answers</li>
-          <li>Took a broken agent from 0 of 6 requests finished to 4 of 6</li>
-          <li>Every verdict it gave was true</li>
-        </ul>
-      </div>
-      <div class="open">
-        <h3>Not yet shown</h3>
-        <ul>
-          <li>A change kept on a real agent</li>
-          <li>A run cheap enough for thousands of agents. Today a full run costs about $3 to $4</li>
-          <li>One report across many agents</li>
-          <li>Agents built with tools other than LangGraph</li>
-          <li>AI providers other than Anthropic</li>
-        </ul>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <span class="label">What comes next</span>
-    <ol class="next">
-      <li><span><strong>Prove a kept improvement.</strong> Run it on more real agents until changes stand.</span></li>
-      <li><span><strong>Bring the cost of a run down.</strong> Skip findings too small to matter.</span></li>
-      <li><span><strong>One report across the fleet.</strong> Every agent, its level, its cost.</span></li>
-      <li><span><strong>More kinds of agent.</strong> Other frameworks and other AI providers.</span></li>
-    </ol>
-  </section>
-
-  <footer>fleetopt &middot; central AI team. Figures come from test runs on open-source agents, not on any team's production agent.</footer>
+  <footer>Figures are from test runs on open-source agents. Works today on agents built with LangGraph.</footer>
 
 </div>
