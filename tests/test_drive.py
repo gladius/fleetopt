@@ -71,7 +71,8 @@ class _Graph:
 
 def test_the_driver_puts_the_text_where_the_graph_takes_it():
     chat = _Graph({"messages": {"type": "array"}, "plan": {"type": "string"}})
-    assert driver.build_input(chat, "hi") == {"messages": [{"role": "user", "content": "hi"}]}
+    (message,) = driver.build_input(chat, "hi")["messages"]
+    assert (message.type, message.content) == ("human", "hi")  # a real message: a graph without a reducer reads .content
     state = _Graph({"topic": {"type": "string"}, "notes": {"type": "array"}, "rounds": {"type": "integer"},
                     "summary": {"type": "string"}, "mode": {"type": "string", "default": "fast"}})
     assert driver.build_input(state, "hi") == {"topic": "hi", "notes": [], "rounds": 0, "summary": ""}

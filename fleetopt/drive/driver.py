@@ -88,6 +88,18 @@ def fill(template, text):
     return template
 
 
+def user_message(text):
+    """A user message as the project's own framework makes one. Observed: a graph whose
+    `messages` field has no reducer passes the input through untouched, and its nodes
+    read `.content`; a dict ends that run on the first node. The dict is for a project
+    without langchain, where nothing else is possible."""
+    try:
+        from langchain_core.messages import HumanMessage
+    except ImportError:
+        return {"role": "user", "content": text}
+    return HumanMessage(content=text)
+
+
 def build_input(graph, text, template=None):
     """The graph's input for one piece of text. A `messages` field gets a user message;
     otherwise the first text field gets the text and the other required fields start
@@ -97,7 +109,7 @@ def build_input(graph, text, template=None):
     schema = graph.get_input_jsonschema()
     fields = schema.get("properties", {})
     if "messages" in fields:
-        return {"messages": [{"role": "user", "content": text}]}
+        return {"messages": [user_message(text)]}
     payload, placed = {}, False
     for name, spec in fields.items():
         kind = spec.get("type")

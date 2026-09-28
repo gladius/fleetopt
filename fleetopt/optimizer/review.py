@@ -171,7 +171,8 @@ def saved(out, project, run_cmd, state):
 
 async def run(project, label, purpose, model=None, max_usd=1.0):
     """Returns (report text, cost in USD). Raises if the session fails."""
-    from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
+    from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKError, ResultMessage, TextBlock,
+                                  query)
 
     from fleetopt.optimizer import tools
 
@@ -196,14 +197,17 @@ async def run(project, label, purpose, model=None, max_usd=1.0):
     prompt = (f"Review the agent in this directory. Its traces are under the label {label!r}. "
               f"{purpose}")
     texts, final, failure, cost = [], None, None, None
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            texts += [b.text for b in message.content if isinstance(b, TextBlock) and b.text.strip()]
-        elif isinstance(message, ResultMessage):
-            if message.is_error:
-                failure = message.result or message.subtype
-            final = message.result
-            cost = getattr(message, "total_cost_usd", None)
+    try:
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                texts += [b.text for b in message.content if isinstance(b, TextBlock) and b.text.strip()]
+            elif isinstance(message, ResultMessage):
+                if message.is_error:
+                    failure = message.result or message.subtype
+                final = message.result
+                cost = getattr(message, "total_cost_usd", None)
+    except ClaudeSDKError as exc:  # out of turns or budget arrives as an exception, not as a message
+        failure = str(exc).splitlines()[0][:300]
     if failure:
         raise RuntimeError(f"reviewer failed: {failure}")
     report = (final or (texts[-1] if texts else "")).strip()

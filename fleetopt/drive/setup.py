@@ -66,7 +66,8 @@ Reply with a JSON list of {n} strings and nothing else."""
 
 
 async def _ask(system, prompt, cwd=None, tools=()):
-    from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
+    from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKError, ResultMessage, TextBlock,
+                                  query)
 
     options = ClaudeAgentOptions(
         cwd=str(cwd) if cwd else None,
@@ -74,14 +75,20 @@ async def _ask(system, prompt, cwd=None, tools=()):
         system_prompt=system, tools=list(tools), allowed_tools=list(tools),
         disallowed_tools=["AskUserQuestion", *config.DENY_READS], skills=[],
         setting_sources=config.SETTING_SOURCES, extra_args=config.sdk_args(), strict_mcp_config=True,
-        env=config.SDK_ENV, max_turns=20 if tools else 1, max_budget_usd=0.5, permission_mode="default",
+        env=config.SDK_ENV, max_turns=40 if tools else 1, max_budget_usd=0.5, permission_mode="default",
     )
     text, final = "", None
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            text = "".join(b.text for b in message.content if isinstance(b, TextBlock)) or text
-        elif isinstance(message, ResultMessage) and not message.is_error:
-            final = message.result
+    try:
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                text = "".join(b.text for b in message.content if isinstance(b, TextBlock)) or text
+            elif isinstance(message, ResultMessage) and not message.is_error:
+                final = message.result
+    except ClaudeSDKError as exc:
+        # Observed: a session that ran out of turns ended fleetopt in a traceback. A helper
+        # that did not answer is no answer; every caller already knows what to do with that.
+        print(f"[fleetopt] a helper session ended without an answer: {str(exc).splitlines()[0][:200]}")
+        return ""
     return (final or text or "").strip()
 
 
