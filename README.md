@@ -335,24 +335,32 @@ reflection loop that never changes the draft).
   workers are themselves agents gets numbers for the supervisor only. Recording the
   graph a node belongs to (LangGraph's checkpoint namespace) is the fix.
 
+- **No change has yet been proven on a real agent.** Three real agents were run
+  unattended on 2026-09-28 (`tests/corpus/ledger.md`). All three were started without
+  help, every finding was tried or correctly left alone, and every verdict was true.
+  None of them left a change standing. The nearest: a redesign that took a broken
+  agent from 0 of 6 finished requests to 4 of 6, undone because the supplied cases
+  had not been run (fixed since), and a redesign that made an agent 23% faster and
+  two of its four answers wrong.
+- **A run costs too much for a fleet.** On one agent: $1.22 on the team's key in 27
+  runs of the agent, $1.91 for fleetopt's own session and $0.72 for the review. Two
+  causes are known. Findings whose whole effect is under the noise floor are tried
+  anyway, at 3 runs and again at 5. And the session re-reads what the review read.
+- **A design change gets one attempt.** When the judge fails it, it is undone. The
+  judge's reasons (an answer cut off, a fact wrong) are not used for a second try.
+- **An agent whose tools reach outside fails at random.** One request lost to a web
+  search that timed out fails the change, by design: one failed request is a failed
+  change. Nothing yet tells a flaky tool from a broken agent.
+- **Only the first four cases are run.** Cases supplied or found are the inputs, spread
+  over the file, four of them. fleetopt does not run every case, and it cannot fetch
+  LangSmith, Galileo or promptfoo datasets: it reports their names for a human to export.
+- **The judge reads one run per side.** A measurement is three runs; the answers of
+  the first are the ones judged.
+- **Only Anthropic has been run.** The pricing table covers OpenAI and Gemini; no agent
+  has been run on either.
 - **The fixture cannot exercise the judge.** Its fake model returns fixed strings
   regardless of input, so before/after outputs are byte-identical and the gate
-  passes trivially. The real repo does exercise it, and it passes correctly there.
-- **No optimization has yet been proven to save anything.** The fixture's win was
-  real but synthetic; the real repo's candidate landed within noise. A confirmed
-  saving on someone else's code is still outstanding.
-- **Eval cases are graded, not driven.** Cases are matched to whatever the run
-  command exercised; fleetopt does not yet invoke the agent per case, and it cannot
-  fetch LangSmith, Galileo or promptfoo datasets - it reports their names for a
-  human to export.
-- **The decision skills are untested on a real run.** `SKILL.md` is a router; the
-  mechanics live in five Agent Skills under `optimizer/plugin/skills/` (`caching`,
-  `prompt-growth`, `model-tier`, `redundant-work`, `tool-surface`), loaded as a local
-  plugin and triggered by their descriptions. They also work standalone: point Claude
-  Code at the plugin and ask "is my caching set up right?" in any repo. Whether the
-  optimizer invokes the right one at the right time has been observed once, on
-  the fixture (2026-09-24): it loaded `fleetopt:prompt-growth` after seeing
-  `prompt_chars` climb and before editing. Not yet observed on a real repo.
+  passes trivially.
 - Pricing covers Anthropic, OpenAI and Gemini list rates as of 2026-09-23; hosted
   variants (Bedrock/Vertex/Azure ids) and >200K-context tiers are not priced.
 - Only LangGraph. ADK emits OpenTelemetry natively (1.17+), so its adapter should
