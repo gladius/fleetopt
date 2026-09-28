@@ -13,3 +13,6 @@ research_notes/
 reports/
 tests/corpus/corpus.json
 fleetopt/optimizer/plugin/evals/results/
+
+# browser preview scratch
+.playwright-mcp/
