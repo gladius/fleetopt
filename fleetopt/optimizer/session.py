@@ -259,7 +259,7 @@ def verdict(events, final=None, start=None):
     return f"PROVEN ON THIS EVIDENCE: the judge passed ({details}).{saving}"
 
 
-def build_options(project, run_cmd=None, model=None, max_turns=120, max_usd=None, effort=None):
+def build_options(project, run_cmd=None, model=None, max_turns=120, max_usd=None):
     """Everything a session is allowed to be. Apart from run() so the product's
     promises can be read off it in a test without starting a session
     (tests/test_invariants.py)."""
@@ -291,9 +291,6 @@ def build_options(project, run_cmd=None, model=None, max_turns=120, max_usd=None
             HookMatcher(matcher="Bash", hooks=[guard_bash(run_cmd)]),
             HookMatcher(matcher="Edit|Write", hooks=[guard_edit(project, _git(project, "rev-parse", "--abbrev-ref", "HEAD"))]),
         ]},
-        # Optional. Lower effort cuts the optimizer's own output/thinking tokens;
-        # unverified for finding quality, so off unless FLEETOPT_EFFORT is set.
-        effort=effort,
         # Headless-capable: the agent must not block on a question nobody will answer.
         # And it reads the target's source, never its secrets (see config.DENY_READS).
         disallowed_tools=["AskUserQuestion", *config.DENY_READS],
@@ -313,7 +310,7 @@ def build_options(project, run_cmd=None, model=None, max_turns=120, max_usd=None
     )
 
 
-async def run(project, out_dir, run_cmd, review, findings, model=None, max_turns=120, max_usd=None, effort=None,
+async def run(project, out_dir, run_cmd, review, findings, model=None, max_turns=120, max_usd=None,
               evals=None, fenced=False):
     """Try `findings` (from review.findings, already chosen) of the `review` text, then
     keep looking unless `fenced`: a person who names findings gets those and no others."""
@@ -338,7 +335,7 @@ async def run(project, out_dir, run_cmd, review, findings, model=None, max_turns
         mission += (f"\n\nEval cases were supplied at `{evals}`. Call load_eval_cases with that "
                     "path before measuring.")
 
-    options = build_options(project, run_cmd, model, max_turns, max_usd, effort)
+    options = build_options(project, run_cmd, model, max_turns, max_usd)
 
     async def prompt():
         yield {"type": "user", "message": {"role": "user", "content": mission}}

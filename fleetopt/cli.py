@@ -7,8 +7,8 @@
 changes; `apply` then starts from that review instead of paying for another.
 fleetopt works out how to start the agent itself, once per project, and remembers it.
 
-`capture` and `report` are diagnostics for when a run comes back empty on an
-unfamiliar repo. They are not part of the flow.
+`capture` is a diagnostic for when a run comes back empty on an unfamiliar repo: it
+starts the agent under instrumentation and says how much it saw. Not part of the flow.
 """
 
 import argparse
@@ -18,7 +18,6 @@ import io
 import json
 import os
 import pathlib
-import statistics
 import sys
 
 from fleetopt import config
@@ -246,7 +245,6 @@ def apply(args):
             project, out, run_cmd, record["text"], picked,
             model=_model("FLEETOPT_MODEL"),
             max_usd=args.max_usd,
-            effort=os.environ.get("FLEETOPT_EFFORT") or None,
             evals=args.evals,
             fenced=bool(args.only),
         )
@@ -264,67 +262,6 @@ def capture(args):
     if not n_runs:
         print("[fleetopt] nothing was captured: the agent ran without going through LangChain's callbacks")
     return code
-
-
-def report(args):
-    path = pathlib.Path(args.out).resolve() / "fleetopt.db"
-    if not path.exists():
-        sys.exit(f"no capture found at {path}")
-    conn = store.connect(path)
-    session_id = args.session or store.latest_session(conn)
-    if session_id is None:
-        print("no sessions captured")
-        return 1
-
-    totals = conn.execute(
-        "SELECT COUNT(*) n, SUM(run_type = 'llm') llm,"
-        "       SUM(input_tokens) tin, SUM(output_tokens) tout,"
-        "       SUM(cache_read_tokens) cread"
-        "  FROM runs WHERE session_id = ?",
-        (session_id,),
-    ).fetchone()
-
-    roots = [
-        r["duration_ms"]
-        for r in conn.execute(
-            "SELECT duration_ms FROM runs WHERE session_id = ? AND parent_run_id IS NULL",
-            (session_id,),
-        )
-        if r["duration_ms"]
-    ]
-
-    print(f"session       {session_id}")
-    print(f"invocations   {len(roots)}")
-    print(f"runs          {totals['n']}")
-    print(f"llm calls     {totals['llm'] or 0}")
-    print(f"tokens        {totals['tin'] or 0:,} in / {totals['tout'] or 0:,} out")
-    if totals["cread"]:
-        print(f"cache reads   {totals['cread']:,} tokens")
-    if roots:
-        print(f"wall clock    {statistics.median(roots):,.0f} ms (median per invocation)")
-
-    nodes = conn.execute(
-        "SELECT node, SUM(run_type = 'llm') llm, SUM(input_tokens) tin,"
-        "       SUM(output_tokens) tout, MAX(prompt_chars) maxprompt"
-        "  FROM runs WHERE session_id = ? AND node IS NOT NULL"
-        " GROUP BY node ORDER BY (SUM(input_tokens) + SUM(output_tokens)) DESC",
-        (session_id,),
-    ).fetchall()
-    if not nodes:
-        print("\nno node attribution found (is this a LangGraph project?)")
-        return 0
-
-    grand = sum((n["tin"] or 0) + (n["tout"] or 0) for n in nodes) or 1
-    print(f"\n{'node':<20} {'llm':>5} {'tok in':>10} {'tok out':>10} {'% tok':>7} {'max prompt':>11}")
-    print("-" * 68)
-    for n in nodes:
-        share = 100 * ((n["tin"] or 0) + (n["tout"] or 0)) / grand
-        prompt = f"{n['maxprompt']:,}" if n["maxprompt"] else "-"
-        print(
-            f"{n['node']:<20} {n['llm'] or 0:>5} {n['tin'] or 0:>10,} "
-            f"{n['tout'] or 0:>10,} {share:>6.1f}% {prompt:>11}"
-        )
-    return 0
 
 
 def _console_never_crashes():
@@ -361,10 +298,6 @@ def _parser():
     cap.add_argument("--label", default="manual", help="name for this capture (default: manual)")
     cap.set_defaults(fn=capture)
 
-    rep = sub.add_parser("report", help="[debug] token and cost breakdown of a capture (not the report of a run)")
-    rep.add_argument("--session", type=int, help="which capture to summarize (default: the newest)")
-    rep.set_defaults(fn=report)
-
     rev = sub.add_parser("review", help="look only: where the agent wastes money and whether its design fits")
     rev.add_argument("project")
     rev.add_argument("--fresh", action="store_true",
@@ -378,7 +311,7 @@ def _parser():
         p.add_argument("--graph", help="rarely needed: with several agents in a project fleetopt picks the one the "
                                        "team ships and says why. This overrides it: a name from its "
                                        "langgraph.json, or file.py:variable")
-    for p in (app, cap, rep, rev):  # after the subcommand, where people put it
+    for p in (app, cap, rev):  # after the subcommand, where people put it
         p.add_argument("--out", default=argparse.SUPPRESS,
                        help="where captures and run records go (default ./.fleetopt)")
 

@@ -177,8 +177,3 @@ def ingest_graphs(conn, session_id, path):
     conn.executemany("INSERT INTO graphs VALUES (?, ?, ?, ?, ?)", rows)
     conn.commit()
     return len(rows)
-
-
-def latest_session(conn):
-    row = conn.execute("SELECT id FROM sessions ORDER BY id DESC LIMIT 1").fetchone()
-    return row["id"] if row else None
