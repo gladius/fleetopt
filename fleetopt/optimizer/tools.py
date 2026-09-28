@@ -1,4 +1,4 @@
-"""Tools the sessions call.
+"""Tools the sessions read with, and what the loop shares with them.
 
 Everything here is deterministic. The agent decides *what* to look at and *what*
 to change; it does not get to decide what the numbers are. Measurement and the
@@ -7,15 +7,10 @@ team, and a claim has to be reproducible.
 """
 
 import datetime
-import json
-import pathlib
-import re
 import time
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from fleetopt.evidence import evals as evals_mod
-from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
 from fleetopt.evidence import shape as shape_mod
 from fleetopt.probe import store
@@ -52,17 +47,6 @@ def compared(name, result):
     return f"[fleetopt] {name} against the original: " + (", ".join(parts) or "nothing could be compared")
 
 
-def announce(label):
-    """Say which finding a measurement belongs to, once, by the name the review gave it."""
-    found = re.match(r"([CDN]\d+)", label)
-    if not found or found.group(1) in CTX.setdefault("announced", set()):
-        return
-    CTX["announced"].add(found.group(1))
-    title = next((f["title"] for f in CTX.get("findings") or [] if f["id"] == found.group(1)),
-                 "found while applying the others")
-    say(f"\n[fleetopt] {found.group(1)}: {title}")
-
-
 def over():
     """Why no further run of the agent may start, or None. The session's own spend and
     turns are capped by the SDK; these two are what it could otherwise spend without
@@ -92,17 +76,6 @@ def _state(ids):
         return conn.execute("SELECT code_state FROM sessions WHERE id = ?", (ids[0],)).fetchone()["code_state"]
 
 
-def sides(baseline, candidate, base_state, cand_state):
-    """Which code each side ran, in words nobody can misread. Observed: an optimizer
-    measured its patched code under a label called 'baseline-retest', then cited that
-    comparison as proof the unmodified agent had the same defect."""
-    line = f"{baseline} ran code {base_state}; {candidate} ran code {cand_state}."
-    if base_state == cand_state:
-        line += ("\nNOTE: both sides ran the SAME code. This shows the agent's own run-to-run"
-                 " variation. It says nothing about the effect of a change.")
-    return line
-
-
 def _conn():
     return store.connect(CTX["out"] / "fleetopt.db")
 
@@ -128,45 +101,6 @@ def _ids(label):
             "                       ORDER BY id DESC LIMIT 1)",
             (label, str(CTX["project"]), label, str(CTX["project"])),
         )]
-
-
-@tool(
-    "measure",
-    "Run the target agent n times under instrumentation and store the results "
-    "under a label. Use 'baseline' before changing anything, and another label "
-    "after. fleetopt starts the agent itself, with the same inputs every time. Returns "
-    "median cost, wall time, finished requests and tokens.",
-    {"label": str, "n": int},
-)
-async def measure(args):
-    label, n = args["label"], args.get("n", 3)
-    stop = over()
-    if stop:
-        _record("limit", label=label, reason=stop)
-        say(f"[fleetopt] stopping here: {stop}")
-        return _ok(f"refused: {stop}. No further measurement is possible in this run. Undo any change "
-                   "that has not been measured and judged, and write your report now.")
-    announce(label)
-    try:
-        measure_mod.collect(CTX["project"], CTX["run_cmd"], CTX["out"], n, label, say=say)
-    except RuntimeError as e:
-        _record("measure_failed", label=label, error=str(e)[:300])
-        say(f"[fleetopt] {measure_mod.plain(label)}: could not be measured")
-        return _ok(f"measurement failed: {e}")
-    with _conn() as conn:
-        ids = _ids(label)
-        stats, _ = measure_mod.aggregate(conn, ids)
-    state = _state(ids)
-    original = CTX.setdefault("baseline_state", state)  # the first measurement of a run is the unmodified code
-    _record("measure", label=label, n=n, sessions=len(ids), stats=stats, code_state=state)
-    cost = "no price for its model" if stats.get("cost_usd") is None else f"${stats['cost_usd']:.4f} per run"
-    done = "" if stats.get("completed") is None else f", {stats['completed']:g} requests finished per run"
-    say(f"[fleetopt] {measure_mod.plain(label)}: {cost}{done}")
-    note = f"\ncode state {state}"
-    if state != original:
-        note += (f" - this is CHANGED code (the run's first measurement was {original})."
-                 " Whatever the label says, it is not a baseline.")
-    return _ok(f"{label} ({n} runs), medians:\n{json.dumps(stats, indent=2)}{note}")
 
 
 @tool(
@@ -213,99 +147,6 @@ async def graph_topology(args):
 
 
 @tool(
-    "compare",
-    "Before/after two labelled measurements. Reports 'within noise' when a delta "
-    "sits inside the baseline's own run-to-run spread - that is not a saving.",
-    {"baseline": str, "candidate": str},
-)
-async def compare(args):
-    with _conn() as conn:
-        base, cand = _ids(args["baseline"]), _ids(args["candidate"])
-        if not base or not cand:
-            return _ok(f"missing measurements: {args['baseline']}={len(base)}, "
-                       f"{args['candidate']}={len(cand)}")
-        comparison = measure_mod.compare(conn, base, cand)
-    b, c = _state(base), _state(cand)
-    _record("compare", baseline=args["baseline"], candidate=args["candidate"], result=comparison,
-            baseline_state=b, candidate_state=c)
-    if b != c:  # the same code twice is the agent's own variation, of no interest to who is watching
-        say(compared(args["candidate"], comparison))
-    return _ok(sides(args["baseline"], args["candidate"], b, c) + "\n\n" + measure_mod.render(comparison))
-
-
-@tool(
-    "judge",
-    "Check the changed agent still answers as well. Runs as isolated calls that see "
-    "only the task and the outputs - not your patch or reasoning. A request passes "
-    "when its answer is correct by the team's eval case, or, where no case covers it, "
-    "when it is equivalent to the original answer. One failed request fails the change.",
-    {"task": str, "baseline": str, "candidate": str},
-)
-async def judge(args):
-    base, cand = _ids(args["baseline"]), _ids(args["candidate"])
-    if not base or not cand:
-        return _ok("need both measurements before judging")
-    cases = CTX.get("eval_cases")
-    with _conn() as conn:
-        passed, results, correctness = await judge_mod.judge_sessions(
-            conn, args["task"], base[0], cand[0], cases
-        )
-    b, c = _state(base), _state(cand)
-    _record("judge", baseline=args["baseline"], candidate=args["candidate"],
-            passed=passed, equivalence=results, correctness=correctness, baseline_state=b, candidate_state=c)
-    if b != c:
-        say(f"[fleetopt] {args['candidate']} judged: {sum(bool(r['kept_on']) for r in results)} of {len(results)} "
-            f"requests passed. {'Passed' if passed else 'Failed'}")
-    lines = [sides(args["baseline"], args["candidate"], b, c), "", "per request (what it passed on):"]
-    lines += [f"  [{'PASS: ' + r['kept_on'] if r['kept_on'] else 'FAIL'}] "
-              f"{'unchanged' if r['equivalent'] else 'changed'}: {r['reason']}" for r in results]
-    if correctness:
-        m = correctness["matched"]
-        lines.append(f"\ncorrectness against the team's eval cases ({correctness['cases']} loaded, {m} matched a captured run):")
-        lines.append(f"  baseline passes {correctness['baseline_pass']}/{m}, candidate passes {correctness['candidate_pass']}/{m}")
-        lines += [f"  [{'PASS' if r['candidate_pass'] else 'FAIL'}] {r['input'][:60]!r}: {r['reason']}" for r in correctness["rows"]]
-        if m < correctness["cases"]:
-            lines.append(f"  {correctness['cases'] - m} cases were not exercised by the run command and could not be graded.")
-    else:
-        lines.append("\ncorrectness: not checked - no eval cases loaded. A pass here means unchanged, not correct.")
-    lines.append(f"\nverdict: {'PASSED' if passed else 'FAILED'} ({len(results)} invocations)")
-    return _ok("\n".join(lines))
-
-
-@tool(
-    "load_eval_cases",
-    "Load the project's eval cases (input + expected answer) from a file or folder "
-    "before measuring: JSONL/JSON with input/expected keys, or deepeval test files "
-    "(LLMTestCase/Golden). See fleetopt:evals for where to look. Once loaded, judge "
-    "also grades correctness against the expected answers for every captured run "
-    "whose input matches a case, and reports pass rates before and after.",
-    {"path": str},
-)
-async def load_eval_cases(args):
-    path = pathlib.Path(args["path"])
-    if not path.is_absolute():
-        path = CTX["project"] / path
-    if not path.exists():
-        return _ok(f"no such path: {path}")
-    cases, notes = evals_mod.load(path)
-    CTX["eval_cases"] = cases
-    _record("eval_cases", path=str(path), loaded=len(cases))
-    if cases:  # kept in fleetopt's own folder, never in the team's repo
-        keep = CTX["out"] / "evals"
-        keep.mkdir(parents=True, exist_ok=True)
-        (keep / f"{CTX['project'].name}.jsonl").write_text(
-            "\n".join(json.dumps(c, ensure_ascii=False) for c in cases) + "\n", encoding="utf-8"
-        )
-    sample = cases[0] if cases else None
-    lines = [f"{len(cases)} eval cases loaded from {path}"] + [f"  {n}" for n in notes]
-    if sample:
-        lines.append(f"  first case: input={sample['input'][:80]!r} expected={sample['expected'][:80]!r}")
-    else:
-        lines.append("  nothing loadable here - see fleetopt:evals for the formats that work")
-    return _ok("\n".join(lines))
-
-
-@tool(
     "graph_shape",
     "Structural facts from the traces under a label: branches declared but never taken, "
     "dispatchers whose target order never varies (and whether a model was consulted to "
@@ -323,8 +164,7 @@ async def graph_shape(args):
     return _ok(shape_mod.render(result))
 
 
-_TOOLS = [measure, query_traces, graph_topology, graph_shape, compare, judge,
-          load_eval_cases]
+_TOOLS = [query_traces, graph_topology, graph_shape]
 
 
 def server(names=None):

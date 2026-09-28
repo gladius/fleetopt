@@ -39,7 +39,7 @@ def spent(out_dir, project, after=0):
     return len(ids), (None if None in costs else sum(costs))
 
 
-def collect(project, run_cmd, out_dir, n, label, with_io=True, say=print):
+def collect(project, run_cmd, out_dir, n, label, with_io=True, say=print, max_steps=None, probe=False):
     """Run the target n times under one label. Returns the session ids.
 
     The runs execute concurrently (FLEETOPT_PARALLEL, default n, max 5). This is
@@ -52,16 +52,19 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True, say=print):
     """
     workers = min(n, int(os.environ.get("FLEETOPT_PARALLEL", n) or 1), 5)
     minutes = float(os.environ.get("FLEETOPT_RUN_MINUTES") or RUN_MINUTES)
-    run_one = lambda _=None: runner.execute(project, run_cmd, out_dir, with_io, timeout=60 * minutes)
+    run_one = lambda _=None: runner.execute(project, run_cmd, out_dir, with_io, timeout=60 * minutes,
+                                            max_steps=max_steps)
 
     # A command that has never succeeded on this project gets one probe run before
     # the rest start: a wrong interpreter then costs one crash, not n, and the
     # agent gets the traceback at once instead of after 15 failed runs (observed).
     executed = []
-    if n > 1 and not _ever_succeeded(out_dir, project, run_cmd):
-        probe = run_one()
-        executed.append(probe)
-        n_left = n - 1 if probe[3] == 0 else 0
+    # `probe`: changed code gets one run first too. A change that breaks the agent, or
+    # sends it into a loop, then costs one run and not n.
+    if n > 1 and (probe or not _ever_succeeded(out_dir, project, run_cmd)):
+        first = run_one()
+        executed.append(first)
+        n_left = n - 1 if first[3] == 0 else 0
     else:
         n_left = n
     if n_left:
@@ -77,12 +80,18 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True, say=print):
             project, run_cmd, out_dir, label, raw, traces, graphs, code
         )
         ended = ("stopped, it had not ended" if code == runner.TIMED_OUT else
+                 "stopped, far more steps than the original" if code == runner.RAN_AWAY else
                  "done" if code == 0 and n_runs else "failed")
         say(f"[fleetopt] {plain(label)}: run {i + 1} of {n} {ended}")
         # A run that crashed produced a truncated trace. Averaging it in drags the
         # median toward "cheaper" for the worst possible reason - the work didn't
         # happen. Refuse the whole measurement rather than quietly discount it.
-        if code == runner.TIMED_OUT:
+        if code == runner.RAN_AWAY:
+            failure = failure or (
+                f"{label} run {i + 1} took more than {max_steps} steps, far more than the original, and was "
+                "stopped. The change most likely removed what ended the agent's loop."
+            )
+        elif code == runner.TIMED_OUT:
             failure = failure or (
                 f"{label} run {i + 1} had not ended after {minutes:g} minutes and was stopped. An agent that "
                 f"waits for a keyboard or for a service does this. Its last output lines:\n{tail}"

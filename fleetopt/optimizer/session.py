@@ -1,105 +1,32 @@
-"""The session behind `fleetopt apply`.
+"""The edit session, and the boundary around it.
 
-It is handed the findings of a review a person has seen, tries them one at a time on
-a new branch, and proves whatever it claims using the tools in tools.py. What this
-module owns is the boundary: where the agent runs, what it may touch, and the
-verdict, which is computed from what the tools recorded and not from what the agent
-wrote.
+`fleetopt apply` is driven by code (loop.py): it measures, compares, judges, keeps and
+undoes. A model does one thing in it: make the change for one finding. This module
+builds the session that makes it, and owns what that session may touch. It also
+computes the verdict, from what the tools recorded and not from what any session wrote.
 
-Nothing is asked. What keeps a run safe is enforced: the target is started only by
-fleetopt's own driver, an edit lands inside the project on a new branch or not at
-all, and nothing is installed or pushed.
+Nothing is asked. What keeps a run safe is enforced: the agent is started only by
+fleetopt's own driver and never by this session, an edit lands inside the project on
+fleetopt's branch or not at all, git is fleetopt's alone, and nothing is installed or pushed.
 """
 
 import datetime
 import importlib.metadata
 import json
-import os
 import pathlib
 import re
 import subprocess
-import time
 
-from claude_agent_sdk import (
-    AssistantMessage,
-    ClaudeAgentOptions,
-    ClaudeSDKClient,
-    HookMatcher,
-    ResultMessage,
-    TextBlock,
-    ToolUseBlock,
-)
+from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
 from fleetopt import config
 from fleetopt.optimizer import tools
-from fleetopt.probe import runner
 
 _HERE = pathlib.Path(__file__).parent
 SKILL = "\n\n".join((_HERE / name).read_text(encoding="utf-8") for name in ("SKILL.md", "COST.md"))
 PLUGIN = _HERE / "plugin"  # decision skills, loaded by the harness, triggered by description
 # Only fleetopt's skills are listed to the model; the CLI's built-in ones are noise here.
 SKILLS = sorted(f"fleetopt:{p.name}" for p in (PLUGIN / "skills").iterdir() if p.is_dir())
-
-MISSION = """Apply the findings of a review to the LangGraph agent in this project, and
-prove each one.
-
-The review below was made on this exact code. It saw one capture and measured nothing,
-so it is where you start, not the last word. Try these findings first, in this order:
-{ids}.
-
-1. Understand it. Read the review, then the source it points to.
-2. Establish a baseline. fleetopt already knows how to start this agent and which
-   inputs to give it, so call measure with the label "baseline". Before that, look for
-   eval cases (see fleetopt:evals) and load them with load_eval_cases.
-3. Create one git branch for this run. Edits are refused until you are on a new branch.
-4. For each finding, in the order given:
-   - make that one change and commit it, the finding's id first in the message
-     ("C1: cache the system prompt");
-   - measure under a label that starts with the id, compare it with the code just
-     before it to see what this finding did on its own, and judge it against the
-     baseline;
-   - if nothing got better (cost, time and finished requests all within noise) or
-     the judge fails, undo the commit with git reset --hard HEAD~1 before you go
-     on, and report the finding as not proven;
-   - if the baseline contradicts the finding, skip it and give the number that does.
-5. {after}
-6. If more than one change is left standing, measure and judge the code as you leave
-   it against the baseline once more. The team merges the branch, not single commits.
-
-{design}
-
-Report at the end, one row per finding you were given or found: its id, what happened (stands,
-undone, skipped and why), the measured difference (dollars first, then latency, then
-tokens), the equivalence verdict, and the correctness pass rate before and after if
-eval cases were loaded (say "correctness not checked" if none were found). A cost
-reduction that broke the agent is a regression, not a result.
-
---- the review ---
-
-{review}"""
-
-# The loop stays open: some waste only shows once the first fix is in, and the review
-# saw one run where the baseline has three.
-LOOK_AGAIN = """Then look again. Query the traces of the code as it now stands: a fix often
-   uncovers the next cost. If something the review did not list is worth trying and
-   keeps the design as it is, give it the next free id (N1, N2, ...) and treat it like
-   any other finding. A change to the design that the review did not list is reported,
-   never tried: nobody has seen the case for it. Stop when nothing is left that the
-   numbers support."""
-
-# With --only a person chose a list, and a list is a fence.
-ONLY_THESE = """Stop there. A person chose exactly these findings. If you notice anything else,
-   say so at the end and leave it alone."""
-
-DESIGN_ON = """The D findings change the design, not just its cost. The team has eval cases, which is
-why you were given them: the judge grades a design change on those cases, since a
-different design will not word its answers like the old one. Try a D finding only if
-the eval cases you loaded cover the path it touches; if they do not, skip it and say
-which cases would unlock it. For a redesign, first list what must survive (see
-fleetopt:patterns) and keep every item on it. An agent that does not finish its
-requests is fixed before it is made cheaper."""
-
-DESIGN_OFF = "None of the findings you were given changes the design. Keep the design as it is."
 
 # Eval runners count as running the target too: a deepeval or promptfoo suite
 # invokes the agent on every case and bills the team for its own graders.
@@ -126,6 +53,13 @@ def _deny(reason):
 
 
 PUBLISH = re.compile(r"\bgit\s+push\b")
+# git belongs to the loop: it commits a change, and undoes it when the numbers say so.
+# Observed: a session whose edits were refused got the same change in through git
+# plumbing; another ran `git checkout` to fake a clean baseline and had to repair it.
+GIT_WRITE = re.compile(
+    r"\bgit\s+(?:-C\s+\S+\s+)?(?:commit|checkout|switch|reset|restore|revert|branch|merge|rebase|stash|"
+    r"cherry-pick|tag|clean|am|apply|update-index|update-ref|hash-object|read-tree|write-tree|"
+    r"commit-tree|mv|rm|add)\b")
 
 
 def guard_edit(project, start_branch):
@@ -163,6 +97,8 @@ def guard_bash(run_cmd):
         cmd = (input_data.get("tool_input") or {}).get("command", "")
         if PUBLISH.search(cmd):
             return _deny("fleetopt never pushes. The change stays on a local branch for the team to review.")
+        if GIT_WRITE.search(cmd):
+            return _deny("fleetopt commits, undoes and branches itself. Edit the files; leave git alone.")
         if ENV_MUTATION.search(cmd):
             return _deny("fleetopt never installs packages or downloads anything into the "
                          "target's environment. Finding the interpreter that already has the "
@@ -284,23 +220,26 @@ def numbers(events, computed, start, final):
     return tried, gained
 
 
-def build_options(project, run_cmd=None, model=None, max_turns=120, max_usd=None):
-    """Everything a session is allowed to be. Apart from run() so the product's
-    promises can be read off it in a test without starting a session
-    (tests/test_invariants.py)."""
+READS = ["query_traces", "graph_topology", "graph_shape"]  # the edit session looks; it never measures
+
+
+def build_options(project, run_cmd=None, model=None, max_turns=40, max_usd=None, start_branch=None):
+    """Everything the edit session is allowed to be. Apart from the loop so the
+    product's promises can be read off it in a test without starting a session
+    (tests/test_invariants.py). `start_branch` is the branch the run began on: edits
+    are refused there, and allowed on the branch the loop made."""
     return ClaudeAgentOptions(
         cwd=str(project),
         model=model,
         system_prompt=(
-            "You apply the findings of a review to LangGraph agents, run by a central "
-            "AI team on another team's project. Evidence beats intuition: every claim "
-            "you make must cite trace data or a measurement. Never report a saving "
-            "you have not measured. If an edit or a command is refused, that is an answer, "
-            "not an obstacle: never look for another way to make the same change (another "
-            "tool, a shell write, git plumbing). Say what was refused and why, skip that "
-            "finding, and go on.\n\n" + SKILL
+            "You make one change to another team's LangGraph agent, for one finding of a "
+            "review, for a central AI team. fleetopt measures it, judges it, and keeps or "
+            "undoes it after you: you never run the agent and never touch git. If an edit "
+            "or a command is refused, that is an answer, not an obstacle: never look for "
+            "another way to make the same change (another tool, a shell write, git plumbing). "
+            "Reply CANNOT with the reason instead.\n\n" + SKILL
         ),
-        mcp_servers={"fleetopt": tools.server()},
+        mcp_servers={"fleetopt": tools.server(READS)},
         # Built-ins by allowlist. The CLI default is 26 tools including web fetch and
         # search, cron, worktrees, messaging and wake-up scheduling: egress and mutation
         # surfaces an optimizer has no business with, and schema tokens on every turn.
@@ -310,11 +249,12 @@ def build_options(project, run_cmd=None, model=None, max_turns=120, max_usd=None
         # is enforced below, not confirmed: the target is started only by fleetopt's own
         # driver, Bash cannot install, publish or run the target by hand, and an edit
         # lands inside the project on a new branch or not at all.
-        allowed_tools=[*tools.TOOL_NAMES, "Read", "Grep", "Glob", "Skill", "Bash", "Edit", "Write"],
+        allowed_tools=[*(f"mcp__fleetopt__{n}" for n in READS), "Read", "Grep", "Glob", "Skill", "Bash", "Edit", "Write"],
         plugins=[{"type": "local", "path": str(PLUGIN)}],
         hooks={"PreToolUse": [
             HookMatcher(matcher="Bash", hooks=[guard_bash(run_cmd)]),
-            HookMatcher(matcher="Edit|Write", hooks=[guard_edit(project, _git(project, "rev-parse", "--abbrev-ref", "HEAD"))]),
+            HookMatcher(matcher="Edit|Write", hooks=[guard_edit(
+                project, start_branch or _git(project, "rev-parse", "--abbrev-ref", "HEAD"))]),
         ]},
         # Headless-capable: the agent must not block on a question nobody will answer.
         # And it reads the target's source, never its secrets (see config.DENY_READS).
@@ -328,109 +268,8 @@ def build_options(project, run_cmd=None, model=None, max_turns=120, max_usd=None
         skills=SKILLS,
         env=config.SDK_ENV,
         max_turns=max_turns,
-        # Caps the optimizer's own spend. The target's API calls go through the
-        # target's key and are not counted here.
+        # Caps this session's own spend. The agent's API calls go through the team's
+        # key and are capped by the loop.
         max_budget_usd=max_usd,
         permission_mode="default",
     )
-
-
-MAX_MINUTES = 120  # the whole run; FLEETOPT_MAX_MINUTES overrides
-
-
-async def run(project, out_dir, run_cmd, review, findings, model=None, max_turns=120, max_usd=None,
-              evals=None, fenced=False, first_session=0):
-    """Try `findings` (from review.findings, already chosen) of the `review` text, then
-    keep looking unless `fenced`: a person who names findings gets those and no others.
-
-    Four things end a run that would not end itself. The SDK stops the session at
-    `max_turns` and at `max_usd` of its own spend. `measure` refuses once the agent's
-    runs since `first_session` have cost the team `max_usd`, or the run has lasted
-    MAX_MINUTES. And one run of the agent is stopped after measure.RUN_MINUTES."""
-    project = pathlib.Path(project).resolve()
-    out = pathlib.Path(out_dir).resolve()
-    out.mkdir(parents=True, exist_ok=True)
-
-    started = datetime.datetime.now()
-    run_dir = out / "runs" / f"{started:%Y%m%d-%H%M%S}-{project.name}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    start_sha = _git(project, "rev-parse", "HEAD")
-    start_state = runner.code_state(project)
-    minutes = float(os.environ.get("FLEETOPT_MAX_MINUTES") or MAX_MINUTES)
-    tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd,
-                      "events": [], "model": model, "run_dir": run_dir, "findings": findings,
-                      "max_team_usd": max_usd, "first_session": first_session, "max_minutes": minutes,
-                      "deadline": time.time() + 60 * minutes, "announced": set(), "said_at": time.time()})
-    tools.CTX.pop("baseline_state", None)
-    tools.CTX.pop("eval_cases", None)
-    everything = bool(os.environ.get("FLEETOPT_VERBOSE"))
-    design = any(f["kind"] != "cost" for f in findings)
-    mission = MISSION.format(ids=", ".join(f["id"] for f in findings) or "none: the review listed nothing to try",
-                             review=review, after=ONLY_THESE if fenced else LOOK_AGAIN,
-                             design=DESIGN_ON if design else DESIGN_OFF)
-    if evals:
-        mission += (f"\n\nEval cases were supplied at `{evals}`. Call load_eval_cases with that "
-                    "path before measuring.")
-
-    options = build_options(project, run_cmd, model, max_turns, max_usd)
-
-    async def prompt():
-        yield {"type": "user", "message": {"role": "user", "content": mission}}
-
-    # Shown to whoever watches: what the tools established, then the report. The names
-    # of the tools and what the session thinks aloud on the way go to log.txt; a person
-    # reading "- Bash - query_traces - Edit" learns nothing, and a session saying it
-    # "made an unintended change" halfway alarms for no reason once it has put it right.
-    texts, calls, skills, result, log, closing = [], [], [], {}, [], []
-    try:
-        async with ClaudeSDKClient(options=options) as client:
-            await client.query(prompt())
-            async for message in client.receive_response():
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            texts.append(block.text)
-                            closing.append(block.text)
-                            log.append(block.text)
-                            if everything:
-                                print(block.text)
-                        elif isinstance(block, ToolUseBlock):
-                            name = block.name.replace("mcp__fleetopt__", "")
-                            closing.clear()  # what came before a tool call was not the report
-                            calls.append(name)
-                            log.append(f"  - {name}")
-                            if block.name == "Skill":
-                                skills.append((block.input or {}).get("skill", "?"))
-                            if everything:
-                                print(f"  - {name}")
-                            elif time.time() - tools.CTX["said_at"] > 120:
-                                tools.say(f"[fleetopt] still working (step {len(calls)}, "
-                                          f"{(datetime.datetime.now() - started).seconds // 60} minutes)")
-                elif isinstance(message, ResultMessage):
-                    cost = getattr(message, "total_cost_usd", None)
-                    result = {"turns": message.num_turns, "optimizer_cost_usd": cost,
-                              "status": message.subtype,
-                              "error": message.result if message.is_error else None}
-                    if not everything and closing:
-                        print("\n--- report ---\n" + "\n\n".join(closing))
-                    ended = {"error_max_turns": f", stopped at the limit of {max_turns} steps",
-                             "error_max_budget_usd": ", stopped at the limit of its own spend"}.get(message.subtype, "")
-                    print(f"\n--- done in {message.num_turns} steps" +
-                          (f", ${cost:.2f} of fleetopt's own" if cost else "") + ended + " ---")
-    finally:
-        final_state = runner.code_state(project)
-        events = tools.CTX.get("events", [])
-        computed = verdict(events, final_state, start_state)
-        print(f"\n--- fleetopt verdict (computed from the measurements, not written by the agent) ---\n{computed}")
-        tried, gained = numbers(events, computed, start_state, final_state)
-        kept = _git(project, "rev-list", "--count", f"{start_sha}..HEAD") if start_sha else ""
-        facts = {"verdict": computed, "tried": tried, "kept": int(kept or 0), "gained": gained,
-                 "branch": _git(project, "rev-parse", "--abbrev-ref", "HEAD"),
-                 "own_cost_usd": result.get("optimizer_cost_usd"), "run_dir": str(run_dir)}
-        meta = {"model": model, "evals_path": evals, "max_turns": max_turns, "max_usd": max_usd,
-                "findings": findings, "fenced": fenced, "code_state_after": final_state, **facts}
-        try:
-            _write_record(run_dir, project, start_sha, started, meta, closing or texts, calls, skills, result, log)
-        except OSError as exc:  # never let the record mask what the run itself did
-            print(f"[fleetopt] could not write the run record: {exc}")
-    return facts

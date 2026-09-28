@@ -111,7 +111,13 @@ def test_nothing_is_published():
     guard = session.guard_bash("driver entry.json")
     verdict = asyncio.run(guard({"tool_input": {"command": "git push origin fleetopt/change"}}, "id", None))
     assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert asyncio.run(guard({"tool_input": {"command": "git checkout -b fleetopt/change"}}, "id", None)) == {}
+    # git is the loop's: the edit session can look, not commit, branch, undo or go round a refusal
+    for cmd in ("git checkout -b x", "git commit -am x", "git reset --hard HEAD~1", "git -C . update-index --add x",
+                "git hash-object -w f", "git stash", "git add -A"):
+        denied = asyncio.run(guard({"tool_input": {"command": cmd}}, "id", None))
+        assert denied["hookSpecificOutput"]["permissionDecision"] == "deny", cmd
+    for cmd in ("git status", "git diff HEAD", "git log --oneline -3", "python -m py_compile agent.py"):
+        assert asyncio.run(guard({"tool_input": {"command": cmd}}, "id", None)) == {}, cmd
 
 
 def test_the_optimizers_own_spend_is_capped_by_default():
@@ -195,7 +201,6 @@ def test_the_reviewer_gets_no_network_only_local_references():
 
 def test_structural_patches_wait_for_eval_cases():
     guide = " ".join((session.PLUGIN / "skills" / "patterns" / "SKILL.md").read_text(encoding="utf-8").split())
-    assert "only if the eval cases you loaded cover the path" in " ".join(session.DESIGN_ON.split())
     design = [{"id": "D1", "title": "t", "kind": "redesign"}, {"id": "D2", "title": "t", "kind": "design"}]
     assert cli.chosen(design, None, has_cases=False)[0] == []      # decided in code, before any session starts
     assert cli.chosen(design, None, has_cases=True)[0] == design
@@ -219,10 +224,14 @@ def test_a_refusal_is_an_answer_not_an_obstacle():
     assert "never look for another way to make the same change" in prompt
 
 
-def test_the_loop_stays_open_unless_a_person_fenced_it():
-    again, only = " ".join(session.LOOK_AGAIN.split()), " ".join(session.ONLY_THESE.split())
-    assert "look again" in again and "A change to the design that the review did not list is reported, never tried" in again
-    assert "Stop there" in only and "leave it alone" in only
+def test_the_loop_is_code_and_the_session_only_edits():
+    from fleetopt.optimizer import loop
+
+    assert (loop.RUNS, loop.ATTEMPTS, loop.TEAM_USD) == (3, 2, 2.0)
+    o = options()
+    served = {n.removeprefix("mcp__fleetopt__") for n in o.allowed_tools if n.startswith("mcp__")}
+    assert served == {"query_traces", "graph_topology", "graph_shape"}  # it looks; it never measures or judges
+    assert "never remove what ends a loop" in " ".join(session.SKILL.split()).lower()
     assert "review_architecture" not in {t.name for t in tools._TOOLS}  # whoever patches does not also review
 
 
@@ -272,14 +281,6 @@ def test_the_verdict_is_about_the_code_left_on_the_branch():
     assert session.verdict(events, final="v1", start="v1").startswith("NOTHING LEFT STANDING")
 
 
-def test_a_comparison_says_which_code_each_side_ran():
-    same = tools.sides("baseline", "baseline-retest", "abc+1", "abc+1")
-    assert "SAME code" in same and "says nothing about the effect of a change" in same
-    assert "SAME code" not in tools.sides("baseline", "patched", "abc+1", "abc+2")
-
-
-# --- a run ends, whatever the agent or the session does --------------------------------
-
 def test_a_run_of_the_agent_that_does_not_end_is_stopped_with_what_it_started(tmp_path):
     import time
 
@@ -313,13 +314,6 @@ def test_the_teams_money_and_the_clock_both_end_a_run(tmp_path, monkeypatch, cap
     tools.CTX["deadline"] = time.time() - 1
     assert "time limit for a run is reached: 120 minutes" in tools.over()
 
-    def never(*a, **k):
-        raise AssertionError("the agent must not be run past a limit")
-
-    monkeypatch.setattr(measure, "collect", never)
-    reply = asyncio.run(tools.measure.handler({"label": "C3", "n": 3}))["content"][0]["text"]
-    assert reply.startswith("refused:") and "write your report now" in reply
-    assert "stopping here" in capsys.readouterr().out and tools.CTX["events"][-1]["event"] == "limit"
     tools.CTX.clear()
 
 
@@ -333,5 +327,3 @@ def test_what_is_shown_is_for_a_person():
         "completed": {"before": 0, "after": 2, "verdict": "improved"}})
     assert line == ("[fleetopt] D1 against the original: cost -15% (no real change), time -23% (better), "
                     "requests finished per run 0 to 2 (better)")
-    shown = " ".join(pathlib.Path(session.__file__).read_text(encoding="utf-8").split())
-    assert 'print(f" - {name}")' in shown and "if everything:" in shown  # tool names only when asked for

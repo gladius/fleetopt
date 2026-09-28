@@ -11,12 +11,22 @@ import pathlib
 import signal
 import subprocess
 import tempfile
+import time
 
 from fleetopt import config
 from fleetopt.probe import store
 
 HOOKS_DIR = pathlib.Path(__file__).parent / "hooks"
 TIMED_OUT = 124  # the exit code of a run that was stopped for not ending
+RAN_AWAY = 125   # the exit code of a run that was stopped for taking far more steps than allowed
+
+
+def _steps(traces):
+    try:
+        with traces.open("rb") as f:
+            return sum(chunk.count(b"\n") for chunk in iter(lambda: f.read(1 << 16), b""))
+    except OSError:
+        return 0
 
 
 def _stop(proc):
@@ -53,12 +63,14 @@ def code_state(project):
     return f"{head[:12]}+{hashlib.sha1(diff.encode()).hexdigest()[:8]}"
 
 
-def execute(project, run_cmd, out_dir, with_io=False, timeout=None):
+def execute(project, run_cmd, out_dir, with_io=False, timeout=None, max_steps=None):
     """Run run_cmd under instrumentation. Touches no database, so several can run
     at once. Returns (raw_dir, traces_path, graphs_path, returncode). A run that has
     not ended after `timeout` seconds is stopped and returns TIMED_OUT: an agent
     waiting for a keyboard or a service that never answers must not hold fleetopt
-    for ever."""
+    for ever. A run that records more than `max_steps` steps is stopped the same way
+    and returns RAN_AWAY: observed, an agent whose crash had been fixed looped 170
+    rounds and made 345 web searches in one request, where the original took 4."""
     out = pathlib.Path(out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
@@ -81,12 +93,20 @@ def execute(project, run_cmd, out_dir, with_io=False, timeout=None):
     with (raw / "target.log").open("wb") as log:  # raw bytes, whatever the target emits
         proc = subprocess.Popen(run_cmd, shell=True, cwd=project, env=env, stdout=log,
                                 stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
-        try:
-            code = proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _stop(proc)
-            log.write(f"\n[fleetopt] stopped: it had not ended after {timeout / 60:g} minutes\n".encode())
-            code = TIMED_OUT
+        began, code = time.time(), None
+        while code is None:
+            try:
+                code = proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                if timeout and time.time() - began > timeout:
+                    _stop(proc)
+                    log.write(f"\n[fleetopt] stopped: it had not ended after {timeout / 60:g} minutes\n".encode())
+                    code = TIMED_OUT
+                elif max_steps and _steps(traces) > max_steps:
+                    _stop(proc)
+                    log.write(f"\n[fleetopt] stopped: more than {max_steps} steps, far more than the original "
+                              "takes\n".encode())
+                    code = RAN_AWAY
     return raw, traces, graphs, code
 
 

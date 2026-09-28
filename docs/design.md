@@ -30,16 +30,20 @@ fleetopt/
 tests/            pytest for the deterministic code; corpus/ = the ledger of runs on real agents
 ```
 
-Three sessions, each with its own context, none grading its own work:
+Who does what in `fleetopt apply`:
 
-| Session | May | May not |
+| | May | May not |
 |---|---|---|
-| The reviewer | read source, query the recorded runs | edit, run anything, measure |
-| The session that changes | edit on a new branch, measure, ask for a judgment | decide the verdict, decide what may be tried |
-| The judge | see the task and the answers | see the change or the reasoning behind it |
+| The reviewer (a session) | read source, query the recorded runs | edit, run anything, measure |
+| The edit session | make one change for one finding, read, check it compiles | run the agent, measure, judge, touch git |
+| The judge (a session) | see the task and the answers | see the change or the reasoning behind it |
+| The loop (code, `optimizer/loop.py`) | commit, run the agent under watch, measure, compare, judge, keep or undo | |
 
-The judge runs through the same Claude Code binary (same credential, no second setup)
-but in its own process, no tools, one turn: about 400 input tokens a call.
+Until 2026-09-29 one long session drove the loop: it chose what to try, how often to try
+again and when to measure. In a real run it made four attempts at one fix, measured the
+original again for no reason, printed 25 minutes of tool names, and ran a changed agent
+that looped 170 rounds on the team's key. Now the procedure is code and the same for
+every finding, so time and cost follow from the number of findings and are said up front.
 
 ## How an agent is started
 
@@ -132,11 +136,17 @@ Each one is a way to produce a confident wrong number, and most were found by ru
 
 **About a run that would not end**
 
+- **A changed agent that takes far more steps than the original is stopped** within
+  seconds: three times the original's steps a run, six when the original finished
+  nothing. Observed: a change removed the crash that had been the only thing ending an
+  agent's loop; it then made 345 web searches in one request. LangGraph's own limit
+  (`recursion_limit`, 10,007 in 1.2.12) did not stop it. A change runs once before it
+  runs three times, so a bad one costs one run.
 - **One run of the agent is stopped after 15 minutes**, with everything it started: the
   command goes through a shell, and killing the shell alone leaves the agent running.
   Before this nothing limited it, and an agent waiting for a keyboard would have held
   fleetopt for ever.
-- **The team's money has the same cap as ours.** The SDK stops the session at its own
+- **The team's money has its own cap, $2 by default.** The SDK stops the session at its own
   spend and at its turns; nothing stopped it measuring. Observed: 27 runs of one agent,
   $1.22, in a run that kept nothing. `measure` now refuses once the cap or two hours is
   reached, and tells the session to undo what it has not proven and report.
@@ -148,7 +158,7 @@ Each one is a way to produce a confident wrong number, and most were found by ru
   saying halfway that it had "made an unintended change". None of it means anything
   outside fleetopt. Shown now: each finding by the name the review gave it, each run of
   the agent, each comparison and judgment in words, a line every two minutes of silence,
-  then the report. Everything else goes to `log.txt`; `FLEETOPT_VERBOSE=1` shows it all.
+  then the report. What each edit session answered goes to `log.txt`.
 
 **About the sessions**
 

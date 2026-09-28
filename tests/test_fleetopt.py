@@ -566,7 +566,8 @@ def _nothing_may_run(monkeypatch, state):
     monkeypatch.setattr(config, "auth_summary", lambda: "test")
     monkeypatch.setattr(review, "run", never)
     monkeypatch.setattr(measure, "collect", never)
-    monkeypatch.setattr(session, "run", never)
+    from fleetopt.optimizer import loop
+    monkeypatch.setattr(loop, "run", never)
 
 
 def test_a_review_is_reused_while_the_code_has_not_changed(tmp_path, capsys, monkeypatch):
@@ -636,3 +637,55 @@ def test_the_summary_is_computed_and_claims_a_gain_only_under_a_proven_verdict(t
         _session(conn, project="another project", label="baseline", run_cmd="cmd", code_state="v1", exit_code=0)
     runs, cost = cli.spent(out, project, after=1)
     assert runs == 2 and cost == pytest.approx(2 * measure.session_stats(store.connect(out / "fleetopt.db"), 1)["cost_usd"])
+
+
+def test_the_loop_keeps_what_passes_undoes_the_rest_and_tries_twice_at_most(tmp_path, monkeypatch):
+    from fleetopt.optimizer import loop
+
+    project = tmp_path / "agent"
+    project.mkdir()
+    (project / "agent.py").write_text("x = 0\n", encoding="utf-8")
+    for args in (["init", "-q"], ["add", "-A"], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"]):
+        subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True)
+
+    edits, judged = [], []
+
+    async def edit(project_, finding, review, feedback, model, max_usd, start_branch):
+        edits.append((finding["id"], feedback))
+        if finding["id"] == "C3":
+            return "CANNOT: the finding is wrong about the code", 0.1
+        (project_ / "agent.py").write_text(f"x = {len(edits)}\n", encoding="utf-8")
+        return f"DONE: change {len(edits)}", 0.1
+
+    def measure(label, max_steps=None, probe=False):
+        if label == "C2-2":
+            return None, "run 1 took more than 150 steps, far more than the original, and was stopped."
+        return {"steps": 40, "completed": 3}, None
+
+    def compare(before, after):
+        return {"cost_usd": {"verdict": "within noise" if after.startswith("D1") else "improved", "delta_pct": -20.0}}
+
+    async def judge(task, label):
+        judged.append(label)
+        ok = label != "C2"
+        return ok, [{"kept_on": "unchanged answer" if ok else None, "reason": "an answer was cut off"}]
+
+    for name, fake in (("_edit", edit), ("_measure", measure), ("_compare", compare), ("_judge", judge)):
+        monkeypatch.setattr(loop, name, fake)
+    monkeypatch.setattr(tools, "say", lambda line: None)
+    findings = [{"id": i, "title": i, "kind": "cost"} for i in ("C1", "C2", "C3")] + [{"id": "D1", "title": "D1", "kind": "design"}]
+    facts = asyncio.run(loop.run(project, tmp_path / "out", "cmd", "review", findings, task="t"))
+
+    rows = {r["id"]: (r["outcome"], r["detail"]) for r in json.loads(
+        (pathlib.Path(facts["run_dir"]) / "run.json").read_text(encoding="utf-8"))["rows"]}
+    assert rows["C1"][0] == "kept"
+    assert rows["C2"] == ("undone", "run 1 took more than 150 steps, far more than the original, and was stopped.")
+    assert rows["C3"] == ("not changed", "the finding is wrong about the code")
+    assert rows["D1"] == ("undone", "no real gain")
+    assert [e for e in edits if e[0] == "C2"] == [("C2", None), ("C2", "the judge failed 1 of 1 requests: an answer was cut off")]
+    assert len([e for e in edits if e[0] == "D1"]) == 2                       # two attempts, never a third
+    assert judged == ["C1", "C2"]                                             # nothing is judged that did not gain
+    log = subprocess.run(["git", "-C", str(project), "log", "--format=%s"], capture_output=True, text=True).stdout.split("\n")
+    assert log[0] == "C1: change 1" and facts["kept"] == 1                    # one commit per kept finding, nothing else
+    assert facts["branch"].startswith("fleetopt/")
+    assert (project / "agent.py").read_text(encoding="utf-8") == "x = 1\n"   # what was undone is gone

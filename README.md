@@ -55,9 +55,7 @@ fleetopt cannot start this agent yet. 2 things to set up, then run the same comm
 | Start | Finds the agent and works out how to start it. Once per project, then remembered |
 | Watch | Runs it on the team's own inputs and records every step |
 | Review | Numbered findings, each with the number it rests on: cost (`C1`, ...) and design (`D1`, ...) |
-| Change | One finding at a time, one commit each, on a new branch |
-| Prove | Measures again and judges the answers. What does not hold up is undone |
-| Repeat | Looks again: a fix often uncovers the next cost |
+| Change | Code runs the same steps for every finding, in order: a session makes the one change; code commits it, tries it once, measures it, compares it with the code before, judges the answers, keeps it or undoes it. At most two attempts, the second told why the first failed |
 | Report | What changed, what it gained, and a verdict computed from the measurements |
 
 `review` is the first three steps. While the code has not changed, a review is reused:
@@ -122,7 +120,7 @@ A run folder holds no prompts and no outputs of the agent.
 | `--evals FILE` | both | Eval cases to use. Their inputs are what the agent is run on |
 | `--fresh` | review | Review again although the code has not changed |
 | `--graph NAME` | both | Rarely needed. With several agents, fleetopt picks the one the team ships and says why. This overrides it |
-| `--max-usd N` | both | The most a run may spend on either side (5 for apply, 1 for review): fleetopt's own, and the agent's calls on the team's key |
+| `--max-usd N` | both | Cap on fleetopt's own spend (5 for apply, 1 for review). The agent's calls stop at $2, below |
 | `--out DIR` | both | Where records go (default `./.fleetopt`) |
 
 `fleetopt capture <project>` is a diagnostic: it runs the agent under observation and
@@ -130,19 +128,21 @@ says how much it saw.
 
 Settings, all optional, in the environment or `~/.config/fleetopt/env`: `FLEETOPT_MODEL`,
 `FLEETOPT_REVIEW_MODEL`, `FLEETOPT_JUDGE_MODEL`, `FLEETOPT_PARALLEL`, `FLEETOPT_PRICES`,
-`FLEETOPT_RUN_MINUTES`, `FLEETOPT_MAX_MINUTES`, and `FLEETOPT_VERBOSE=1` to see every step.
+`FLEETOPT_RUN_MINUTES`, `FLEETOPT_MAX_MINUTES`, `FLEETOPT_TEAM_USD`.
 
 ## What ends a run
 
-A run ends by itself when nothing is left to try. These end one that would not:
+Before it starts, `apply` says how many findings it will try, about how long it will
+take and how often it will run the agent. Then it says which finding it is on.
 
 | Limit | Default | Then |
 |---|---|---|
-| Steps the session may take | 120 | It stops. The verdict covers what was judged |
-| fleetopt's own spend | `--max-usd`, $5 | It stops |
-| Spend on the team's key | `--max-usd`, $5 | No further run of the agent. It reports what it has |
-| One run of the agent | 15 minutes | That run is stopped, with everything it started, and counts as failed |
-| The whole run | 2 hours | No further run of the agent. It reports what it has |
+| A changed agent takes far more steps than the original | 3 times as many (6 when the original finishes nothing) | That run is stopped within seconds, and the change undone |
+| One run of the agent | 15 minutes | That run is stopped, with everything it started |
+| Attempts per finding | 2 | The finding is left undone |
+| Spend on the team's key | $2 (`FLEETOPT_TEAM_USD`) | No further run of the agent. It reports what it has |
+| fleetopt's own spend | `--max-usd`, $5 | No further change is made |
+| The whole run | 2 hours (`FLEETOPT_MAX_MINUTES`) | No further run of the agent |
 
 ## What keeps it safe
 
@@ -162,12 +162,12 @@ Enforced, not asked. Each is a test in `tests/test_invariants.py`.
 | | |
 |---|---|
 | No change kept on a real agent yet | Three real agents were run unattended on 2026-09-28. All started without help and every verdict was true. None left a change standing |
-| Cost of a run | About $3 to $4 per agent for a full `apply`. Too much for a fleet |
+| Cost of a run | Not yet measured with the new loop. About $3 to $4 per agent with the old one |
 | Frameworks | LangGraph, in Python. Nothing else |
 | Providers | Only Anthropic has been run. OpenAI and Gemini are priced and untested |
 | Eval cases | Four are run, spread over the file. Not every case |
 | The judge | Reads one run per side, of the three measured |
-| Design changes | One attempt. The judge's reasons are not used for a second |
+| One pass | `apply` tries the review's findings once each. Run it again on its branch to review the changed code |
 | Agents with outside tools | One request lost to a flaky web search fails the change |
 | Agents inside agents | Structural numbers cover the outer agent only |
 | New files | A file git does not track yet does not count as a change to the code |
