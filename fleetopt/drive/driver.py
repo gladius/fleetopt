@@ -6,6 +6,11 @@ fleetopt ever executes in a target: a named graph, called with given inputs. Nev
 command somebody guessed.
 
     <the project's python> driver.py <entry.json> [--limit N]
+    <the project's python> driver.py <entry.json> --check
+
+--check loads the agent and calls nothing: it reports whether the agent loaded, which
+module was missing if it did not, which model providers it pulls in and whether a key
+for any of them is set (names only, never a value).
 
 Exit 0 when at least one input finished or paused for a human, 1 when none did,
 2 when the graph could not be loaded at all.
@@ -22,6 +27,21 @@ import traceback
 import uuid
 
 BLANK = {"string": "", "array": [], "integer": 0, "number": 0, "boolean": False, "object": {}}
+
+# Which environment variable lets each provider package through. An empty tuple: none needed.
+PROVIDER_KEYS = {
+    "langchain_anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
+    "langchain_openai": ("OPENAI_API_KEY", "AZURE_OPENAI_API_KEY"),
+    "langchain_google_genai": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+    "langchain_google_vertexai": ("GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"),
+    "langchain_aws": ("AWS_ACCESS_KEY_ID", "AWS_PROFILE", "AWS_BEARER_TOKEN_BEDROCK"),
+    "langchain_groq": ("GROQ_API_KEY",),
+    "langchain_mistralai": ("MISTRAL_API_KEY",),
+    "langchain_cohere": ("COHERE_API_KEY",),
+    "langchain_deepseek": ("DEEPSEEK_API_KEY",),
+    "langchain_xai": ("XAI_API_KEY",),
+    "langchain_ollama": (),
+}
 
 
 def load_env(path):
@@ -90,6 +110,31 @@ def build_input(graph, text, template=None):
     return payload
 
 
+def check(entry, root, paths):
+    """Load the agent, call nothing, say what was found. One line of JSON for fleetopt."""
+    report = {"loaded": False, "error": None, "error_type": None, "missing_module": None, "input": None}
+    try:
+        graph = resolve(entry["graph"], root, paths)
+    except ModuleNotFoundError as exc:
+        report.update(error=f"{type(exc).__name__}: {exc}", error_type="ModuleNotFoundError", missing_module=exc.name)
+    except Exception as exc:  # noqa: BLE001
+        report.update(error=f"{type(exc).__name__}: {str(exc)[:300]}", error_type=type(exc).__name__)
+    else:
+        report["loaded"] = True
+        try:
+            build_input(graph, "check", entry.get("input_template"))
+            report["input"] = "ok"
+        except Exception as exc:  # noqa: BLE001
+            report["input"] = str(exc)[:300]
+    providers = sorted(m for m in PROVIDER_KEYS if m in sys.modules)
+    report["providers"] = providers
+    report["keys_present"] = sorted(k for m in providers for k in PROVIDER_KEYS[m] if os.environ.get(k))
+    report["keys_accepted"] = sorted(k for m in providers for k in PROVIDER_KEYS[m])
+    report["needs_no_key"] = any(not PROVIDER_KEYS[m] for m in providers)
+    print("[driver-check] " + json.dumps(report))
+    return 0 if report["loaded"] else 2
+
+
 def main(argv):
     entry = json.loads(pathlib.Path(argv[0]).read_text(encoding="utf-8"))
     limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else None
@@ -100,6 +145,8 @@ def main(argv):
     if entry.get("env_file") and (root / entry["env_file"]).exists():
         load_env(root / entry["env_file"])
     os.environ.update(entry.get("env") or {})
+    if "--check" in argv:
+        return check(entry, root, paths)
 
     try:
         graph = resolve(entry["graph"], root, paths)

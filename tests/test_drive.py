@@ -40,6 +40,13 @@ def test_asking_for_an_agent_that_is_not_there_lists_the_ones_that_are(project):
         entry.choose(found, "billing")
     with pytest.raises(entry.Unstartable, match="no graph found"):
         entry.choose([])
+    (project / "langgraph.json").unlink()
+    for name in ("agent.py", "supervisor.py"):
+        (project / name).unlink()
+    (project / "pipeline.py").write_text("from langgraph.graph import StateGraph\n"
+                                         "def build_pipeline(settings):\n    return StateGraph(dict).compile()\n", encoding="utf-8")
+    with pytest.raises(entry.NotReady, match="pipeline.py.*functions that need arguments.*langgraph.json"):
+        entry.choose(entry.candidates(project), None, project)
 
 
 def test_inputs_come_from_the_teams_cases_before_anything_else(project):
@@ -87,13 +94,75 @@ def test_an_entry_is_proven_once_and_remembered(project, tmp_path, monkeypatch):
     assert again == first
 
 
+def _no_repair(monkeypatch):
+    def never(*a, **k):
+        raise AssertionError("what the team must set up is not something to repair around")
+
+    monkeypatch.setattr(setup, "repair", never)
+
+
+def test_a_project_that_is_not_ready_gets_the_whole_list_at_once(project, tmp_path, monkeypatch):
+    _no_repair(monkeypatch)
+    declared = json.loads((project / "langgraph.json").read_text(encoding="utf-8"))
+    declared["env"] = ".env"
+    (project / "langgraph.json").write_text(json.dumps(declared), encoding="utf-8")
+    (project / ".env.example").write_text("ANTHROPIC_API_KEY=\n", encoding="utf-8")
+    (project / "uv.lock").write_text("", encoding="utf-8")
+    (project / "agent.py").write_text("import a_package_nobody_installed\n" + (project / "agent.py").read_text(encoding="utf-8"), encoding="utf-8")
+
+    with pytest.raises(entry.NotReady) as caught:
+        entry.ensure(project, tmp_path / "out", say=lambda line: None)
+    text = str(caught.value)
+    assert "2 things to set up, then run the same command again" in text
+    assert ".env does not exist" in text and "Copy .env.example to it" in text
+    assert "`a_package_nobody_installed`" in text and "uv sync" in text
+
+
+def test_a_missing_provider_key_is_named_and_a_present_one_is_enough(project, tmp_path, monkeypatch):
+    _no_repair(monkeypatch)
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "AZURE_OPENAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    for package in ("langchain_anthropic", "langchain_openai"):  # stand-ins: the agent pulls in two providers
+        (project / package).mkdir()
+        (project / package / "__init__.py").write_text("", encoding="utf-8")
+    (project / "agent.py").write_text("import langchain_anthropic, langchain_openai\n" + (project / "agent.py").read_text(encoding="utf-8"),
+                                      encoding="utf-8")
+    with pytest.raises(entry.NotReady, match="No key for a model provider.*ANTHROPIC_API_KEY.*OPENAI_API_KEY.*in the environment"):
+        entry.ensure(project, tmp_path / "out", say=lambda line: None)
+
+    (project / ".env").write_text("OPENAI_API_KEY=placeholder\n", encoding="utf-8")  # one of them is enough to try
+    _, found = entry.ensure(project, tmp_path / "out", say=lambda line: None)
+    assert found["proven"] and found["env_file"] == ".env"
+    assert "placeholder" not in json.dumps(found)  # the entry names the file, never what is in it
+
+
+def test_an_agent_that_fails_while_loading_is_the_teams_to_fix(project, tmp_path, monkeypatch):
+    _no_repair(monkeypatch)
+    (project / "agent.py").write_text("raise RuntimeError('the vector store is not built')\n" + (project / "agent.py").read_text(encoding="utf-8"),
+                                      encoding="utf-8")
+    with pytest.raises(entry.NotReady, match="failed while loading: RuntimeError: the vector store is not built"):
+        entry.ensure(project, tmp_path / "out", say=lambda line: None)
+
+
+def test_a_call_the_provider_refuses_is_the_teams_to_fix(project, tmp_path, monkeypatch):
+    _no_repair(monkeypatch)
+    monkeypatch.setattr(entry, "prove", lambda path, found: (False, "[driver] FAILED 'x'\n   AuthenticationError: invalid x-api-key"))
+    with pytest.raises(entry.NotReady, match="The model provider refused the call: AuthenticationError: invalid x-api-key"):
+        entry.ensure(project, tmp_path / "out", say=lambda line: None)
+    assert entry.refused("ValueError: boom") is None
+    assert entry.refused("httpx.ConnectError: [Errno 111] Connection refused").startswith("A service the agent depends on")
+
+
 def test_an_agent_that_cannot_be_started_says_what_was_tried(project, tmp_path, monkeypatch):
-    (project / "agent.py").write_text("import langgraph\nraise RuntimeError('a service this agent needs is down')\ngraph = None\n"
-                                      "graph = __import__('x').compile()\n", encoding="utf-8")
+    source = (project / "agent.py").read_text(encoding="utf-8")
+    (project / "agent.py").write_text(source.replace("def plan(state: State) -> dict:",
+                                                     "def plan(state: State) -> dict:\n    raise ValueError('this node is broken')", 1),
+                                      encoding="utf-8")
     asked = []
     monkeypatch.setattr(setup, "repair", lambda project, found, failure: asked.append(failure) or None)
-    with pytest.raises(entry.Unstartable, match="a service this agent needs is down") as caught:
+    with pytest.raises(entry.Unstartable, match="this node is broken") as caught:
         entry.ensure(project, tmp_path / "out", say=lambda line: None)
+    assert not isinstance(caught.value, entry.NotReady)  # nothing for the team to set up: this one is fleetopt's to work out
     assert "What was tried is in" in str(caught.value) and len(asked) == 1
 
 

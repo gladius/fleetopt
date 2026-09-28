@@ -52,12 +52,26 @@ fact about the project, so fleetopt works it out once per project and remembers 
 | Keys and settings | the env file the project names, loaded inside the agent's own process. fleetopt never reads it |
 | Inputs | the team's eval cases; otherwise a file of inputs the project keeps; otherwise four written from its README |
 
+**The team provides a project that runs; fleetopt adds nothing to a developer's
+machine.** Before anything is spent it checks, in a few seconds and without calling a
+model, that the agent loads in the project's environment and that a key for one of
+the providers it uses is set. If not, it lists everything that is missing at once,
+each with the fix in the project's own terms, and stops:
+
+```
+fleetopt cannot start this agent yet. 2 things to set up, then run the same command again:
+
+  1. .env does not exist. The project reads its keys and settings from it. Copy .env.example to it and fill it in
+  2. The project's environment has no module named `langgraph`. It has a uv.lock, so: uv sync
+```
+
 It then starts the agent once with one input to prove the answer, and saves it as a
-small JSON file under `.fleetopt/entries/` (never in the team's repo). If the agent
-does not start, a read-only session reads the source and the error, proposes what to
-change (which graph, a setting, a tenant id, the shape of the input), and fleetopt
-tries that by running it. After two attempts it stops and says what it found, what
-it tried and what the agent printed. From then on fleetopt runs its own driver
+small JSON file under `.fleetopt/entries/` (never in the team's repo). A call the
+provider refuses, or a service that cannot be reached, is reported the same way. What
+is fleetopt's to work out is worked out: if the agent loads and still does not run,
+a read-only session reads the source and the error, proposes what to change (which
+graph, a setting, a tenant id, the shape of the input), and fleetopt tries that by
+running it, twice at most. From then on fleetopt runs its own driver
 (`fleetopt/drive/driver.py`) against that entry and nothing else: never a command
 somebody guessed. Another framework is another way of filling in the same entry.
 

@@ -37,6 +37,24 @@ class Unstartable(RuntimeError):
     found, what it tried and what failed."""
 
 
+class NotReady(Unstartable):
+    """The project is not in a state to run, and what is missing is the team's to
+    provide: an environment, a key, a service. fleetopt adds nothing to a developer's
+    machine; it says what is missing, all of it at once, and stops."""
+
+    def __init__(self, problems):
+        self.problems = problems
+        n = len(problems)
+        listed = "\n".join(f"  {i}. {p}" for i, p in enumerate(problems, 1))
+        super().__init__(f"fleetopt cannot start this agent yet. {n} thing{'s' if n > 1 else ''} to set up, "
+                         f"then run the same command again:\n\n{listed}")
+
+
+REFUSED = re.compile(r"authentication|api[_ -]?key|\b401\b|unauthorized|invalid x-api-key|credit balance|quota|billing", re.I)
+UNREACHABLE = re.compile(r"connection refused|could not connect|connecterror|name or service not known|"
+                         r"temporary failure in name resolution|max retries exceeded", re.I)
+
+
 def declared(project):
     """What langgraph.json says: graphs by name, and the env file."""
     try:
@@ -107,10 +125,30 @@ def candidates(project):
     return [(spec, spec) for spec in scanned(project)]
 
 
-def choose(found, wanted=None):
+def built_in(project, limit=600):
+    """Files where a graph is put together, wherever in the file that happens."""
+    files = sorted(f for f in project.rglob("*.py") if not set(f.relative_to(project).parts[:-1]) & SKIP_DIRS
+                   and not any(p.startswith(".") for p in f.relative_to(project).parts[:-1]))[:limit]
+    out = []
+    for f in files:
+        try:
+            if "StateGraph(" in f.read_text(encoding="utf-8"):
+                out.append(f.relative_to(project).as_posix())
+        except OSError:
+            continue
+    return out
+
+
+def choose(found, wanted=None, project=None):
     if not found:
-        raise Unstartable("no graph found: the project has no langgraph.json, and no compiled graph or "
-                          "zero-argument graph factory at module level in its source")
+        where = built_in(project) if project else []
+        if where:
+            raise NotReady([
+                f"fleetopt found graphs being built in {', '.join(where[:3])}, but only inside functions that need "
+                "arguments, so it cannot tell which agent to start or with what. Declare the agent in a "
+                "langgraph.json at the project's root, the way LangGraph itself finds it: "
+                '{"graphs": {"agent": "./path/to/file.py:compiled_graph"}}'])
+        raise Unstartable("no graph found: the project has no langgraph.json, and no LangGraph graph anywhere in its source")
     if wanted is None:
         return found[0]
     for name, spec in found:
@@ -193,6 +231,65 @@ def prove(entry_path, entry, timeout=600):
     return done.returncode == 0, "\n".join(text.splitlines()[-30:])
 
 
+def install_hint(project):
+    """The command that gives this project its environment, in its own terms."""
+    for file, how in (("uv.lock", "uv sync"), ("poetry.lock", "poetry install"),
+                      ("requirements.txt", "python -m venv .venv && .venv/bin/pip install -r requirements.txt"),
+                      ("pyproject.toml", "python -m venv .venv && .venv/bin/pip install -e .")):
+        if (project / file).exists():
+            return f"It has a {file}, so: {how}"
+    return "Its README should say how to install it"
+
+
+def preflight(entry_path, entry):
+    """What stands between this project and a first run, found without calling a
+    model and in a few seconds. Only what is the team's to provide; what fleetopt can
+    work out itself (which graph, the shape of the input) is left to the trial."""
+    project = pathlib.Path(entry["project"])
+    own = pathlib.Path(entry["interpreter"]).is_relative_to(project)
+    problems = []
+    env_file = entry.get("env_file")
+    if env_file and not (project / env_file).exists():
+        copy = ". Copy .env.example to it and fill it in" if (project / ".env.example").exists() else ""
+        problems.append(f"{env_file} does not exist. The project reads its keys and settings from it{copy}")
+
+    parts = [entry["interpreter"], str(DRIVER), str(entry_path), "--check"]
+    try:
+        done = subprocess.run(subprocess.list2cmdline(parts) if sys.platform == "win32" else shlex.join(parts),
+                              shell=True, cwd=project, env=config.child_env(), capture_output=True, timeout=180)
+        text = (done.stdout + done.stderr).decode("utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        return problems + ["Loading the agent took more than three minutes and was stopped"], None
+    line = next((l for l in reversed(text.splitlines()) if l.startswith("[driver-check] ")), None)
+    if line is None:
+        return problems + [f"The project's interpreter could not run ({entry['interpreter']}): "
+                           + (text.strip().splitlines() or ["no output"])[-1][:200]], None
+    report = json.loads(line.removeprefix("[driver-check] "))
+
+    if report["missing_module"]:
+        where = ("The project's environment has no module named" if own else
+                 "No environment. The project has no .venv, and fleetopt's own interpreter has no module named")
+        problems.append(f"{where} `{report['missing_module']}`. {install_hint(project)}")
+    elif report["error"] and report["error_type"] not in ("AttributeError", "ImportError"):
+        problems.append(f"The agent failed while loading: {report['error']}")
+    if report["providers"] and not report["keys_present"] and not report["needs_no_key"]:
+        names = " or ".join(dict.fromkeys(report["keys_accepted"]))
+        where = f"in {env_file}" if env_file else "in the environment (the project names no env file)"
+        problems.append(f"No key for a model provider. The agent uses {', '.join(report['providers'])}; set {names} {where}")
+    return problems, report
+
+
+def refused(tail):
+    """A failed trial that no change to the entry can fix, as a line for the team."""
+    lines = [l.strip() for l in tail.splitlines() if l.strip()]
+    for pattern, what in ((REFUSED, "The model provider refused the call"),
+                          (UNREACHABLE, "A service the agent depends on could not be reached")):
+        hit = next((l for l in reversed(lines) if pattern.search(l)), None)
+        if hit:
+            return f"{what}: {hit[:220]}"
+    return None
+
+
 def save(path, entry):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
@@ -205,7 +302,7 @@ def ensure(project, out, wanted=None, say=print):
 
     project = pathlib.Path(project).resolve()
     found = candidates(project)
-    name, spec = choose(found, wanted)
+    name, spec = choose(found, wanted, project)
     path = path_for(out, project, name)
     others = [n for n, _ in found if n != name]
 
@@ -218,8 +315,6 @@ def ensure(project, out, wanted=None, say=print):
     python, why = interpreter(project)
     _, env_file = declared(project)
     inputs, source = inputs_for(project)
-    if not inputs:
-        inputs, source = setup.propose_inputs(project, spec), "fleetopt, written from the README and the graph's source"
     entry = {
         "adapter": "langgraph", "project": str(project), "name": name, "graph": spec,
         "paths": [".", "src"] if (project / "src").is_dir() else ["."],
@@ -231,12 +326,23 @@ def ensure(project, out, wanted=None, say=print):
     if others:
         say(f"[fleetopt] this project has {len(others) + 1} agents and this is the first. The others: "
             f"{', '.join(others[:8])}. Pick one with --graph")
-    say(f"[fleetopt] runs on {why}; {len(inputs)} inputs from {source}")
+    say(f"[fleetopt] runs on {why}")
+
+    save(path, entry)
+    problems, _ = preflight(path, entry)
+    if problems:
+        raise NotReady(problems)
+    if not inputs:  # only now: nothing is spent on a project that cannot start
+        entry["inputs"] = setup.propose_inputs(project, spec)
+        entry["inputs_source"] = "fleetopt, written from the README and the graph's source"
+    say(f"[fleetopt] {len(entry['inputs'])} inputs from {entry['inputs_source']}")
 
     tail = ""
     for attempt in range(3):
         save(path, entry)
         ok, tail = prove(path, entry)
+        if not ok and refused(tail):
+            raise NotReady([refused(tail)])
         if ok:
             entry["proven"] = datetime.datetime.now().isoformat(timespec="seconds")
             save(path, entry)
