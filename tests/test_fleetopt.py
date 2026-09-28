@@ -278,7 +278,7 @@ def test_out_is_accepted_before_and_after_the_subcommand():
     assert parse(["--out", "before", "optimize", "repo"]).out == "before"
     assert parse(["--out", "before", "capture", "repo", "--run", "x", "--out", "after"]).out == "after"
     args = parse(["review", "repo", "--run", "x"])
-    assert (args.n, args.out, args.purpose, args.label, args.fn.__name__) == (1, ".fleetopt", None, None, "review")
+    assert (args.out, args.label, args.max_usd, args.fn.__name__) == (".fleetopt", None, 1.0, "review")
     assert parse(["review", "repo", "--label", "earlier"]).run is None
 
 

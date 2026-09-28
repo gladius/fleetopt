@@ -1,11 +1,11 @@
 """fleetopt - find cost savings in a LangGraph project without editing it.
 
-    fleetopt optimize <project>
+    fleetopt optimize <project>               find waste, patch on a branch, prove it
+    fleetopt optimize <project> --review      the same, plus an architecture review
+    fleetopt review <project> --run "<cmd>"   the architecture review alone
 
-That is the product. `capture` and `report` below are diagnostics for when the
-harness comes back empty on an unfamiliar repo - they are not part of the flow.
-Everything else the optimizer needs is a tool it calls itself, not a step someone
-has to run.
+`capture` and `report` are diagnostics for when a run comes back empty on an
+unfamiliar repo. They are not part of the flow.
 """
 
 import argparse
@@ -163,7 +163,7 @@ def review(args):
     elif args.run:
         label = f"review-{datetime.datetime.now():%Y%m%d-%H%M%S}"
         try:
-            measure_mod.collect(project, args.run, out, args.n, label)
+            measure_mod.collect(project, args.run, out, 1, label)
         except RuntimeError as exc:
             # Unusable for a measurement, not for a review: what ran is evidence and the
             # crash is the first finding.
@@ -191,7 +191,7 @@ def review(args):
     print(f"\n--- structure, from the traces (label {label}) ---\n" + shape.render(facts))
 
     model = os.environ.get("FLEETOPT_REVIEW_MODEL") or os.environ.get("FLEETOPT_MODEL") or "claude-sonnet-5"
-    purpose = args.purpose or "not stated - derive it from the README and the prompts"
+    purpose = "not stated - derive it from the README and the prompts"
     if failed:
         purpose += (f". NOTE: {failed} of {len(ids)} captured runs exited with an error, so the traces are partial;"
                     " say so, and treat the failure as the first finding")
@@ -205,7 +205,7 @@ def review(args):
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "review.md").write_text(text + "\n", encoding="utf-8")
     (run_dir / "run.json").write_text(json.dumps({
-        "kind": "review", "project": str(project), "run_cmd": args.run, "label": label, "n": args.n,
+        "kind": "review", "project": str(project), "run_cmd": args.run, "label": label,
         "model": model, "reviewer_cost_usd": cost, "shape": facts, "events": tools.CTX["events"],
     }, indent=1, default=str), encoding="utf-8")
     print("\n--- architecture review ---\n" + text)
@@ -214,7 +214,8 @@ def review(args):
 
 
 def _parser():
-    parser = argparse.ArgumentParser(prog="fleetopt", description=__doc__)
+    parser = argparse.ArgumentParser(prog="fleetopt", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", default=".fleetopt", help=argparse.SUPPRESS)  # old position, still accepted
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -228,27 +229,29 @@ def _parser():
                      help="stop the optimizer once its own spend reaches this (default 5). "
                           "Does not cover the target's API calls.")
     opt.add_argument("--review", action="store_true",
-                     help="also review the architecture on the baseline traces (a read-only subagent; "
-                          "findings are recommendations with evidence under their own heading)")
+                     help="also review the architecture (does the design fit the job?). Findings are "
+                          "recommendations with evidence, under their own heading; nothing is patched on them")
     opt.set_defaults(fn=optimize)
 
     cap = sub.add_parser("capture", help="[debug] run a project under instrumentation")
     cap.add_argument("project")
-    cap.add_argument("--run", required=True)
-    cap.add_argument("--label", default="manual")
+    cap.add_argument("--run", required=True, help="how to invoke the agent once")
+    cap.add_argument("--label", default="manual", help="name for this capture (default: manual)")
     cap.set_defaults(fn=capture)
 
-    rep = sub.add_parser("report", help="[debug] summarize a capture")
-    rep.add_argument("--session", type=int)
+    rep = sub.add_parser("report", help="[debug] token and cost breakdown of a capture (not the optimizer's report)")
+    rep.add_argument("--session", type=int, help="which capture to summarize (default: the newest)")
     rep.set_defaults(fn=report)
 
-    rev = sub.add_parser("review", help="architecture review only: capture, structural numbers, reviewer's report")
+    rev = sub.add_parser("review", help="review the architecture only, without optimizing")
     rev.add_argument("project")
-    rev.add_argument("--run", help="how to invoke the agent; use inputs that differ from each other")
-    rev.add_argument("--label", help="review an existing capture under this label instead of running the agent again")
-    rev.add_argument("--n", type=int, default=1, help="times to run the command (default 1: a review needs variety of inputs, not repeats)")
-    rev.add_argument("--purpose", help="one sentence on what the agent is for (derived from the README otherwise)")
-    rev.add_argument("--max-usd", type=float, default=1.0, help="cap on the reviewer's own spend (default 1)")
+    rev.add_argument("--run", help="how to invoke the agent once; a command that sends it several different inputs "
+                                   "gives the review more to go on")
+    rev.add_argument("--label", help="review an earlier capture again instead of running the agent (the label is "
+                                     "printed by every review)")
+    rev.add_argument("--max-usd", type=float, default=1.0,
+                     help="stop the reviewer once its own spend reaches this (default 1). Does not cover the "
+                          "target's API calls.")
     rev.set_defaults(fn=review)
 
     for p in (opt, cap, rep, rev):  # after the subcommand, where people put it
