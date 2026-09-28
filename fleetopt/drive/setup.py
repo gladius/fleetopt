@@ -41,9 +41,18 @@ dependency, a service it needs, a key that is absent - reply {"cannot": "<the re
 """
 
 INPUTS = """You write test inputs for an AI agent so that a measurement tool can run it.
-From the README and source below, write {n} realistic requests a real user of this
-agent would send. Make them differ in kind, so they exercise different paths. Reply
-with a JSON list of {n} strings and nothing else."""
+
+Write what the agent's END USER types to it: the customer, the employee, the person
+the agent was built to serve. NOT what a developer working on this repository would
+ask. "How do I add a tenant" or "why does langgraph dev fail" are questions about the
+repo; a sales agent's user asks about roses and delivery.
+
+Work it out first by reading: the agent's system prompt, its tools, and the data it
+works over (a catalogue, a policy folder, a database). Then write {n} messages in that
+person's voice that differ in kind, so that they exercise different tools and paths.
+Use names, products and ids that exist in the project's own data.
+
+Reply with a JSON list of {n} strings and nothing else."""
 
 
 async def _ask(system, prompt, cwd=None, tools=()):
@@ -90,12 +99,10 @@ def repair(project, entry, failure):
 
 
 def propose_inputs(project, spec, n=4):
-    project = pathlib.Path(project)
-    readme = next((p for p in (project / "README.md", project / "README.rst", project / "readme.md") if p.exists()), None)
-    source = project / spec.split(":")[0]
-    material = (f"README:\n{readme.read_text(encoding='utf-8', errors='replace')[:6000]}\n\n" if readme else "") + \
-               (f"SOURCE ({source.name}):\n{source.read_text(encoding='utf-8', errors='replace')[:6000]}" if source.exists() else "")
-    found = _json(asyncio.run(_ask(INPUTS.format(n=n), material or f"An agent at {spec}.")))
+    """Inputs for an agent whose project keeps none. A read-only session that reads the
+    agent's prompt, tools and data before writing anything."""
+    prompt = f"The agent is {spec}, in the current directory. Write {n} inputs for it."
+    found = _json(asyncio.run(_ask(INPUTS.format(n=n), prompt, cwd=project, tools=("Read", "Grep", "Glob"))))
     texts = [t for t in found if isinstance(t, str) and t.strip()] if isinstance(found, list) else []
     if not texts:
         raise RuntimeError("could not write inputs for this agent: the project has no eval cases, no input file, "
