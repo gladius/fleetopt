@@ -7,6 +7,7 @@ An experiment that breaks one of these broke the product, however good its numbe
 
 import asyncio
 import pathlib
+import sys
 
 import pytest
 
@@ -51,20 +52,60 @@ def test_a_session_cannot_read_secrets_or_stop_to_ask():
     assert {"AskUserQuestion", "Read(**/.env)", "Read(**/*.pem)", "Read(**/*secret*)"} <= set(denied)
 
 
-# --- what touches the target is gated or forbidden -----------------------------------
+# --- what touches the target is enforced, not asked ----------------------------------
 
-def test_running_and_editing_are_never_approved_by_the_allowlist():
-    allowed = set(options().allowed_tools)
-    assert not {"Bash", "Edit", "Write"} & allowed
-    assert not any(t.endswith(("measure", "set_run_command")) for t in allowed)
+def test_fleetopt_starts_an_agent_only_through_its_own_driver(tmp_path):
+    from fleetopt.drive import entry
+
+    command = entry.command(tmp_path / "e.json", {"interpreter": "/proj/.venv/bin/python"})
+    assert command.split()[:2] == ["/proj/.venv/bin/python", str(entry.DRIVER)]
+    for gone in ("--run", "--auto"):  # nobody hands fleetopt a command, and nobody is asked to approve one
+        with pytest.raises(SystemExit):
+            cli._parser().parse_args(["optimize", "repo", gone, "x"])
+    assert "set_run_command" not in {t.name for t in tools._TOOLS}
 
 
-def test_the_bash_guard_is_always_attached_and_refuses_installs_and_hand_runs():
-    assert [h.matcher for h in options(run_cmd="python agent.py").hooks["PreToolUse"]] == ["Bash"]
-    guard = session.guard_bash("python agent.py")
-    for cmd in ("pip install x", "uv run --with x python a.py", "python agent.py", "pytest tests/", "deepeval test run t/"):
-        verdict = asyncio.run(guard({"tool_input": {"command": cmd}}, "id", None))
-        assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny", cmd
+def test_the_driver_needs_nothing_but_the_projects_own_packages():
+    from fleetopt.drive import entry
+
+    import ast
+
+    imported = set()
+    for node in ast.walk(ast.parse(entry.DRIVER.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            imported |= {alias.name.split(".")[0] for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            imported.add((node.module or "").split(".")[0])
+    assert imported <= set(sys.stdlib_module_names), imported - set(sys.stdlib_module_names)
+
+
+def test_an_edit_lands_inside_the_project_on_a_new_branch_or_not_at_all(tmp_path):
+    import subprocess
+
+    project = tmp_path / "repo"
+    project.mkdir()
+    (project / "agent.py").write_text("x = 1\n", encoding="utf-8")
+    git = lambda *a: subprocess.run(["git", "-C", str(project), "-c", "user.email=t@t", "-c", "user.name=t", *a],
+                                    check=True, capture_output=True)
+    git("init", "-q", "-b", "main"); git("add", "-A"); git("commit", "-qm", "base")
+    guard = session.guard_edit(project, "main")
+    ask = lambda path: asyncio.run(guard({"tool_input": {"file_path": str(path)}}, "id", None))
+    denied = lambda v: v.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+    assert denied(ask(project / "agent.py"))            # still on the branch the run started from
+    git("checkout", "-q", "-b", "fleetopt/change")
+    assert ask(project / "agent.py") == {}              # a new branch: go ahead
+    assert ask("agent.py") == {}                        # relative paths are the project's
+    assert denied(ask(tmp_path / "elsewhere.py"))       # outside the project
+    assert denied(ask(project / ".." / "elsewhere.py"))
+    assert denied(ask(project / ".git" / "config"))     # not the repository's own files
+
+
+def test_nothing_is_published():
+    guard = session.guard_bash("driver entry.json")
+    verdict = asyncio.run(guard({"tool_input": {"command": "git push origin fleetopt/change"}}, "id", None))
+    assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert asyncio.run(guard({"tool_input": {"command": "git checkout -b fleetopt/change"}}, "id", None)) == {}
 
 
 def test_the_optimizers_own_spend_is_capped_by_default():

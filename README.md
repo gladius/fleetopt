@@ -25,7 +25,7 @@ pip install -e ".[dev]"            # fleetopt + the fixture's langgraph; ~250 MB
 # smoke test on a copy of the bundled fixture: 3-5 min, no API spend. Keep the venv
 # active - the fixture runs on this venv's langgraph.
 T=$(mktemp -d) && cp -r fixture/. "$T" && git -C "$T" init -q && git -C "$T" add -A && git -C "$T" commit -qm base
-fleetopt optimize "$T" --auto
+fleetopt optimize "$T"
 ```
 
 The last line should end with an `equivalence: PASSED` block and a `--- done in N
@@ -33,42 +33,57 @@ turns, $x ---` line, and leave an `opt/...` branch in that temp repo. The copy
 matters: the optimizer branches whatever git repo the target is in, and
 `fixture/` inside this checkout would mean branching fleetopt itself.
 
-**On a real project** (must be a git repo; the patch lands on a branch, master is
-never touched):
+**On a real project** (must be a git repo; the patch lands on a new branch, the branch
+you were on is never touched):
 
 ```bash
-# first run on an unfamiliar repo: give it the command, keep the prompts, cap the spend
-FLEETOPT_PARALLEL=1 fleetopt optimize ~/work/their-agent \
-    --run "python -m pytest tests/integration -q" --max-usd 3
-
-# once you trust it: no prompts
-fleetopt optimize ~/work/their-agent --auto
+fleetopt review ~/work/their-agent              # does the design fit the job? the cheaper of the two
+fleetopt optimize ~/work/their-agent            # find waste, patch on a branch, prove it
+fleetopt optimize ~/work/their-agent --review   # both
 ```
+
+There is no run command to pass and nothing to approve. **How an agent is started is a
+fact about the project, so fleetopt works it out once per project and remembers it**:
+
+| What it needs | Where it looks |
+|---|---|
+| The agent | the project's `langgraph.json`; otherwise a compiled graph, or a graph factory that takes no arguments, in its source |
+| The interpreter | the project's own `.venv` / `venv`. fleetopt never installs anything |
+| Keys and settings | the env file the project names, loaded inside the agent's own process. fleetopt never reads it |
+| Inputs | the team's eval cases; otherwise a file of inputs the project keeps; otherwise four written from its README |
+
+It then starts the agent once with one input to prove the answer, and saves it as a
+small JSON file under `.fleetopt/entries/` (never in the team's repo). If the agent
+does not start, a read-only session reads the source and the error, proposes what to
+change (which graph, a setting, a tenant id, the shape of the input), and fleetopt
+tries that by running it. After two attempts it stops and says what it found, what
+it tried and what the agent printed. From then on fleetopt runs its own driver
+(`fleetopt/drive/driver.py`) against that entry and nothing else: never a command
+somebody guessed. Another framework is another way of filling in the same entry.
 
 | Flag | Meaning |
 |---|---|
-| `--run CMD` | How to invoke the agent once, end to end. Optional: the optimizer finds it otherwise, and sometimes picks the wrong interpreter first. Locked when given. |
-| `--auto` | Answer yes to both permission prompts (run the target, edit on a branch). |
-| `--max-usd N` | Stop the optimizer once its *own* spend reaches N (default 5). The target's API calls are its own bill. |
-| `--evals FILE` | Eval cases (input + expected answer) as JSONL/JSON or deepeval tests. Optional: the optimizer looks for them in the repo otherwise. With cases, the judge reports correctness pass rates before and after, not just "unchanged". |
-| `--out DIR` | Where captures go (default `./.fleetopt`, relative to where you run it). |
-| `fleetopt review REPO --run CMD` | The review alone, without an optimization run: capture once, print the structural numbers, run the reviewer. Costs the target's own run plus one reviewer session. A run that crashes is still reviewed, with the crash as the first finding. `--label` reviews an earlier capture again without running the agent. Also `--max-usd`, `--out`. |
-| `--review` | Also review the architecture: a separate read-only session names the design patterns, checks each against structural numbers from the traces (branches never taken, fixed dispatch order, loops that always run to their cap, critics that never change anything) and reports whether a simpler design would do, under its own heading. Recommendations with evidence, not patches. |
+| `--graph NAME` | Which agent, when the project has several: a name from its `langgraph.json`, or `file.py:variable`. Default: the first one found; the others are listed. |
+| `--review` | Also review the architecture: a separate read-only session names the design patterns, checks each against structural numbers from the traces (branches never taken, fixed dispatch order, loops that always run the same number of rounds, critics that never change anything, nodes that raise) and reports whether a simpler design would do, under its own heading. Recommendations with evidence, not patches. |
+| `--evals FILE` | Eval cases (input + expected answer) as JSONL/JSON, a LangSmith dataset export, or deepeval tests. Optional: they are looked for in the repo otherwise. With cases, the judge reports correctness pass rates before and after, not just "unchanged". |
+| `--max-usd N` | Stop fleetopt's own session once its spend reaches N (default 5 for optimize, 1 for review). The target's API calls are its own bill. |
+| `--out DIR` | Where captures, entries and run records go (default `./.fleetopt`, relative to where you run it). |
+| `--label NAME` | `review` only: review an earlier capture again without running the agent. |
 
 **What you get:** the report in the terminal (finding, measured before/after in
 dollars first, judge verdict), the patch committed on a branch in the target repo,
 every measurement in `.fleetopt/fleetopt.db`, and a run folder at
 `.fleetopt/runs/<timestamp>-<project>/` with `report.md`, `run.json` (what every
-tool established: run command, medians, compare, judge, skills used, turns, cost),
+tool established: medians, compare, judge, skills used, turns, cost, and the computed verdict),
 `patch.diff`, `log.txt`, and with `--review` the reviewer's `review.md`. The run folder is what feeds the ledger and what you
 would send back to the central team; it holds no prompts or outputs of the target.
 The run also prints which credential it is using as its first line.
 
 **Two debug commands**, for when the optimizer comes back empty on a repo:
-`fleetopt capture <project> --run CMD` runs the target under instrumentation
-without any model involved (free), and `fleetopt report` prints what was
-captured. If `capture` shows `0 runs`, the command did not invoke the graph, or
-the interpreter has no langchain.
+`fleetopt capture <project>` starts the agent under instrumentation and nothing
+more, and `fleetopt report` prints a token and cost breakdown of what was captured
+(it is not the optimizer's report). If `capture` shows `0 runs`, the agent ran
+without going through LangChain's callbacks.
 
 **When it stops early:** a declined prompt is final for that session and it
 reports from read-only evidence. `within noise` means the change did not clear
@@ -150,11 +165,18 @@ These exist because each one is a way to produce a confident wrong number.
   and dollar medians are identical to serial (verified on the fixture); `wall_ms`
   picks up contention, so set `FLEETOPT_PARALLEL=1` when latency is the subject.
 - **The target runs only through `measure`.** A `PreToolUse` hook denies Bash commands
-  that would run it by hand (`pytest`, `python x.py`, `langgraph dev`, the run command
+  that would run it by hand (`pytest`, `python x.py`, `langgraph dev`, the driver
   itself). Running it by hand spent the team's tokens twice, captured nothing, and fed
   12K tokens of tracebacks into the optimizer's context.
-- **An operator-supplied `--run` is locked** until `measure` has actually failed with
-  it. The agent once spent 13 turns re-deriving a command that was already correct.
+- **How the agent is started is not the optimizer's to decide.** fleetopt settles it
+  before the session begins (see Quick start) and the optimizer has no tool to change
+  it. It once spent 13 turns re-deriving a command that was already correct.
+- **The verdict is computed, not written.** After the agent's report fleetopt prints
+  what the recorded measurements support. Only a judged comparison of two different
+  code states counts, and one failed judgment of the final code is a failure. Every
+  comparison states which code each side ran. Observed 2026-09-28: an optimizer
+  measured its patched code under a label called `baseline-retest`, cited that as
+  proof the unmodified agent had the same defect, and reported the saving as real.
 - **Equivalence gates everything.** A cost reduction with a failed judge is a
   regression nobody noticed yet.
 
@@ -168,7 +190,7 @@ These exist because each one is a way to produce a confident wrong number.
 - **Never changes the target's environment.** Installs and downloads (`pip install`,
   `uv add`/`--with`, `poetry add`, `npm install`, `curl`, `wget`, ...) are denied in the
   optimizer's shell. A missing dependency is a finding to report, not something to
-  fix. Observed 2026-09-24 under `--auto`: handed an interpreter without langgraph,
+  fix. Observed 2026-09-24: handed an interpreter without langgraph,
   the agent pulled the packages with `uv run --with`. Right for a sandbox, wrong on
   someone's machine.
 - **A command that has never worked here is probed once** before the remaining runs
@@ -178,29 +200,23 @@ These exist because each one is a way to produce a confident wrong number.
 
 ## Permissions
 
-Gated by class of side effect, not per tool — an optimizer that asks seven times
-is a wizard, not an agent.
+Nothing is asked, so nothing depends on somebody being there to answer. What keeps
+a run safe is enforced:
 
-| | Gate |
+| | Rule |
 |---|---|
-| Read, query, measure, judge | none |
-| Run the target's own command | asked once |
-| Modify the repository | asked once; git branch is the undo |
+| Start the target | only fleetopt's own driver, against the entry settled for the project |
+| Shell | cannot install or download, cannot run the target by hand, cannot `git push` |
+| Edit, Write | only inside the project, and only once a new branch exists |
+| Read | never `.env*`, keys, certificates, `*secret*`, `*credential*`, `.netrc` and friends (`config.DENY_READS`; verified live 2026-09-24) |
+| Built-in tools | Read, Grep, Glob, Bash, Edit, Write, Skill. No web access, no scheduler, no subagents |
+| Spend | `--max-usd` caps fleetopt's own session; the target's API calls are not included |
 
-`--auto` drops to zero prompts. `--max-usd` (default 5) caps the optimizer's own
-spend; the target's API calls are not included. The optimizer cannot read the
-target's secrets: `.env*`, key and certificate files, anything named
-`*secret*`/`*credential*`, `.netrc` and friends are denied to Read/Grep/Glob
-(`config.DENY_READS`; verified live 2026-09-24). It loads the machine's
-user-level Claude Code settings and nothing from the target repo's `.claude/`,
-so another team's hooks, permissions and CLAUDE.md never run inside it, and it
-spawns its subprocesses with telemetry and auto-memory off. A decline is final for the session: the agent is
-told to stop and report from read-only evidence, not to look for another route.
-Note for anyone touching `session.py`: a tool listed in `allowed_tools` is
-auto-approved *before* `can_use_tool` is consulted (the SDK warns with
-`CanUseToolShadowedWarning`), so gated tools must be left out of that list.
-Verified 2026-09-23 by declining both prompts: no sessions written, no edits, no
-fabricated numbers.
+A session loads nothing from the operator's Claude Code (plugins, skills, hooks, MCP
+servers) and nothing from the target repo's `.claude/`, so another team's hooks,
+permissions and CLAUDE.md never run inside it; only the credential-bearing keys of
+`~/.claude/settings.json` are passed through. Subprocesses are spawned with telemetry
+and auto-memory off. Each of these is a test in `tests/test_invariants.py`.
 
 ## Setup
 
@@ -242,7 +258,7 @@ target's API key.
 | invariants | the product's promises, one test each: a session inherits nothing from the operator, has no web access, cannot read secrets; nothing is installed or hand-run; the probe only observes; a change inside the noise is not a saving; the judge fails closed; the reviewer can only look; structural patches wait for eval cases | `pytest -q tests/test_invariants.py` | none, under 1 s |
 | pytest | the deterministic code: eval discovery, label scoping, the Bash guard, the noise floor, session isolation, and one capture of the fixture | `pytest -q` | none, about 2 s |
 | plugin eval | the six skills: with the plugin loaded the agent reaches each skill's conclusion (the 4,096-token Haiku minimum, effort before tier, the ~10K schema threshold...); the default with/without arm shows whether the skill made the difference | `claude plugin eval fleetopt/optimizer/plugin --trust-plugin` | 12 short agent runs on your login, a few dollars |
-| corpus ledger | the whole loop on real agents | `fleetopt optimize targets/<repo> --auto`, then a line in `tests/corpus/ledger.md` | the target's own tokens plus the optimizer's |
+| corpus ledger | the whole loop on real agents | `fleetopt optimize targets/<repo>`, then a line in `tests/corpus/ledger.md` | the target's own tokens plus the optimizer's |
 
 The skill evals live next to the skills because the runner looks for them below the
 plugin. `tests/corpus/corpus_build.py` regenerates the candidate list from GitHub

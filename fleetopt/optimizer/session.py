@@ -24,8 +24,6 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
     HookMatcher,
-    PermissionResultAllow,
-    PermissionResultDeny,
     ResultMessage,
     TextBlock,
     ToolUseBlock,
@@ -46,12 +44,13 @@ without changing what it produces.
 Work in this order, but use your judgement - the project decides the details:
 
 1. Understand it. Read the source and the graph topology. What is this agent for?
-2. Establish a baseline. Find how to run it once end to end, set that as the run
-   command, then measure it. Without a baseline nothing you do afterwards is
-   provable. Before that, look for eval cases (see fleetopt:evals) and load them
-   with load_eval_cases; prefer the suite that exercises them as the run command.
+2. Establish a baseline. fleetopt already knows how to start this agent and which
+   inputs to give it, so call measure. Without a baseline nothing you do afterwards
+   is provable. Before that, look for eval cases (see fleetopt:evals) and load them
+   with load_eval_cases.
 3. Find the cost. Query the traces. Go where the tokens are.
-4. Change one thing. Create a git branch first, then apply a single optimization.
+4. Change one thing. Create a git branch first (edits are refused until you are on a
+   new branch), then apply a single optimization.
 5. Prove it. Measure again under a new label, compare, and judge equivalence.
 
 Report at the end: what you changed, the measured difference (dollars first, then
@@ -70,10 +69,6 @@ verbatim under a heading "Architecture review" in your final report, separate fr
 savings. Do not act on tier-two items. Act on a tier-one item only if eval cases are
 loaded and cover the affected path; otherwise leave it as a recommendation and say what
 would unlock it."""
-
-STOP = ("The user declined to let you {kind}. This is final for the session: do not retry, "
-        "do not look for another way to do it. Write your final report now with what you "
-        "established from read-only evidence, and state plainly what you could not do.")
 
 # Eval runners count as running the target too: a deepeval or promptfoo suite
 # invokes the agent on every case and bills the team for its own graders.
@@ -99,8 +94,33 @@ def _deny(reason):
                                    "permissionDecision": "deny", "permissionDecisionReason": reason}}
 
 
+PUBLISH = re.compile(r"\bgit\s+push\b")
+
+
+def guard_edit(project, start_branch):
+    """PreToolUse hook on Edit and Write. It replaces a yes/no question with a rule:
+    a change lands inside the project, on a branch made for it, or not at all."""
+    root = pathlib.Path(project).resolve()
+
+    async def hook(input_data, tool_use_id, context):
+        raw = (input_data.get("tool_input") or {}).get("file_path", "")
+        target = pathlib.Path(raw) if pathlib.Path(raw).is_absolute() else root / raw
+        target = target.resolve()
+        if not target.is_relative_to(root) or ".git" in target.relative_to(root).parts:
+            return _deny(f"fleetopt changes files only inside the project it was given ({root}).")
+        if _git(root, "rev-parse", "--abbrev-ref", "HEAD") == start_branch:
+            return _deny(f"You are still on {start_branch!r}, the branch this run started from. Create a "
+                         "new branch first (git checkout -b ...), then make the change there.")
+        return {}
+
+    return hook
+
+
 def guard_bash(run_cmd):
-    """PreToolUse hook on Bash. Two rules, both enforced rather than asked for.
+    """PreToolUse hook on Bash. Three rules, all enforced rather than asked for.
+
+    Nothing is published: no git push. What fleetopt changes stays on a local branch
+    for the team to read.
 
     The target runs only through `measure`: running it by hand spends the team's
     tokens twice, captures nothing, and fed 12K tokens of pytest tracebacks into
@@ -110,12 +130,13 @@ def guard_bash(run_cmd):
     missing dependency is a finding about the run command, not something to fix."""
     async def hook(input_data, tool_use_id, context):
         cmd = (input_data.get("tool_input") or {}).get("command", "")
+        if PUBLISH.search(cmd):
+            return _deny("fleetopt never pushes. The change stays on a local branch for the team to review.")
         if ENV_MUTATION.search(cmd):
             return _deny("fleetopt never installs packages or downloads anything into the "
-                         "target's environment. Find the interpreter that already has the "
-                         "project's dependencies (its .venv, `uv run`/`poetry run` if the project "
-                         "uses them, a Makefile target) and set that as the run command. If none "
-                         "exists, report it - that is the team's finding.")
+                         "target's environment. Finding the interpreter that already has the "
+                         "project's dependencies is fleetopt's job, not yours. If something is "
+                         "missing, report it - that is the team's finding.")
         hits_run_cmd = bool(run_cmd) and run_cmd.split()[-1] in cmd
         if hits_run_cmd or RUNS_TARGET.search(cmd):
             return _deny("The target runs only through the measure tool. Use measure; if it "
@@ -169,59 +190,6 @@ def _write_record(run_dir, project, start_sha, started, meta, texts, calls, skil
     print(f"[fleetopt] run record: {run_dir}")
 
 
-# Read-only git is not a repository mutation; don't spend the user's attention on it.
-SAFE_GIT = ("status", "diff", "log", "branch --list", "rev-parse", "show", "ls-files")
-
-
-class Gate:
-    """Asks once per class of side effect, then stays out of the way."""
-
-    def __init__(self, auto=False):
-        self.auto = auto
-        self.granted = set()
-        self.denied = set()
-
-    @staticmethod
-    def _classify(tool_name, data):
-        if tool_name in ("mcp__fleetopt__measure", "mcp__fleetopt__set_run_command"):
-            return "execute"
-        if tool_name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
-            return "mutate"
-        if tool_name == "Bash":
-            cmd = (data.get("command") or "").strip()
-            if cmd.startswith("git ") and any(cmd.startswith(f"git {s}") for s in SAFE_GIT):
-                return None
-            return "mutate"
-        return None
-
-    async def __call__(self, tool_name, data, context):
-        kind = self._classify(tool_name, data)
-        if kind is None or self.auto or kind in self.granted:
-            return PermissionResultAllow()
-        if kind in self.denied:  # asked once, answered once - do not nag, do not let it retry
-            return PermissionResultDeny(message=STOP.format(kind=kind))
-
-        question = {
-            "execute": "The optimizer wants to RUN this project's own command.\n"
-                       f"  {data.get('cmd') or data.get('label', '')}\n"
-                       "  This executes their code and may cost API tokens.",
-            "mutate": "The optimizer wants to MODIFY files in this repository.\n"
-                      "  It will work on a git branch, so this is reversible.",
-        }[kind]
-
-        print(f"\n--- permission ---\n{question}")
-        try:
-            answer = await asyncio.to_thread(input, "  allow for this session? [y/N] ")
-        except EOFError:  # no terminal - treat as a decline, not a crash
-            answer = ""
-        if answer.strip().lower() not in ("y", "yes"):
-            self.denied.add(kind)
-            return PermissionResultDeny(message=STOP.format(kind=kind))
-
-        self.granted.add(kind)
-        return PermissionResultAllow()
-
-
 def verdict(events):
     """What the measurements support, computed from what the tools recorded. Printed
     after the agent's report and stored in the run record, so a report cannot argue
@@ -253,7 +221,7 @@ def verdict(events):
     return f"PROVEN ON THIS EVIDENCE: the judge passed ({details}).{saving}"
 
 
-def build_options(project, run_cmd=None, auto=False, model=None, max_turns=60, max_usd=None, effort=None):
+def build_options(project, run_cmd=None, model=None, max_turns=60, max_usd=None, effort=None):
     """Everything a session is allowed to be. Apart from run() so the product's
     promises can be read off it in a test without starting a session
     (tests/test_invariants.py)."""
@@ -273,14 +241,16 @@ def build_options(project, run_cmd=None, auto=False, model=None, max_turns=60, m
         # Observed before this: a run called ScheduleWakeup to "wait" for its reviewer.
         # The reviewer is a separate query() behind review_architecture, not a subagent.
         tools=["Read", "Grep", "Glob", "Bash", "Edit", "Write", "Skill"],
-        # Only ungated tools go here. An allowed_tools entry auto-approves before
-        # can_use_tool is consulted, so anything the Gate must see is left out and
-        # falls through to it (the SDK warns about this: CanUseToolShadowedWarning).
-        allowed_tools=[t for t in tools.TOOL_NAMES if not t.endswith(("measure", "set_run_command"))]
-        + ["Read", "Grep", "Glob", "Skill"],
+        # No questions are asked, so none of these needs a person. What keeps them safe
+        # is enforced below, not confirmed: the target is started only by fleetopt's own
+        # driver, Bash cannot install, publish or run the target by hand, and an edit
+        # lands inside the project on a new branch or not at all.
+        allowed_tools=[*tools.TOOL_NAMES, "Read", "Grep", "Glob", "Skill", "Bash", "Edit", "Write"],
         plugins=[{"type": "local", "path": str(PLUGIN)}],
-        can_use_tool=Gate(auto),
-        hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[guard_bash(run_cmd)])]},
+        hooks={"PreToolUse": [
+            HookMatcher(matcher="Bash", hooks=[guard_bash(run_cmd)]),
+            HookMatcher(matcher="Edit|Write", hooks=[guard_edit(project, _git(project, "rev-parse", "--abbrev-ref", "HEAD"))]),
+        ]},
         # Optional. Lower effort cuts the optimizer's own output/thinking tokens;
         # unverified for finding quality, so off unless FLEETOPT_EFFORT is set.
         effort=effort,
@@ -303,7 +273,7 @@ def build_options(project, run_cmd=None, auto=False, model=None, max_turns=60, m
     )
 
 
-async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=60, max_usd=None, effort=None, evals=None, review=False):
+async def run(project, out_dir, run_cmd, model=None, max_turns=60, max_usd=None, effort=None, evals=None, review=False):
     project = pathlib.Path(project).resolve()
     out = pathlib.Path(out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -312,20 +282,17 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
     run_dir = out / "runs" / f"{started:%Y%m%d-%H%M%S}-{project.name}"
     run_dir.mkdir(parents=True, exist_ok=True)
     start_sha = _git(project, "rev-parse", "HEAD")
-    tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd, "run_locked": bool(run_cmd),
+    tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd,
                       "events": [], "review": review, "model": model, "run_dir": run_dir})
     tools.CTX.pop("baseline_state", None)
     mission = MISSION
     if evals:
         mission += (f"\n\nEval cases were supplied at `{evals}`. Call load_eval_cases with that "
                     "path before measuring.")
-    if run_cmd:
-        mission += (f"\n\nThe run command is already set: `{run_cmd}`. Do not rediscover or "
-                    "change it - start with measure.")
     if review:
         mission += REVIEW_MISSION
 
-    options = build_options(project, run_cmd, auto, model, max_turns, max_usd, effort)
+    options = build_options(project, run_cmd, model, max_turns, max_usd, effort)
 
     async def prompt():
         yield {"type": "user", "message": {"role": "user", "content": mission}}
@@ -356,7 +323,7 @@ async def run(project, out_dir, run_cmd=None, auto=False, model=None, max_turns=
     finally:
         computed = verdict(tools.CTX.get("events", []))
         print(f"\n--- fleetopt verdict (computed from the measurements, not written by the agent) ---\n{computed}")
-        meta = {"model": model, "auto": auto, "evals_path": evals, "max_turns": max_turns, "max_usd": max_usd,
+        meta = {"model": model, "evals_path": evals, "max_turns": max_turns, "max_usd": max_usd,
                 "review": review, "verdict": computed}
         try:
             _write_record(run_dir, project, start_sha, started, meta, texts, calls, skills, result)

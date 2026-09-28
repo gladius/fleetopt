@@ -28,10 +28,10 @@ Grep for these before reading files: `expected_output`, `LLMTestCase`, `Golden(`
 
 1. Found JSONL, JSON or deepeval files: call `load_eval_cases` with the file or
    folder. It reports how many cases loaded and from where.
-2. Prefer the suite that exercises those cases as the run command, so the captured
-   runs match the cases. `judge` only grades runs whose input matches a case; the
-   rest are reported as unmatched, and that means the run command did not
-   exercise them.
+2. fleetopt starts the agent itself and takes its inputs from the team's cases where
+   it can, so the captured runs match them. `judge` only grades runs whose input
+   matches a case; the rest are reported as unmatched, and that means those cases
+   were not among the inputs used.
 3. Found only a dataset name (LangSmith, Galileo, promptfoo): do not try to fetch
    it. Put the name in the report so a human can export it.
 4. Found nothing: say so in the report in one line - "correctness not checked: no

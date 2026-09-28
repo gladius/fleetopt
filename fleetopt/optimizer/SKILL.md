@@ -16,7 +16,8 @@ monotonically, 67% of all tokens" is a finding.
 2. **The target runs only through `measure`.** Never invoke the project's command
    yourself with Bash - it spends the team's API tokens twice, captures nothing, and
    fills your context with their test output. If `measure` fails, read its error and
-   fix the run command; do not reproduce the failure by hand.
+   report it. How the agent is started is fleetopt's to fix, not yours; do not
+   reproduce the failure by hand.
 3. **Query, don't read.** Traces are large. Use `query_traces` with aggregates. Pull
    full prompt text only for the one or two nodes you have singled out.
 4. **Measure with n=3 first.** Go to n=5 only when `compare` says within noise and
@@ -30,8 +31,8 @@ monotonically, 67% of all tokens" is a finding.
    regression you have not noticed yet. Report it as a failure, not a tradeoff.
 8. **Evals before the baseline.** If the repo has eval cases (deepeval tests, JSONL
    or JSON with expected answers, an evals/ folder), load them with
-   `load_eval_cases` first and prefer the suite that exercises them as the run
-   command; `judge` then grades correctness, not just "unchanged". Never run an
+   `load_eval_cases` first; `judge` then grades correctness, not just "unchanged".
+   fleetopt takes the agent's inputs from the same cases where it can. Never run an
    eval framework by hand - it bills the team's own graders. See `fleetopt:evals`.
 
 ## Rule out first

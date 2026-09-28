@@ -1,8 +1,10 @@
 """fleetopt - find cost savings in a LangGraph project without editing it.
 
-    fleetopt optimize <project>               find waste, patch on a branch, prove it
-    fleetopt optimize <project> --review      the same, plus an architecture review
-    fleetopt review <project> --run "<cmd>"   the architecture review alone
+    fleetopt optimize <project>            find waste, patch on a branch, prove it
+    fleetopt optimize <project> --review   the same, plus an architecture review
+    fleetopt review <project>              the architecture review alone
+
+fleetopt works out how to start the agent itself, once per project, and remembers it.
 
 `capture` and `report` are diagnostics for when a run comes back empty on an
 unfamiliar repo. They are not part of the flow.
@@ -24,6 +26,19 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 
+def _start(args):
+    """The command that starts this project's agent: fleetopt's own driver, run by the
+    project's interpreter, against the entry settled for it. None when it cannot be started."""
+    from fleetopt.drive import entry
+
+    try:
+        path, found = entry.ensure(pathlib.Path(args.project).resolve(), pathlib.Path(args.out).resolve(), args.graph)
+    except (entry.Unstartable, RuntimeError) as exc:
+        print(f"[fleetopt] {exc}")
+        return None
+    return entry.command(path, found)
+
+
 def optimize(args):
     from fleetopt.optimizer import session
 
@@ -43,12 +58,14 @@ def optimize(args):
                 break
     model = model or "claude-sonnet-5"
 
+    run_cmd = _start(args)
+    if run_cmd is None:
+        return 1
     return asyncio.run(
         session.run(
             args.project,
             args.out,
-            run_cmd=args.run,
-            auto=args.auto,
+            run_cmd,
             model=model,
             max_usd=args.max_usd,
             effort=os.environ.get("FLEETOPT_EFFORT") or None,
@@ -59,14 +76,15 @@ def optimize(args):
 
 
 def capture(args):
-    print(f"[fleetopt] running: {args.run}\n[fleetopt] cwd:     {args.project}")
+    run_cmd = _start(args)
+    if run_cmd is None:
+        return 1
     session_id, code, n_runs, n_graphs = runner.run(
-        pathlib.Path(args.project).resolve(), args.run, args.out, with_io=True, label=args.label
+        pathlib.Path(args.project).resolve(), run_cmd, args.out, with_io=True, label=args.label
     )
     print(f"\n[fleetopt] exit {code} | session {session_id} | {n_runs} runs, {n_graphs} graphs")
     if not n_runs:
-        print("[fleetopt] no runs captured - did the command actually invoke the graph?")
-        print("[fleetopt] the target's last output lines are in the path printed above")
+        print("[fleetopt] nothing was captured: the agent ran without going through LangChain's callbacks")
     return code
 
 
@@ -157,23 +175,22 @@ def review(args):
     project = pathlib.Path(args.project).resolve()
     out = pathlib.Path(args.out).resolve()
     print(f"[fleetopt] auth: {config.auth_summary() or 'unknown (could not run auth status)'}")
-    crashed = ""
+    run_cmd = None
     if args.label:  # reuse a capture: a second opinion costs no second run of the target
         label = args.label
-    elif args.run:
+    else:
+        run_cmd = _start(args)
+        if run_cmd is None:
+            return 1
         label = f"review-{datetime.datetime.now():%Y%m%d-%H%M%S}"
         try:
-            measure_mod.collect(project, args.run, out, 1, label)
+            measure_mod.collect(project, run_cmd, out, 1, label)
         except RuntimeError as exc:
             # Unusable for a measurement, not for a review: what ran is evidence and the
             # crash is the first finding.
-            crashed = str(exc)
-            print(f"[fleetopt] the run failed; reviewing what was captured.\n{crashed}")
-    else:
-        print("[fleetopt] review needs --run (capture now) or --label (reuse a capture)")
-        return 1
+            print(f"[fleetopt] the run failed; reviewing what was captured.\n{exc}")
 
-    tools.CTX.update({"project": project, "out": out, "run_cmd": args.run, "events": [], "review": True,
+    tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd, "events": [], "review": True,
                       "include_failed": True})
     ids = tools._ids(label)
     if not ids:
@@ -205,7 +222,7 @@ def review(args):
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "review.md").write_text(text + "\n", encoding="utf-8")
     (run_dir / "run.json").write_text(json.dumps({
-        "kind": "review", "project": str(project), "run_cmd": args.run, "label": label,
+        "kind": "review", "project": str(project), "run_cmd": run_cmd, "label": label,
         "model": model, "reviewer_cost_usd": cost, "shape": facts, "events": tools.CTX["events"],
     }, indent=1, default=str), encoding="utf-8")
     print("\n--- architecture review ---\n" + text)
@@ -221,8 +238,6 @@ def _parser():
 
     opt = sub.add_parser("optimize", help="find and prove cost savings in a project")
     opt.add_argument("project")
-    opt.add_argument("--run", help="how to invoke the agent (the optimizer finds it otherwise)")
-    opt.add_argument("--auto", action="store_true", help="no permission prompts")
     opt.add_argument("--evals", help="file or folder of eval cases (input + expected answer): "
                                      "JSONL/JSON or deepeval tests. Found automatically otherwise.")
     opt.add_argument("--max-usd", type=float, default=5.0,
@@ -235,7 +250,6 @@ def _parser():
 
     cap = sub.add_parser("capture", help="[debug] run a project under instrumentation")
     cap.add_argument("project")
-    cap.add_argument("--run", required=True, help="how to invoke the agent once")
     cap.add_argument("--label", default="manual", help="name for this capture (default: manual)")
     cap.set_defaults(fn=capture)
 
@@ -245,8 +259,6 @@ def _parser():
 
     rev = sub.add_parser("review", help="review the architecture only, without optimizing")
     rev.add_argument("project")
-    rev.add_argument("--run", help="how to invoke the agent once; a command that sends it several different inputs "
-                                   "gives the review more to go on")
     rev.add_argument("--label", help="review an earlier capture again instead of running the agent (the label is "
                                      "printed by every review)")
     rev.add_argument("--max-usd", type=float, default=1.0,
@@ -254,6 +266,9 @@ def _parser():
                           "target's API calls.")
     rev.set_defaults(fn=review)
 
+    for p in (opt, cap, rev):
+        p.add_argument("--graph", help="which agent, when the project has several: a name from its "
+                                       "langgraph.json, or file.py:variable. Default: the first one found")
     for p in (opt, cap, rep, rev):  # after the subcommand, where people put it
         p.add_argument("--out", default=argparse.SUPPRESS,
                        help="where captures and run records go (default ./.fleetopt)")

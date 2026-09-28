@@ -237,7 +237,7 @@ def test_capture_fixture_end_to_end(tmp_path):
     git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
     out = subprocess.run(
         [sys.executable, "-c", "from fleetopt.cli import main; main()",
-         "capture", str(target), "--run", f"{sys.executable} agent.py", "--out", str(tmp_path / "out")],
+         "capture", str(target), "--out", str(tmp_path / "out")],
         cwd=tmp_path, capture_output=True, text=True, timeout=300,
     )
     assert out.returncode == 0, out.stdout + out.stderr
@@ -249,6 +249,7 @@ def test_capture_fixture_end_to_end(tmp_path):
 # --- the second fixture ------------------------------------------------------------------
 
 def _capture_fixture(tmp_path, script, *extra):
+    """Capture one of the fixture's two agents, named by its file: agent.py or supervisor.py."""
     target = tmp_path / "fixture"
     if not target.exists():
         shutil.copytree(ROOT / "fixture", target)
@@ -257,7 +258,7 @@ def _capture_fixture(tmp_path, script, *extra):
             subprocess.run(["git", "-C", str(target), *args], check=True, capture_output=True)
     return subprocess.run(
         [sys.executable, "-c", "from fleetopt.cli import main; main()", "capture", str(target),
-         "--run", f"{sys.executable} {script}", "--out", str(tmp_path / "out"), *extra],
+         "--graph", script.removesuffix(".py"), "--out", str(tmp_path / "out"), *extra],
         cwd=tmp_path, capture_output=True, text=True, timeout=300,
     )
 
@@ -276,10 +277,10 @@ def test_out_is_accepted_before_and_after_the_subcommand():
     assert parse(["optimize", "repo"]).out == ".fleetopt"
     assert parse(["optimize", "repo", "--out", "after"]).out == "after"
     assert parse(["--out", "before", "optimize", "repo"]).out == "before"
-    assert parse(["--out", "before", "capture", "repo", "--run", "x", "--out", "after"]).out == "after"
-    args = parse(["review", "repo", "--run", "x"])
-    assert (args.out, args.label, args.max_usd, args.fn.__name__) == (".fleetopt", None, 1.0, "review")
-    assert parse(["review", "repo", "--label", "earlier"]).run is None
+    assert parse(["--out", "before", "capture", "repo", "--out", "after"]).out == "after"
+    args = parse(["review", "repo"])
+    assert (args.out, args.label, args.graph, args.max_usd, args.fn.__name__) == (".fleetopt", None, None, 1.0, "review")
+    assert parse(["review", "repo", "--label", "earlier", "--graph", "supervisor"]).graph == "supervisor"
 
 
 # --- structural smells: numbers, not opinions ------------------------------------------
@@ -426,16 +427,16 @@ def test_compare_counts_finished_requests_and_prices_only_those(tmp_path):
     assert "completed" in measure.render(result)
 
 
-def test_review_stops_when_the_agent_never_ran(tmp_path, capsys, monkeypatch):
+def test_review_stops_when_there_is_no_agent_to_start(tmp_path, capsys, monkeypatch):
     target = tmp_path / "t"
     target.mkdir()
-    (target / "boom.py").write_text("raise SystemExit('wrong interpreter')\n", encoding="utf-8")
+    (target / "notes.py").write_text("print('no graph in here')\n", encoding="utf-8")
     monkeypatch.setattr(config, "auth_summary", lambda: "test")
 
     def never(*a, **k):
-        raise AssertionError("the reviewer must not be started for a run that captured nothing")
+        raise AssertionError("the reviewer must not be started when the agent never ran")
 
     from fleetopt.optimizer import review as review_mod
     monkeypatch.setattr(review_mod, "run", never)
-    code = cli.main(["review", str(target), "--run", f"{sys.executable} boom.py", "--out", str(tmp_path / "out")])
-    assert code == 1 and "nothing to review" in capsys.readouterr().out
+    code = cli.main(["review", str(target), "--out", str(tmp_path / "out")])
+    assert code == 1 and "no graph found" in capsys.readouterr().out

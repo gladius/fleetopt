@@ -81,40 +81,18 @@ def _ids(label):
 
 
 @tool(
-    "set_run_command",
-    "Tell the harness how to invoke the target agent once, end to end (e.g. "
-    "'python main.py' or 'pytest tests/test_agent.py'). Required before measuring "
-    "if it wasn't supplied on the command line. Find it in the README, pyproject "
-    "scripts, tests, or langgraph.json.",
-    {"cmd": str},
-)
-async def set_run_command(args):
-    # An operator-supplied command is locked until it has actually failed under
-    # measure. The alternative, observed: 13 turns re-deriving a command that was
-    # already correct, two of them wrong.
-    if CTX.get("run_locked") and not CTX.get("run_failed"):
-        return _ok(f"run command was supplied by the operator and is locked: {CTX['run_cmd']!r}. "
-                   "Call measure with it. It unlocks only if measure fails with it.")
-    CTX["run_cmd"] = args["cmd"]
-    _record("run_command", cmd=args["cmd"])
-    return _ok(f"run command set: {args['cmd']}")
-
-
-@tool(
     "measure",
     "Run the target agent n times under instrumentation and store the results "
     "under a label. Use 'baseline' before changing anything, and another label "
-    "after. Returns median tokens, cost and wall time.",
+    "after. fleetopt starts the agent itself, with the same inputs every time. Returns "
+    "median cost, wall time, finished requests and tokens.",
     {"label": str, "n": int},
 )
 async def measure(args):
     label, n = args["label"], args.get("n", 3)
-    if not CTX.get("run_cmd"):
-        return _ok("no run command yet - call set_run_command first")
     try:
         measure_mod.collect(CTX["project"], CTX["run_cmd"], CTX["out"], n, label)
     except RuntimeError as e:
-        CTX["run_failed"] = True  # unlocks set_run_command
         _record("measure_failed", label=label, error=str(e)[:300])
         return _ok(f"measurement failed: {e}")
     with _conn() as conn:
@@ -304,7 +282,7 @@ async def review_architecture(args):
     return _ok(report)
 
 
-_TOOLS = [set_run_command, measure, query_traces, graph_topology, graph_shape, compare, judge,
+_TOOLS = [measure, query_traces, graph_topology, graph_shape, compare, judge,
           load_eval_cases, review_architecture]
 
 
