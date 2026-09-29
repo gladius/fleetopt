@@ -98,6 +98,10 @@ and `patch.diff` when something was kept. No prompts or outputs of the agent are
 - Only Anthropic has been run; OpenAI and Gemini are priced, untested.
 - The judge reads one run per side of the three measured.
 
+## More
+
+`overview.html` is a one-page briefing on what fleetopt does and how it works.
+
 ## Tests
 
 `pytest -q`: no model is called (a test that tries fails), no spend.

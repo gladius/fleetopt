@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How fleetopt works</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Sans+3:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground: #F3F6F7;
+    --surface: #FFFFFF;
+    --ink: #13242C;
+    --muted: #52656F;
+    --line: #D3DCE0;
+    --accent: #0B6E69;
+    --accent-ink: #FFFFFF;
+    --accent-soft: #DDEFEC;
+    --warn: #8F5600;
+    --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --body: "Source Sans 3", "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --ground: #0E191E; --surface: #15242B; --ink: #E7EFF2; --muted: #9DB2BC; --line: #2A3E48;
+      --accent: #55C7BC; --accent-ink: #0E191E; --accent-soft: #143A38; --warn: #E2AB50;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground: #0E191E; --surface: #15242B; --ink: #E7EFF2; --muted: #9DB2BC; --line: #2A3E48;
+    --accent: #55C7BC; --accent-ink: #0E191E; --accent-soft: #143A38; --warn: #E2AB50;
+  }
+
+  body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--body); font-size: 18px; line-height: 1.45; }
+  .page {
+    max-width: 1000px; margin-inline: auto; padding-inline: 20px; padding-block: 44px 56px;
+    display: flex; flex-direction: column; gap: 52px;
+  }
+  h1, h2, h3 { font-family: var(--display); margin: 0; text-wrap: balance; }
+  h1 { font-size: clamp(2.8rem, 8vw, 4.4rem); font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
+  h2 { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  p { margin: 0; }
+  section { display: flex; flex-direction: column; gap: 20px; }
+
+  .opening { gap: 14px; }
+  .lede { font-size: clamp(1.25rem, 3vw, 1.6rem); line-height: 1.35; max-width: 27em; }
+
+  /* what a team needs */
+  .needs { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .needs li { background: var(--surface); border: 1px solid var(--line); padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+  .needs b { font-family: var(--display); font-weight: 600; font-size: 1.05rem; }
+  .needs span { font-size: 0.92rem; color: var(--muted); }
+  .needs .key { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .stop { font-size: 1rem; color: var(--muted); }
+  .stop q { font-family: var(--mono); font-size: 0.9rem; color: var(--ink); quotes: none; }
+
+  /* the flow */
+  .flow { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(6, 1fr); counter-reset: step; }
+  .flow li { counter-increment: step; position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-right: 14px; }
+  .flow li::before {
+    content: counter(step); width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
+    font-family: var(--mono); font-weight: 500; font-size: 1rem; background: var(--ink); color: var(--ground);
+    position: relative; z-index: 1;
+  }
+  .flow li::after { content: ""; position: absolute; top: 21px; left: 44px; right: 0; height: 2px; background: var(--line); }
+  .flow li:last-child::after { display: none; }
+  .flow li.loop::before { background: var(--accent); color: var(--accent-ink); }
+  .flow h3 { font-size: 1.1rem; font-weight: 600; }
+  .flow span { font-size: 0.92rem; color: var(--muted); }
+  .again { display: grid; grid-template-columns: repeat(6, 1fr); }
+  .again div { grid-column: 3 / span 3; margin-right: 14px; border: 2px solid var(--accent); border-top: 0; height: 14px; }
+  .again p { grid-column: 3 / span 4; font-size: 0.9rem; color: var(--accent); font-weight: 600; padding-top: 6px; }
+  @media (max-width: 760px) {
+    .flow { grid-template-columns: 1fr; gap: 18px; }
+    .flow li { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 4px 14px; padding-left: 58px; min-height: 44px; }
+    .flow li::before { position: absolute; left: 0; top: 0; }
+    .flow li::after { top: 44px; left: 21px; right: auto; width: 2px; height: calc(100% - 26px); }
+    .flow h3 { width: 100%; }
+    .again { grid-template-columns: 1fr; }
+    .again div { display: none; }
+    .again p { grid-column: 1; padding-left: 58px; }
+  }
+
+  /* inside: one agent */
+  .arch { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .part { background: var(--surface); border: 1px solid var(--line); padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; }
+  .part h3 { font-size: 1.1rem; font-weight: 600; }
+  .part p { font-size: 0.95rem; color: var(--muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips span { font-family: var(--mono); font-size: 0.78rem; padding: 3px 8px; border: 1px solid var(--line); background: var(--ground); }
+  .core {
+    grid-column: 1 / -1; background: var(--accent); color: var(--accent-ink); padding: 18px 20px;
+    display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 20px;
+  }
+  .core h3 { font-size: 1.35rem; font-weight: 700; }
+  .core p { font-size: 1rem; }
+  .under {
+    grid-column: 1 / -1; border: 1px dashed var(--line); padding: 14px 18px;
+    display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 20px;
+  }
+  .under b { font-family: var(--display); font-weight: 600; }
+  .under span { font-size: 0.95rem; color: var(--muted); }
+  @media (max-width: 620px) { .arch { grid-template-columns: 1fr; } }
+
+  /* safe */
+  .safe { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .safe li { background: var(--surface); border: 1px solid var(--line); padding: 18px 20px; font-family: var(--display); font-weight: 600; font-size: 1.1rem; line-height: 1.3; }
+
+  /* today */
+  .today { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 24px 32px; }
+  .today div { display: flex; flex-direction: column; gap: 2px; border-top: 2px solid var(--ink); padding-top: 12px; }
+  .today strong { font-family: var(--display); font-weight: 700; font-size: 3rem; line-height: 1; font-variant-numeric: tabular-nums; }
+  .today .win { border-color: var(--accent); }
+  .today .win strong { color: var(--accent); }
+  .today span { color: var(--muted); font-size: 1rem; }
+  .note { background: var(--accent-soft); padding: 14px 18px; font-size: 1.05rem; align-self: flex-start; max-width: 44em; }
+
+  footer { border-top: 1px solid var(--line); padding-top: 16px; font-size: 0.85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <section class="opening">
+    <h2>Central AI team</h2>
+    <h1>fleetopt</h1>
+    <p class="lede">Makes our AI agents cheaper, and proves every change on the team's own evals before keeping it.</p>
+  </section>
+
+  <section>
+    <h2>What a team needs ready</h2>
+    <ul class="needs">
+      <li><b>The project in git</b><span>Changes land on a new branch</span></li>
+      <li><b>The agent runs</b><span>Its own setup, keys and services</span></li>
+      <li class="key"><b>Their eval suite</b><span>Any tool: pytest, LangSmith, Galileo, their own</span></li>
+      <li><b>Visible model calls</b><span>Through LangChain</span></li>
+    </ul>
+    <p class="stop">If anything is missing, it says what and stops before spending: <q>No evals found: create them, then run this again.</q></p>
+  </section>
+
+  <section>
+    <h2>How it works &middot; one command, unattended</h2>
+    <ol class="flow">
+      <li><h3>Check</h3><span>Everything is ready</span></li>
+      <li><h3>Baseline</h3><span>Runs the team's evals, measures cost</span></li>
+      <li class="loop"><h3>Find</h3><span>Where tokens and money go</span></li>
+      <li class="loop"><h3>Change</h3><span>Every fix, on a branch</span></li>
+      <li class="loop"><h3>Prove</h3><span>Cheaper, and the evals still pass</span></li>
+      <li><h3>Report</h3><span>What was kept and saved</span></li>
+    </ol>
+    <div class="again"><div></div><p>Looks again after each kept change</p></div>
+  </section>
+
+  <section>
+    <h2>Inside &middot; one AI agent, set up like an expert</h2>
+    <div class="arch">
+      <div class="part">
+        <h3>Guide</h3>
+        <p>How to work: the steps above, what must be there, when to stop.</p>
+      </div>
+      <div class="part">
+        <h3>Skills</h3>
+        <p>Where cost hides, and how to fix it per provider.</p>
+        <div class="chips"><span>caching</span><span>model choice</span><span>prompt growth</span><span>repeated work</span><span>tool lists</span></div>
+      </div>
+      <div class="core">
+        <h3>One Claude agent</h3>
+        <p>Decides how: reads the project, starts it, finds the waste, makes the changes.</p>
+      </div>
+      <div class="part">
+        <h3>Tools</h3>
+        <p>What it can do, each with limits built in.</p>
+        <div class="chips"><span>start</span><span>run evals</span><span>measure</span><span>save</span><span>keep</span><span>undo</span></div>
+      </div>
+      <div class="part">
+        <h3>Rules</h3>
+        <p>Enforced, never asked: edits only on its branch, no push, no installs, no secrets.</p>
+        <div class="chips"><span>$2 on the team's key</span><span>2 hours</span></div>
+      </div>
+      <div class="under">
+        <b>Code decides what counts</b>
+        <span>Records every model call &middot; measures cost past the noise &middot; a separate reader checks the evals</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What keeps it safe</h2>
+    <ul class="safe">
+      <li>Never touches a team's live code</li>
+      <li>Kept only if cheaper and the team's evals still pass</li>
+      <li>A person decides what is merged</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Where it stands &middot; 29 September 2026</h2>
+    <div class="today">
+      <div class="win"><strong>&minus;8%</strong><span>cost per run, kept</span></div>
+      <div><strong>4 of 4</strong><span>evals pass, before and after</span></div>
+      <div><strong>2</strong><span>changes kept on a branch</span></div>
+      <div><strong>$0.28</strong><span>spent on the agent's key</span></div>
+    </div>
+    <p class="note">First kept result, on a demo research agent running on Claude, with an eval suite we wrote for it. Next: a real team's agent with its own evals.</p>
+  </section>
+
+  <footer>Works today on LangGraph agents in Python. Figures are from test runs. The same day, an open-source example agent was found already lean: nothing to save, and it said so.</footer>
+
+</div>
+</body>
+</html>
