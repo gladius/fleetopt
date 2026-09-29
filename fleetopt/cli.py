@@ -109,7 +109,7 @@ def _captured(out, project, run_cmd, state):
     return row["label"] if row else None
 
 
-def _reviewed(project, out, run_cmd, max_usd, fresh=False, supplied=None):
+def _reviewed(project, out, run_cmd, max_usd, fresh=False, supplied=None, design=False):
     """The review of the code as it stands now: the saved one when the code has not
     changed since, a new one otherwise. Returns (record, new) or (None, False)."""
     from fleetopt.evidence import evals
@@ -121,7 +121,7 @@ def _reviewed(project, out, run_cmd, max_usd, fresh=False, supplied=None):
 
     state = runner.code_state(project)
     if not fresh:
-        kept = review_mod.saved(out, project, run_cmd, state)
+        kept = review_mod.saved(out, project, run_cmd, state, design)
         if kept:
             return kept, False
 
@@ -168,7 +168,8 @@ def _reviewed(project, out, run_cmd, max_usd, fresh=False, supplied=None):
         model = _model("FLEETOPT_REVIEW_MODEL", "FLEETOPT_MODEL")
         print(f"[fleetopt] auth: {config.auth_summary() or 'unknown (could not run auth status)'}")
         try:
-            text, cost = asyncio.run(review_mod.run(project, label, purpose, model=model, max_usd=max_usd))
+            text, cost = asyncio.run(review_mod.run(project, label, purpose, model=model, max_usd=max_usd,
+                                                    design=design))
         except RuntimeError as exc:
             print(f"[fleetopt] {exc}")
             return None, False
@@ -184,7 +185,7 @@ def _reviewed(project, out, run_cmd, max_usd, fresh=False, supplied=None):
         "model": model, "reviewer_cost_usd": cost, "findings": found, "unfinished": unfinished,
         "level": review_mod.level(found, unfinished), "shape": facts, "events": tools.CTX["events"],
     }, indent=1, default=str), encoding="utf-8")
-    record = review_mod.remember(out, project, run_cmd, state, label, run_dir, found, unfinished)
+    record = review_mod.remember(out, project, run_cmd, state, label, run_dir, found, unfinished, design)
     print("\n--- review ---\n" + text)
     print(f"\n--- reviewer ${cost or 0:.4f} ---\n[fleetopt] run record: {run_dir}")
     return {**record, "text": text, "reviewer_cost_usd": cost}, True
@@ -235,7 +236,7 @@ def review(args):
     if run_cmd is None:
         return 1
     record, new = _reviewed(project, out, run_cmd, args.max_usd, fresh=args.fresh or args.asked_anew,
-                            supplied=args.evals)
+                            supplied=args.evals, design=args.design)
     if record is None:
         return 1
     if not new:
@@ -293,7 +294,7 @@ def apply(args):
     if run_cmd is None:
         return 1
     record, new = _reviewed(project, out, run_cmd, min(1.0, args.max_usd), fresh=args.asked_anew,
-                            supplied=args.evals)
+                            supplied=args.evals, design=args.design)
     if record is None:
         return 1
     if not new:
@@ -385,6 +386,10 @@ def _parser():
                           "target's API calls.")
     rev.set_defaults(fn=review)
 
+    for p in (app, rev):
+        p.add_argument("--design", action="store_true",
+                       help="also review the design (does it fit the job, could it be simpler) and, with apply, "
+                            "try design changes when the team has eval cases. Off by default: cost only")
     for p in (app, rev):  # the same cases to look and to change, or the review saw other requests
         p.add_argument("--evals", help="file or folder of eval cases (input + expected answer): JSONL/JSON or "
                                        "deepeval tests. Their inputs are what the agent is run on. Found in "

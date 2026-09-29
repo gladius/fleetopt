@@ -56,45 +56,56 @@ change: <what to change, in one or two sentences>
 effect: <what the traces say it would remove per request: calls, tokens, hops. Not measured>
 risk: <what could change in the answers, or what an input outside the sample could do>
 
-## Design
-
-### D1 - <short title>
-(the same lines, and then)
-tier: <one | two>
-
-## Checked and fine
+{design_section}## Checked and fine
 
 - <what you checked>: <the number that cleared it>
 
-C or D is a fact about the change, not a judgement of its risk:
-- C, cost: the graph keeps its nodes and edges. What changes is what is sent, to which
-  model, how much comes back, or when a loop that already exists stops: caching, a
-  trimmed or no longer re-sent prompt, a bounded output, a smaller model or lower
-  effort on a node, an early exit, an identical call not repeated.
-- D, design: nodes or edges are removed, merged or rewired. Tier one is mechanical
-  (hardwire a branch always taken, drop a round that never changes anything, merge two
-  calls, turn a fixed-order supervisor into edges). Tier two is a redesign.
-What happens to a finding afterwards is fleetopt's rule, not yours: a C finding is
-tried; a D finding of either tier is tried only when the team has eval cases, and is
-judged on them. Every change that is tried is measured and judged before it is kept,
-and a person reads the branch before anything is merged. So never hold a finding back, or move it from C to D, because it feels
-risky: say what could go wrong on the risk line.
+{rules}
 Number the findings in the order you would apply them, largest effect first. The same
 change is one finding, not a C and a D. A pattern that fits is not a finding: it goes
 under "Checked and fine". Under a heading with nothing to report write "None found."
 You saw one capture, so you report evidence and the change it points to, never a
 measured saving."""
 
-SYSTEM = (
-    "You review the LangGraph agent in the current directory for a central AI team, in two parts: "
-    "where it wastes money, and whether its design fits its job. You may read source and query the "
-    "capture database with the fleetopt tools; you never edit files, never run anything, never patch. "
-    "Every finding cites a number from graph_shape or query_traces and a source location. Where a "
-    "guide below says to measure, judge or patch, that is for whoever applies your findings later, "
-    "not for you.\n\n"
-    "# Part one: cost\n\n" + COST + "\n\n## The mechanics each pattern refers to\n\n" + MECHANICS +
-    "\n\n# Part two: design\n\n" + GUIDE + "\n\n" + REFERENCES + "\n\n" + FORMAT
-)
+COST_RULE = """- C, cost: the graph keeps its nodes and edges. What changes is what is sent, to which
+  model, how much comes back, or when a loop that already exists stops: caching, a
+  trimmed or no longer re-sent prompt, a bounded output, a smaller model or lower
+  effort on a node, an early exit, an identical call not repeated. fleetopt checks this:
+  a cost change that alters the graph is undone.
+"""
+DESIGN_RULE = """- D, design: nodes or edges are removed, merged or rewired. Tier one is mechanical
+  (hardwire a branch always taken, drop a round that never changes anything, merge two
+  calls, turn a fixed-order supervisor into edges). Tier two is a redesign.
+"""
+TAIL = """Every change that is tried is measured and judged before it is kept, and a person
+reads the branch before anything is merged. So never hold a finding back because it feels
+risky: say what could go wrong on the risk line.
+"""
+NO_DESIGN = """Only cost is reviewed in this run. A change that would remove, merge or rewire nodes
+or edges is not a cost finding: leave it out, and if the design looks badly wrong for
+the job, say so in one line under "Checked and fine" (for example "design not reviewed:
+a supervisor consulted on every step that never varies its order").
+"""
+INTRO = ("You review the LangGraph agent in the current directory for a central AI team. You may read "
+         "source and query the capture database with the fleetopt tools; you never edit files, never run "
+         "anything, never patch. Every finding cites a number from graph_shape or query_traces and a source "
+         "location. Where a guide below says to measure, judge or patch, that is for whoever applies your "
+         "findings later, not for you.\n\n")
+
+
+def system(design=False):
+    """The reviewer's instructions: cost always, design only when asked for."""
+    body = "# Part one: cost\n\n" + COST + "\n\n## The mechanics each pattern refers to\n\n" + MECHANICS
+    if design:
+        body += "\n\n# Part two: design\n\n" + GUIDE + "\n\n" + REFERENCES
+        rules = "C or D is a fact about the change, not a judgement of its risk:\n" + COST_RULE + DESIGN_RULE
+        section = "## Design\n\n### D1 - <short title>\n(the same lines, and then)\ntier: <one | two>\n\n"
+    else:
+        rules, section = "What a cost finding is:\n" + COST_RULE + NO_DESIGN, ""
+    return INTRO + body + "\n\n" + FORMAT.replace("{design_section}", section).replace("{rules}", rules + TAIL)
+
+
+SYSTEM = system(design=True)
 
 READ_ONLY = ["Read", "Grep", "Glob", "mcp__fleetopt__graph_shape",
              "mcp__fleetopt__graph_topology", "mcp__fleetopt__query_traces"]
@@ -135,27 +146,28 @@ def level(found, unfinished=0):
     return max([KINDS.index(f["kind"]) + 1 for f in found], default=0)
 
 
-def _pointer(out, project, run_cmd):
+def _pointer(out, project, run_cmd, design=False):
     from fleetopt.drive import entry  # one agent is one way of starting it
 
-    return entry.path_for(out, project, "review-" + hashlib.sha1(run_cmd.encode()).hexdigest()[:8])
+    kind = "-design" if design else ""  # a review of cost alone does not answer a request for design
+    return entry.path_for(out, project, "review-" + hashlib.sha1(run_cmd.encode()).hexdigest()[:8] + kind)
 
 
-def remember(out, project, run_cmd, state, label, run_dir, found, unfinished=0):
+def remember(out, project, run_cmd, state, label, run_dir, found, unfinished=0, design=False):
     """Note which code the newest review of this agent was made on. Returns the note."""
     record = {"code_state": state, "label": label, "run_dir": str(run_dir), "findings": found,
               "unfinished": unfinished, "level": level(found, unfinished),
               "when": datetime.datetime.now().isoformat(sep=" ", timespec="minutes")}
-    path = _pointer(out, project, run_cmd)
+    path = _pointer(out, project, run_cmd, design)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=1), encoding="utf-8")
     return record
 
 
-def saved(out, project, run_cmd, state):
+def saved(out, project, run_cmd, state, design=False):
     """The newest review of this agent, with its text, if it was made on this exact
     code. `state=None` asks for the newest review whatever code it saw."""
-    path = _pointer(out, project, run_cmd)
+    path = _pointer(out, project, run_cmd, design)
     if not path.exists():
         return None
     record = json.loads(path.read_text(encoding="utf-8"))
@@ -169,7 +181,7 @@ def saved(out, project, run_cmd, state):
     return {**record, "text": report, "findings": found, "level": level(found, record.get("unfinished", 0))}
 
 
-async def run(project, label, purpose, model=None, max_usd=1.0):
+async def run(project, label, purpose, model=None, max_usd=1.0, design=False):
     """Returns (report text, cost in USD). Raises if the session fails."""
     from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKError, ResultMessage, TextBlock,
                                   query)
@@ -179,7 +191,7 @@ async def run(project, label, purpose, model=None, max_usd=1.0):
     options = ClaudeAgentOptions(
         cwd=str(project),
         model=model or os.environ.get("FLEETOPT_REVIEW_MODEL") or "claude-sonnet-5",
-        system_prompt=SYSTEM,
+        system_prompt=system(design),
         tools=["Read", "Grep", "Glob"],
         # A read-only server: nothing that runs the agent, changes a file or grades a change.
         mcp_servers={"fleetopt": tools.server(READ_ONLY)},

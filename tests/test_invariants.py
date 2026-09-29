@@ -224,6 +224,15 @@ def test_a_refusal_is_an_answer_not_an_obstacle():
     assert "never look for another way to make the same change" in prompt
 
 
+def test_design_is_reviewed_only_when_asked_for():
+    cost_only, both = review.system(), review.system(design=True)
+    assert "# Part two: design" not in cost_only and "## Design" not in cost_only
+    assert "# Part two: design" in both and "tier: <one | two>" in both
+    assert "a cost change that alters the graph is undone" in " ".join(cost_only.split())
+    args = cli._parser().parse_args(["apply", "repo"])
+    assert args.design is False and cli._parser().parse_args(["review", "repo", "--design"]).design is True
+
+
 def test_the_loop_is_code_and_the_session_only_edits():
     from fleetopt.optimizer import loop
 
@@ -238,7 +247,7 @@ def test_the_loop_is_code_and_the_session_only_edits():
 def test_the_reviewer_covers_cost_and_design_and_measures_nothing():
     assert "# Part one: cost" in review.SYSTEM and "# Part two: design" in review.SYSTEM
     assert "minimum prefix" in review.SYSTEM.lower()          # the mechanics travel with it, no skill to load
-    rules = " ".join(review.FORMAT.split())
+    rules = " ".join(review.system().split())
     assert "never a measured saving" in rules
     assert "never hold a finding back" in rules  # caution goes on the risk line, not in a veto
     assert review.KINDS == ("cost", "design", "redesign")

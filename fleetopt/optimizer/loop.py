@@ -90,6 +90,14 @@ def _measure(label, max_steps=None, probe=False):
     return {**stats, "steps": steps[len(steps) // 2]}, None
 
 
+def _shape(label):
+    """The agent's structure as its compiled graphs recorded it: names, nodes, edges."""
+    ids = tools._ids(label)
+    with tools._conn() as conn:
+        return sorted(tuple(r) for r in conn.execute(
+            "SELECT name, nodes, edges FROM graphs WHERE session_id = ?", (ids[0],))) if ids else []
+
+
 def _compare(before, after):
     with tools._conn() as conn:
         result = measure_mod.compare(conn, tools._ids(before), tools._ids(after))
@@ -208,6 +216,13 @@ async def run(project, out_dir, run_cmd, review, findings, *, task, model=None, 
                     tools.say(f"[fleetopt] {finding['id']}: undone. {why}")
                     if tools.over():
                         break
+                    continue
+                if finding["kind"] == "cost" and _shape(label) != _shape("baseline"):
+                    # what a cost finding is, enforced: the graph keeps its nodes and edges
+                    _undo(project)
+                    why = "it changed the agent's structure (its steps or how they connect); a cost change must not"
+                    feedback, outcome = why, ("undone", why)
+                    tools.say(f"[fleetopt] {finding['id']}: undone, {why}")
                     continue
                 result = _compare(previous, label)
                 moved = tools.compared(finding["id"], result).replace("against the original", "against the code before it")

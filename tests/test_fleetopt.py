@@ -670,10 +670,11 @@ def test_the_loop_keeps_what_passes_undoes_the_rest_and_tries_twice_at_most(tmp_
         ok = label != "C2"
         return ok, [{"kept_on": "unchanged answer" if ok else None, "reason": "an answer was cut off"}]
 
+    monkeypatch.setattr(loop, "_shape", lambda label: ["changed"] if label.startswith("C4") else ["same"])
     for name, fake in (("_edit", edit), ("_measure", measure), ("_compare", compare), ("_judge", judge)):
         monkeypatch.setattr(loop, name, fake)
     monkeypatch.setattr(tools, "say", lambda line: None)
-    findings = [{"id": i, "title": i, "kind": "cost"} for i in ("C1", "C2", "C3")] + [{"id": "D1", "title": "D1", "kind": "design"}]
+    findings = [{"id": i, "title": i, "kind": "cost"} for i in ("C1", "C2", "C3", "C4")] + [{"id": "D1", "title": "D1", "kind": "design"}]
     facts = asyncio.run(loop.run(project, tmp_path / "out", "cmd", "review", findings, task="t"))
 
     rows = {r["id"]: (r["outcome"], r["detail"]) for r in json.loads(
@@ -682,6 +683,7 @@ def test_the_loop_keeps_what_passes_undoes_the_rest_and_tries_twice_at_most(tmp_
     assert rows["C2"] == ("undone", "run 1 took more than 150 steps, far more than the original, and was stopped.")
     assert rows["C3"] == ("not changed", "the finding is wrong about the code")
     assert rows["D1"] == ("undone", "no real gain")
+    assert rows["C4"][0] == "undone" and "changed the agent's structure" in rows["C4"][1]  # a cost change keeps the graph
     assert [e for e in edits if e[0] == "C2"] == [("C2", None), ("C2", "the judge failed 1 of 1 requests: an answer was cut off")]
     assert len([e for e in edits if e[0] == "D1"]) == 2                       # two attempts, never a third
     assert judged == ["C1", "C2"]                                             # nothing is judged that did not gain

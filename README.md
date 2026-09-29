@@ -54,7 +54,7 @@ fleetopt cannot start this agent yet. 2 things to set up, then run the same comm
 |---|---|
 | Start | Finds the agent and works out how to start it. Once per project, then remembered |
 | Watch | Runs it on the team's own inputs and records every step |
-| Review | Numbered findings, each with the number it rests on: cost (`C1`, ...) and design (`D1`, ...) |
+| Review | Numbered findings, each with the number it rests on and the change it points to: cost (`C1`, ...), and design (`D1`, ...) with `--design` |
 | Change | Code runs the same steps for every finding, in order: a session makes the one change; code commits it, tries it once, measures it, compares it with the code before, judges the answers, keeps it or undoes it. At most two attempts, the second told why the first failed |
 | Report | What changed, what it gained, and a verdict computed from the measurements |
 
@@ -65,9 +65,13 @@ neither command runs the agent or the reviewer twice for the same code.
 
 | A finding that is | is tried | and kept when |
 |---|---|---|
-| cost: the graph keeps its nodes and edges | always | the gain clears the noise and every request passes the judge |
-| design: a node or edge removed, merged or rewired | only when the team has eval cases | something got better and every request passes the judge |
-| redesign | only when the team has eval cases | the same |
+| cost: the graph keeps its nodes and edges | always | the graph is unchanged, the gain clears the noise and every request passes the judge |
+| design: a node or edge removed, merged or rewired | only with `--design`, and only when the team has eval cases | something got better and every request passes the judge |
+| redesign | the same | the same |
+
+**Cost only by default.** Design is reviewed and changed only with `--design`. A change
+to the design alters how an agent loops and stops, and that is where the one runaway so
+far came from.
 
 **The judge, per request.** Where an eval case covers the request, the new answer must
 be correct by that case. Where none does, it must be equivalent to the original answer.
@@ -116,6 +120,7 @@ A run folder holds no prompts and no outputs of the agent.
 
 | Flag | Command | Meaning |
 |---|---|---|
+| `--design` | both | Also review the design, and with `apply` try design changes when the team has eval cases |
 | `--only C1,D2` | apply | Try just these findings, then stop |
 | `--evals FILE` | both | Eval cases to use. Their inputs are what the agent is run on |
 | `--fresh` | review | Review again although the code has not changed |
