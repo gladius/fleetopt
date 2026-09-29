@@ -43,9 +43,11 @@ without a store an empty in-memory one, as a hosting platform would.
   entry point passes.
 - **Settings**: its env file; plain settings that are not secrets. If it supports several
   providers, choose one whose key is set. Never put a key, token or password in an entry.
-- **Inputs**, only if asked for: what its end users type to it, from the project's own
-  examples or tests where they exist. Invent any person you need; never use anything
-  about whoever runs this tool.
+- **Inputs**, only if asked for: four that differ in kind (at least three), what its end
+  users type to it, from the project's own examples or tests where they exist. More
+  requests a run average out the variation in a model's answers, which is what lets a
+  real saving clear the noise. Invent any person you need; never use anything about
+  whoever runs this tool.
 - **Reading a failed try**: a missing module, a refused key, a service that cannot be
   reached, a file the agent needs: that is the team's to provide. Stop and list it. An
   input that did not fit: fix the entry. The model answered and the agent's own code then
@@ -65,10 +67,10 @@ The entry:
 
 - **Each change is its own save**, named in plain words for the team ("cache the system
   prompt", "stop the research loop once notes repeat"). Never an id.
-- **Bundle what you are sure of.** Save several changes and measure once. If `keep`
-  refuses the bundle, `undo` it and try the changes one at a time to find the one that
-  failed. A change that could alter the answers (a smaller model, an early exit, a
-  trimmed context) goes alone.
+- **Measure everything at once.** Make every change the evidence supports, save each on
+  its own, then measure them together: one measurement, not one per change. If `keep`
+  refuses, `undo`, redo half of them, measure, and keep what passes; go on splitting only
+  the half that fails.
 - **The smallest change that does it.** No refactoring on the way, no new dependency.
   `python -m py_compile` on what you changed; never run the agent, its tests, its evals
   or any of its code yourself, not even a snippet: `measure` runs it, under watch, and
@@ -89,23 +91,23 @@ the number that says so. That is a result, not a failure.
 
 ## Your report
 
-Your last message, in plain words, for the team. No ids, no tool names.
-
-When you only look (review):
+Your last message is the report and nothing else, in plain words for the team, no ids,
+no tool names. It starts with `What it is for:`.
 
 ```
 What it is for: <one sentence>
-What it spends: <cost a request, model calls, tokens in and out, from measure>
-Worth changing:
+What it spends: <cost a run, requests a run, model calls, tokens in and out, from measure>
+Changed:            (when you change it)
+- <plain name>: kept or undone, and why in a few words
+Worth changing:     (when you only look)
 - <plain name>: <the number that shows it> (<file:line>). Change: <what>. Risk: <what could change>.
 Checked and fine:
 - <what you checked>: <the number that cleared it>
 ```
 
-When you change it: one line per change (what it was, kept or undone, and why in a few
-words), then anything the team should know that the numbers do not show. At most 15
-lines. fleetopt prints the measured result after yours, so never state a number you did
-not get from a tool.
+Say only what the tools reported and what you read in the code. If something did not go
+as asked (fewer inputs, a step skipped, a limit reached), say so plainly; never explain
+it away. fleetopt prints the measured result after yours.
 
 ## What to look for
 

@@ -338,6 +338,16 @@ def test_while_it_investigates_a_person_sees_what_it_is_looking_at(tmp_path, cap
         "  reading agent.py", "  looking at the recorded calls", "  searching the code", "  editing agent.py"]
 
 
+def test_the_report_is_what_is_printed_and_nothing_said_before_it():
+    said = ("Confirmed: repo is back to the original state.\n\nI ran 4 differing inputs total...\n\n"
+            "**What it is for:** research.\n**What it spends:** $0.0086 a run")
+    assert agent._report_only(said) == "**What it is for:** research.\n**What it spends:** $0.0086 a run"
+    assert agent._report_only("no report heading at all") == "no report heading at all"
+    assert agent._sentence("The research step re-sends every note. I will trim it.") == \
+        "The research step re-sends every note."
+    assert agent._sentence("## Plan\nfirst trim") == "Plan"
+
+
 def test_the_command_line_is_two_commands_and_a_few_flags():
     parse = cli._parser().parse_args
     assert parse(["apply", "repo"]).out == ".fleetopt" and parse(["apply", "repo"]).max_usd == 5.0
@@ -488,7 +498,7 @@ def test_one_agent_starts_measures_changes_and_leaves_nothing_unproven(tmp_path,
         seen["prompt"], seen["tools"] = prompt, options.allowed_tools
         call = lambda tool_name, **a: getattr(tools, tool_name).handler(a)
         await call("start", entry=json.dumps({"graph": "agent.py:graph", "agent": "researcher", "job": "research",
-                                              "inputs": ["battery degradation"]}))
+                                              "inputs": ["battery degradation", "route optimization", "cold chain"]}))
         await call("measure")
         (project / "agent.py").write_text("x = 1\n", encoding="utf-8")
         await call("save_change", name="cache the system prompt")
@@ -529,7 +539,7 @@ def test_review_is_the_same_agent_without_anything_that_changes_code(tmp_path, m
 
     async def the_agent(prompt, options):
         seen["tools"] = set(options.allowed_tools)
-        await tools.start.handler({"entry": json.dumps({"graph": "agent.py:graph", "inputs": ["x"]})})
+        await tools.start.handler({"entry": json.dumps({"graph": "agent.py:graph", "inputs": ["x", "y", "z"]})})
         await tools.measure.handler({})
         yield claude_agent_sdk.ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
                                              num_turns=3, session_id="s", total_cost_usd=0.1,

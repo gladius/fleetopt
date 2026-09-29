@@ -8,6 +8,8 @@ difference a saving when it sits inside the spread of the baseline itself.
 import os
 import pathlib
 import statistics
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from fleetopt.evidence import pricing
@@ -43,24 +45,32 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True, say=print, max_st
     """
     workers = min(n, int(os.environ.get("FLEETOPT_PARALLEL", n) or 1), 5)
     minutes = float(os.environ.get("FLEETOPT_RUN_MINUTES") or RUN_MINUTES)
-    run_one = lambda _=None: runner.execute(project, run_cmd, out_dir, with_io, timeout=60 * minutes,
-                                            max_steps=max_steps)
+    executed, lock = [], threading.Lock()
+
+    def run_one(_=None):
+        began = time.time()
+        result = runner.execute(project, run_cmd, out_dir, with_io, timeout=60 * minutes, max_steps=max_steps)
+        code = result[3]
+        ended = ("stopped: it had not ended" if code == runner.TIMED_OUT else
+                 "stopped: far more steps than the original" if code == runner.RAN_AWAY else
+                 "finished" if code == 0 else f"failed (exit {code})")
+        with lock:  # said as each run ends, not after all of them
+            executed.append(result)
+            say(f"    run {len(executed)} of {n}: {ended} in {time.time() - began:.0f} s")
+        return result
 
     # A command that has never succeeded on this project gets one probe run before
     # the rest start: a wrong interpreter then costs one crash, not n, and the
     # agent gets the traceback at once instead of after 15 failed runs (observed).
-    executed = []
     # `probe`: changed code gets one run first too. A change that breaks the agent, or
     # sends it into a loop, then costs one run and not n.
     if n > 1 and (probe or not _ever_succeeded(out_dir, project, run_cmd)):
-        first = run_one()
-        executed.append(first)
-        n_left = n - 1 if first[3] == 0 else 0
+        n_left = n - 1 if run_one()[3] == 0 else 0
     else:
         n_left = n
     if n_left:
         with ThreadPoolExecutor(max_workers=min(workers, n_left)) as pool:
-            executed += list(pool.map(run_one, range(n_left)))
+            list(pool.map(run_one, range(n_left)))
 
     # Ingest every executed run before judging any of them: stopping at the first
     # failure used to leave the other runs' temp dirs behind forever.
@@ -70,10 +80,6 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True, say=print, max_st
         session_id, n_runs, _ = runner.ingest(
             project, run_cmd, out_dir, label, raw, traces, graphs, code
         )
-        ended = ("stopped, it had not ended" if code == runner.TIMED_OUT else
-                 "stopped, far more steps than the original" if code == runner.RAN_AWAY else
-                 "done" if code == 0 and n_runs else "failed")
-        say(f"    run {i + 1} of {n}: {ended}")
         # A run that crashed produced a truncated trace. Averaging it in drags the
         # median toward "cheaper" for the worst possible reason - the work didn't
         # happen. Refuse the whole measurement rather than quietly discount it.

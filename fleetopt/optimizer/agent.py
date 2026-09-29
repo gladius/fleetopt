@@ -228,7 +228,7 @@ def _prompt(look_only, entry, inputs, cases, graph, team, minutes, max_usd, bran
         if graph:
             lines.append(f"The person running fleetopt asked for this agent: {graph}.")
         lines.append(f"Inputs: fleetopt runs it on the team's eval cases ({len(inputs)}); leave `inputs` out."
-                     if inputs else "Inputs: give 4 that differ in kind.")
+                     if inputs else "Inputs: give 4 that differ in kind (at least 3).")
     lines.append(f"Eval cases: {len(cases)}; the judge checks each answer against its case where one matches."
                  if cases else "Eval cases: none; the judge compares each answer with the original's.")
     lines.append(f"Limits, held by the tools: ${team:.2f} on the team's key, {minutes:g} minutes, ${max_usd:.2f} "
@@ -243,7 +243,8 @@ def _prompt(look_only, entry, inputs, cases, graph, team, minutes, max_usd, bran
 async def run(project, out, *, look_only=False, evals=None, graph=None, model=None, max_usd=5.0):
     """One run of the agent. Returns the facts the summary is computed from. Raises
     ValueError or RuntimeError when it cannot begin (no git, unreadable eval cases)."""
-    from claude_agent_sdk import AssistantMessage, ClaudeSDKError, ResultMessage, TextBlock, ToolUseBlock, query
+    from claude_agent_sdk import (AssistantMessage, ClaudeSDKError, ResultMessage, TextBlock, ToolResultBlock,
+                                  ToolUseBlock, UserMessage, query)
 
     from fleetopt.progress import ticking
 
@@ -275,23 +276,44 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
 
     prompt = _prompt(look_only, entry, inputs, cases, graph, team, minutes, max_usd, branch, earlier)
     options = build_options(project, model, max_usd, start_branch, look_only)
-    log, account, own, shown = [], "", 0.0, {}
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_file = (run_dir / "log.txt").open("w", encoding="utf-8")
+
+    def log(line):  # everything, as it happens: `tail -f` it to follow a run in full
+        log_file.write(line + "\n")
+        log_file.flush()
+
+    tools.say(f"  full log, live: {_shown(run_dir / 'log.txt')}")
+    account, own, shown, said = "", 0.0, {}, None
     try:
         async with ticking("working", said_at=lambda: ctx.get("said_at", 0)):
             async for message in query(prompt=prompt, options=options):
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock) and block.text.strip():
-                            log.append(block.text.strip())
+                            log(block.text.strip())
+                            said = block.text  # shown once a step follows, so the final report is not echoed
                         elif isinstance(block, ToolUseBlock):
-                            log.append(f"> {block.name.removeprefix('mcp__fleetopt__')} {json.dumps(block.input)[:300]}")
+                            if said:
+                                tools.say(f"  › {_sentence(said)}")
+                                said = None
+                            log(f"> {block.name.removeprefix('mcp__fleetopt__')} {json.dumps(block.input)[:500]}")
                             _activity(block, project, shown)
+                elif isinstance(message, UserMessage) and isinstance(message.content, list):
+                    for block in message.content:
+                        if isinstance(block, ToolResultBlock):
+                            text = block.content if isinstance(block.content, str) else " ".join(
+                                c.get("text", "") for c in block.content or [] if isinstance(c, dict))
+                            log("< " + (text or "")[:2000])
                 elif isinstance(message, ResultMessage):
                     own = getattr(message, "total_cost_usd", None) or 0.0
-                    account = (message.result or "").strip()
+                    log(message.result or "")
+                    account = _report_only(message.result or "")
     except ClaudeSDKError as exc:  # out of turns or budget: what the tools recorded still stands
-        log.append(f"session ended: {str(exc).splitlines()[0][:200]}")
+        log(f"session ended: {str(exc).splitlines()[0][:200]}")
         tools.say(f"  the session ended early: {str(exc).splitlines()[0][:120]}")
+    finally:
+        log_file.close()
     tools.finish()
 
     kept = int(tools._git("rev-list", "--count", f"{ctx['start_sha']}..HEAD") or 0) if branch else 0
@@ -316,12 +338,10 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         "verdict": verdict(ctx["events"], final_state, ctx["start_state"]) if branch else None,
         "team_runs": runs, "team_cost": team_cost, "own_cost": own, "account": account, "run_dir": str(run_dir),
     }
-    run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "report.md").write_text("\n\n".join(filter(None, [account, "\n".join(summary(facts))])) + "\n",
                                        encoding="utf-8")
     (run_dir / "run.json").write_text(json.dumps({**facts, "events": ctx["events"]}, indent=1, default=str),
                                       encoding="utf-8")
-    (run_dir / "log.txt").write_text("\n".join(log) + "\n", encoding="utf-8")
     if diff:
         (run_dir / "patch.diff").write_text(diff + "\n", encoding="utf-8")
     return facts
@@ -351,6 +371,23 @@ def summary(facts):
                  f"{money(facts['own_cost'])} by fleetopt")
     if facts["mode"] == "review" and facts["measured"]:
         lines.append(f"  Next     fleetopt apply {facts['project']}")
-    report = pathlib.Path(facts["run_dir"]) / "report.md"
-    lines.append(f"  Details  {os.path.relpath(report) if report.is_relative_to(pathlib.Path.cwd()) else report}")
+    lines.append(f"  Details  {_shown(pathlib.Path(facts['run_dir']) / 'report.md')}")
     return lines
+
+
+def _shown(path):
+    return os.path.relpath(path) if path.is_relative_to(pathlib.Path.cwd()) else str(path)
+
+
+def _sentence(text):
+    """The first sentence of what the agent said, for a line on screen."""
+    first = re.split(r"(?<=[.!?:])\s|\n", text.strip(), maxsplit=1)[0].strip().lstrip("#*- ").rstrip(":")
+    return first[:157] + "..." if len(first) > 160 else first
+
+
+def _report_only(text):
+    """The report from the agent's last message, without what it said before it (observed:
+    a line of chatter, and a made-up explanation, ahead of the report)."""
+    lines = text.strip().splitlines()
+    start = next((i for i, line in enumerate(lines) if "What it is for" in line), 0)
+    return "\n".join(lines[start:]).strip()

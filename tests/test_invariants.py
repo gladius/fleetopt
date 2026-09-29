@@ -160,12 +160,16 @@ def test_the_agent_drives_and_the_limits_live_in_its_tools():
     assert "The graph keeps its nodes and edges" in GUIDE                      # design is out of scope for now
 
 
-def test_token_savings_count_when_the_model_has_no_price():
-    unpriced = {"cost_usd": {"verdict": "unpriced"}, "input_tokens": {"verdict": "improved"}}
-    priced = {"cost_usd": {"verdict": "within noise"}, "input_tokens": {"verdict": "improved"}}
-    assert tools.gain(unpriced) == "input_tokens"
-    assert tools.gain(priced) is None  # a price is the truth: fewer tokens on a dearer model is not a saving
-    assert tools.gain({"cost_usd": {"verdict": "improved"}, "completed": {"verdict": "regressed"}}) is None
+def test_a_saving_is_cost_first_and_a_clean_token_cut_counts_too():
+    v = lambda **kw: {k: {"verdict": x} for k, x in kw.items()}
+    assert tools.gain(v(cost_usd="improved")) == "cost_usd"
+    # the answers' length varies from run to run, which the change does not control
+    assert tools.gain(v(cost_usd="within noise", input_tokens="improved", output_tokens="within noise")) == "input_tokens"
+    assert tools.gain(v(cost_usd="unpriced", input_tokens="improved")) == "input_tokens"
+    assert tools.gain(v(cost_usd="regressed", input_tokens="improved")) is None      # fewer tokens that cost more
+    assert tools.gain(v(cost_usd="within noise", input_tokens="improved", output_tokens="regressed")) is None
+    assert tools.gain(v(cost_usd="improved", completed="regressed")) is None         # finishing less is never a saving
+    assert tools.gain(v(cost_usd="within noise", input_tokens="within noise")) is None
 
 
 def test_what_is_shown_is_for_a_person():

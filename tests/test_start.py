@@ -14,7 +14,8 @@ from fleetopt.optimizer import tools
 from fleetopt.probe import driver
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-ENTRY = {"graph": "agent.py:graph", "agent": "agent", "inputs": ["battery degradation", "route optimization"]}
+ENTRY = {"graph": "agent.py:graph", "agent": "agent",
+         "inputs": ["battery degradation", "route optimization", "cold-chain monitoring"]}
 PLAIN = """from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 class State(TypedDict):
@@ -81,7 +82,7 @@ def test_start_proves_an_entry_by_running_it_and_says_what_it_saw(project, tmp_p
     trying = _trying(project, tmp_path)
     try:
         assert "not in the project" in trying({**ENTRY, "graph": "made_up.py:graph"})   # checked before anything runs
-        assert "no inputs" in trying({**ENTRY, "inputs": []})
+        assert "1 input(s) given" in trying({**ENTRY, "inputs": ["only one"]})    # too few to see past the noise
         assert tools.CTX["tries"] == 0
 
         assert "It did not start" in trying({**ENTRY, "graph": "agent.py:no_such_graph"})
@@ -107,15 +108,22 @@ def test_the_teams_eval_cases_are_the_inputs_whatever_the_session_wrote(project,
     cases.write_text('{"input": "what is 17% of 2,340?", "expected": "397.8"}\n'
                      '{"input": "draft an outreach email", "expected": "a short email"}\n', encoding="utf-8")
     found, inputs, source = tools.team_inputs(project, cases)
-    assert inputs == ["what is 17% of 2,340?", "draft an outreach email"] and source == "cases.jsonl" and len(found) == 2
+    assert inputs == ["what is 17% of 2,340?", "draft an outreach email"] and len(found) == 2
+    assert source == "cases.jsonl (all 2 cases)"                 # every case the team wrote is run and judged
     with pytest.raises(ValueError, match="no eval cases could be read"):
         tools.team_inputs(project, tmp_path / "missing")
     assert tools.team_inputs(project) == ([], [], None)  # the fixture keeps inputs but no expected answers
 
-    trying = _trying(project, tmp_path, inputs=inputs[:1])
+    many = tmp_path / "many.jsonl"
+    many.write_text("".join(f'{{"input": "question {i}", "expected": "answer {i}"}}\n' for i in range(50)), encoding="utf-8")
+    _, capped, where = tools.team_inputs(project, many)
+    assert len(capped) == tools.MAX_CASES and capped[:2] == ["question 0", "question 2"]  # spread across the set
+    assert where == "many.jsonl (20 of its 50 cases, spread across it)"
+
+    trying = _trying(project, tmp_path, inputs=capped)
     try:
-        trying({**ENTRY, "inputs": ["something the session made up"]})
-        assert tools.CTX["entry"]["inputs"] == inputs[:1]
+        trying({**ENTRY, "inputs": ["something the session made up"] * 3})
+        assert tools.CTX["entry"]["inputs"] == capped
     finally:
         tools.CTX.clear()
 

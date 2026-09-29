@@ -37,7 +37,8 @@ from fleetopt.probe import runner, store
 
 RUNS = 3           # runs of the agent per measurement
 TRIES = 4          # tries to start the agent, one input each
-MAX_INPUTS = 4
+MAX_CASES = 20     # the team's eval cases run on every measurement, up to this many; FLEETOPT_MAX_CASES overrides
+MIN_INPUTS = 3     # without cases: fewer, and the variation in a model's answers hides a real saving (observed: 1)
 STEP_FACTOR = 3    # a changed agent may take this many times the original's steps per run
 BROKEN_FACTOR = 6  # ... or this many, when the original finished nothing and so stopped early
 MIN_STEPS = 150
@@ -88,14 +89,19 @@ GAINS = ("cost_usd", "wall_ms", "completed", "cost_per_completed")
 
 
 def gain(result):
-    """What got better past the noise, or None; nothing may finish less often. Tokens count
-    when the model has no price, since cost cannot show them then."""
-    if (result.get("completed") or {}).get("verdict") == "regressed":
+    """What got better past the noise, or None. Nothing may finish less often and cost may
+    not rise. A clean cut in tokens counts too, with neither count worse: total cost can sit
+    inside the noise because the length of a model's answers varies from run to run, which
+    the change does not control (observed: input tokens -20% on every run, cost -11% called
+    noise)."""
+    verdict = lambda key: (result.get(key) or {}).get("verdict")
+    if "regressed" in (verdict("completed"), verdict("cost_usd")):
         return None
-    keys = GAINS + (("input_tokens", "output_tokens") if (result.get("cost_usd") or {}).get("verdict") == "unpriced"
-                    else ())
-    return next((k for k in keys if (result.get(k) or {}).get("verdict") in ("improved", "baseline finished nothing")),
-                None)
+    first = next((k for k in GAINS if verdict(k) in ("improved", "baseline finished nothing")), None)
+    tokens = (verdict("input_tokens"), verdict("output_tokens"))
+    if first or "regressed" in tokens:
+        return first
+    return next((k for k, v in zip(("input_tokens", "output_tokens"), tokens) if v == "improved"), None)
 
 
 # --- limits and records -------------------------------------------------------------------
@@ -161,7 +167,7 @@ def command(path, entry, limit=None):
     return subprocess.list2cmdline(parts) if sys.platform == "win32" else shlex.join(parts)
 
 
-def spread(texts, n=MAX_INPUTS):
+def spread(texts, n):
     """n of them, taken evenly across the list, so they differ in kind."""
     texts = list(dict.fromkeys(texts))
     return texts if len(texts) <= n else [texts[i * len(texts) // n] for i in range(n)]
@@ -169,7 +175,8 @@ def spread(texts, n=MAX_INPUTS):
 
 def team_inputs(project, supplied=None):
     """(cases, inputs, where from): the team's eval cases, supplied or found in the project.
-    Their inputs are what the agent is run on, so every request can be judged on its case."""
+    All their inputs are what the agent is run on, up to MAX_CASES, so every request is
+    judged on its expected answer."""
     cases, _ = evals_mod.load(pathlib.Path(supplied).resolve() if supplied else project)
     if not cases:
         if supplied:
@@ -179,7 +186,11 @@ def team_inputs(project, supplied=None):
     for case in cases:
         by_source.setdefault(case["source"], []).append(case["input"])
     source, texts = max(by_source.items(), key=lambda kv: len(kv[1]))
-    return cases, spread(texts), pathlib.Path(source).name
+    texts = list(dict.fromkeys(texts))
+    cap = int(os.environ.get("FLEETOPT_MAX_CASES") or MAX_CASES)
+    where = pathlib.Path(source).name + (f" ({cap} of its {len(texts)} cases, spread across it)" if len(texts) > cap else
+                                         f" (all {len(texts)} cases)")
+    return cases, spread(texts, cap), where
 
 
 def key_names(project):
@@ -239,15 +250,16 @@ def _entry(plan):
             template = json.loads(template)
         except ValueError:
             pass
-    inputs = CTX["inputs"] or [t for t in plan.get("inputs") or [] if isinstance(t, str) and t.strip()]
-    if not inputs:
-        raise ValueError("no inputs: give the ones the agent's users would send")
+    inputs = CTX["inputs"] or list(dict.fromkeys(t for t in plan.get("inputs") or [] if isinstance(t, str) and t.strip()))
+    if len(inputs) < MIN_INPUTS:
+        raise ValueError(f"{len(inputs)} input(s) given; give 4 that differ in kind (at least {MIN_INPUTS}), as the "
+                         "agent's users would send them")
     env = {k: str(v) for k, v in (plan.get("env") or {}).items() if not SECRET.search(k)}
     return {"project": str(project), "name": plan.get("agent") or "agent", "job": str(plan.get("job") or "")[:300],
             "graph": graph, "paths": [str(p) for p in plan.get("paths") or ["."]], "interpreter": python,
             "env_file": plan.get("env_file"), "env": env, "config": plan.get("config") or {},
             "context": plan.get("context") or {}, "store": plan.get("store"), "input_template": template,
-            "inputs": spread(inputs), "inputs_from": CTX["inputs_from"] or plan.get("inputs_from") or "written by fleetopt"}
+            "inputs": inputs if CTX["inputs"] else spread(inputs, 6), "inputs_from": CTX["inputs_from"] or plan.get("inputs_from") or "written by fleetopt"}
 
 
 def started(entry):
@@ -283,7 +295,7 @@ async def start(args):
         path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
         started(entry)
         say(f"  started: {entry['name']} ({entry['graph'].rsplit('/', 1)[-1]}), {len(entry['inputs'])} test inputs "
-            f"from {entry['inputs_from']}" + (f" (try {CTX['tries']})" if CTX["tries"] > 1 else ""))
+            f"from {entry['inputs_from']}, each run" + (f" (try {CTX['tries']})" if CTX["tries"] > 1 else ""))
         verdict = "It started. Now measure it." + ("" if result["finished"] else
                                                    " No request finished: it is measured and reviewed as broken.")
     elif result["requests"] and not result["model_calls"]:
@@ -397,6 +409,11 @@ def _answers_written():
     return [n for n in needles if len(n) >= 20 and n in text]
 
 
+def _requests():
+    n = len(CTX["entry"]["inputs"])
+    return f"{n} request{'s' * (n != 1)} each, the same {n} input{'s' * (n != 1)} every run"
+
+
 def _mark(outcome, detail):
     for name in CTX["saved"]:
         CTX["changes"][name] = [outcome, detail]
@@ -422,7 +439,7 @@ async def _baseline():
     factor = BROKEN_FACTOR if not stats.get("completed") else STEP_FACTOR
     CTX.update(baseline=stats, max_steps=max(MIN_STEPS, factor * stats["steps"]), untracked=_untracked())
     say(f"  as it is: {brief(stats)}")
-    return _ok(f"The agent as it is, medians of {RUNS} runs: {brief(stats)}; {stats.get('completed')} requests "
+    return _ok(f"The agent as it is, medians of {RUNS} runs of {_requests()}: {brief(stats)}; {stats.get('completed')} requests "
                f"finished, {stats['steps']} steps a run." + ("" if CTX["look_only"] else " Edits are allowed now."))
 
 
@@ -465,7 +482,7 @@ async def measure(args):
              else "Nothing got better past the noise, so keep will refuse it."]
     if _shape(label) != _shape("baseline"):
         notes.append("It changes the graph's nodes or edges, so keep will refuse it.")
-    return _ok(f"{names}, medians of {RUNS} runs: {brief(stats)}.\nAgainst the code as last kept: {line}\n\n"
+    return _ok(f"{names}, medians of {RUNS} runs of {_requests()}: {brief(stats)}.\nAgainst the code as last kept: {line}\n\n"
                f"{measure_mod.render(result)}\n\n" + " ".join(notes))
 
 
