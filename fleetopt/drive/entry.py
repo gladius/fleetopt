@@ -274,6 +274,22 @@ def prove(entry_path, entry, timeout=600):
     return worked, tail + ("\n" + ANSWERED.format(n=answered) if answered and not worked else "")
 
 
+CHANGED = {"graph": "a different entry point", "input_template": "the input in the shape the agent expects",
+           "config": "run settings", "context": "a run context", "store": "a memory store", "env": "settings",
+           "paths": "import paths", "inputs": "new inputs"}
+
+
+def failure_line(tail):
+    """The one line that says why a trial did not answer."""
+    lines = [l.strip() for l in tail.splitlines() if l.strip()]
+    for i, line in enumerate(lines):
+        if line.startswith("[driver] FAILED") and i + 1 < len(lines):
+            return lines[i + 1][:200]
+        if line.startswith("[driver] could not load"):
+            return line.removeprefix("[driver] ")[:200]
+    return (lines[-1] if lines else "it printed nothing")[:200]
+
+
 def starts_but_fails(tail):
     """The agent's own failure, when the model had answered before it: one line."""
     if ANSWERED.split("{n}")[0] not in tail:
@@ -427,14 +443,23 @@ def ensure(project, out, wanted=None, say=print, supplied=None):
     if problems:
         raise NotReady(problems)
     if not inputs:  # only now: nothing is spent on a project that cannot start
+        say("[fleetopt] the project keeps no test inputs, so fleetopt is writing 4, as the agent's users would "
+            "(a minute or two)")
         entry["inputs"] = setup.propose_inputs(project, spec)
-        entry["inputs_source"] = "fleetopt, written from the README and the graph's source"
-    say(f"[fleetopt] {len(entry['inputs'])} inputs from {entry['inputs_source']}")
+        entry["inputs_source"] = "fleetopt, as the agent's users would write them"
+    say(f"[fleetopt] {len(entry['inputs'])} test inputs, from {entry['inputs_source']}:")
+    for text in entry["inputs"]:
+        say("    - " + " ".join(text.split())[:90] + ("..." if len(text) > 90 else ""))
+    details = path.with_suffix(".log")
 
     tail, switched = "", False
     for attempt in range(3):
         save(path, entry)
+        say("[fleetopt] trying the agent on one input" + (" again" if attempt else ""))
         ok, tail = prove(path, entry)
+        with details.open("a", encoding="utf-8") as log:
+            log.write(f"--- trial {attempt + 1}, {datetime.datetime.now():%H:%M:%S}, "
+                      f"{'answered' if ok else 'did not answer'}\n{tail}\n")
         if not ok and refused(tail):
             keys = [] if switched else other_provider(tail, report)
             fix = keys and setup.repair(project, entry, tail + SWITCH.format(keys=", ".join(keys)))
@@ -448,12 +473,15 @@ def ensure(project, out, wanted=None, say=print, supplied=None):
         if ok:
             entry["proven"] = datetime.datetime.now().isoformat(timespec="seconds")
             save(path, entry)
-            say("[fleetopt] started it once with one input: it runs")
+            say("[fleetopt] it answered. How to start it is saved, and not worked out again next time")
             return path, entry
         fix = None
+        say(f"[fleetopt] it did not answer: {failure_line(tail)}")
         if attempt < 2:
-            say(f"[fleetopt] it did not finish a request (attempt {attempt + 1}); working out why")
+            say("[fleetopt] reading the agent's code to work out how it expects to be called (a few minutes)")
             fix = setup.repair(project, entry, tail)
+            if fix:
+                say("[fleetopt] found it; trying with " + ", ".join(CHANGED.get(k, k) for k in fix))
         if not fix:
             # Nothing about how it is started can be changed to help. If the model had
             # answered, it does start: the failure is the agent's own, and the agent that
@@ -468,4 +496,4 @@ def ensure(project, out, wanted=None, say=print, supplied=None):
             break
         entry.update(fix)
     raise Unstartable(f"fleetopt could not start {name} ({entry['graph']}). The last thing it printed:\n{tail}\n"
-                      f"What was tried is in {path}")
+                      f"Every attempt is in {details}")

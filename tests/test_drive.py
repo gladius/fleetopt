@@ -88,7 +88,7 @@ def test_an_entry_is_proven_once_and_remembered(project, tmp_path, monkeypatch):
     path, first = entry.ensure(project, tmp_path / "out", say=said.append)
     assert first["proven"] and first["graph"] == "agent.py:graph" and first["inputs"] == ["battery degradation", "route optimization"]
     assert path.is_relative_to(tmp_path / "out") and not (project / "entries").exists()  # fleetopt's folder, not the repo
-    assert any("it runs" in line for line in said)
+    assert any("it answered" in line for line in said) and any(line.startswith("    - battery") for line in said)
 
     def never(*a, **k):
         raise AssertionError("a proven entry is not proven again")
@@ -167,7 +167,7 @@ def test_an_agent_that_cannot_be_started_says_what_was_tried(project, tmp_path, 
     with pytest.raises(entry.Unstartable, match="this node is broken") as caught:
         entry.ensure(project, tmp_path / "out", say=lambda line: None)
     assert not isinstance(caught.value, entry.NotReady)  # nothing for the team to set up: this one is fleetopt's to work out
-    assert "What was tried is in" in str(caught.value) and len(asked) == 1
+    assert "Every attempt is in" in str(caught.value) and len(asked) == 1
 
 
 def test_a_repair_is_tried_by_running_it(project, tmp_path, monkeypatch):

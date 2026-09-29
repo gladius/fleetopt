@@ -75,7 +75,7 @@ agent's model provider.
 Reply with a JSON list of {n} strings and nothing else."""
 
 
-async def _ask(system, prompt, cwd=None, tools=()):
+async def _ask(system, prompt, cwd=None, tools=(), what="reading the agent's code"):
     from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKError, ResultMessage, TextBlock,
                                   query)
 
@@ -87,13 +87,16 @@ async def _ask(system, prompt, cwd=None, tools=()):
         setting_sources=config.SETTING_SOURCES, extra_args=config.sdk_args(), strict_mcp_config=True,
         env=config.SDK_ENV, max_turns=40 if tools else 1, max_budget_usd=0.5, permission_mode="default",
     )
+    from fleetopt.progress import ticking
+
     text, final = "", None
     try:
-        async for message in query(prompt=prompt, options=options):
-            if isinstance(message, AssistantMessage):
-                text = "".join(b.text for b in message.content if isinstance(b, TextBlock)) or text
-            elif isinstance(message, ResultMessage) and not message.is_error:
-                final = message.result
+        async with ticking(what):
+            async for message in query(prompt=prompt, options=options):
+                if isinstance(message, AssistantMessage):
+                    text = "".join(b.text for b in message.content if isinstance(b, TextBlock)) or text
+                elif isinstance(message, ResultMessage) and not message.is_error:
+                    final = message.result
     except ClaudeSDKError as exc:
         # Observed: a session that ran out of turns ended fleetopt in a traceback. A helper
         # that did not answer is no answer; every caller already knows what to do with that.
@@ -129,7 +132,7 @@ def choose_agent(project, found):
     """(name, why) for the agent the team ships, or None when it cannot be told."""
     listed = "\n".join(f"- {name}: {spec}" for name, spec in found)
     answer = _json(asyncio.run(_ask(WHICH, f"The agents in this project:\n{listed}", cwd=project,
-                                    tools=("Read", "Grep", "Glob"))))
+                                    tools=("Read", "Grep", "Glob"), what="reading the project to pick the agent")))
     if isinstance(answer, dict) and answer.get("name") in {name for name, _ in found}:
         why = " ".join(str(answer.get("why", "")).split()).rstrip(".")
         words = why.split()
@@ -142,7 +145,8 @@ def propose_inputs(project, spec, n=4):
     """Inputs for an agent whose project keeps none. A read-only session that reads the
     agent's prompt, tools and data before writing anything."""
     prompt = f"The agent is {spec}, in the current directory. Write {n} inputs for it."
-    found = _json(asyncio.run(_ask(INPUTS.format(n=n), prompt, cwd=project, tools=("Read", "Grep", "Glob"))))
+    found = _json(asyncio.run(_ask(INPUTS.format(n=n), prompt, cwd=project, tools=("Read", "Grep", "Glob"),
+                                   what="writing test inputs")))
     texts = [t for t in found if isinstance(t, str) and t.strip()] if isinstance(found, list) else []
     if not texts:
         raise RuntimeError("could not write inputs for this agent: the project has no eval cases, no input file, "

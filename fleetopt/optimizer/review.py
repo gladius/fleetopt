@@ -208,16 +208,19 @@ async def run(project, label, purpose, model=None, max_usd=1.0, design=False):
     )
     prompt = (f"Review the agent in this directory. Its traces are under the label {label!r}. "
               f"{purpose}")
+    from fleetopt.progress import ticking
+
     texts, final, failure, cost = [], None, None, None
     try:
-        async for message in query(prompt=prompt, options=options):
-            if isinstance(message, AssistantMessage):
-                texts += [b.text for b in message.content if isinstance(b, TextBlock) and b.text.strip()]
-            elif isinstance(message, ResultMessage):
-                if message.is_error:
-                    failure = message.result or message.subtype
-                final = message.result
-                cost = getattr(message, "total_cost_usd", None)
+        async with ticking("reviewing"):
+            async for message in query(prompt=prompt, options=options):
+                if isinstance(message, AssistantMessage):
+                    texts += [b.text for b in message.content if isinstance(b, TextBlock) and b.text.strip()]
+                elif isinstance(message, ResultMessage):
+                    if message.is_error:
+                        failure = message.result or message.subtype
+                    final = message.result
+                    cost = getattr(message, "total_cost_usd", None)
     except ClaudeSDKError as exc:  # out of turns or budget arrives as an exception, not as a message
         failure = str(exc).splitlines()[0][:300]
     if failure:

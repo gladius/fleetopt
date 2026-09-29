@@ -167,6 +167,7 @@ def _reviewed(project, out, run_cmd, max_usd, fresh=False, supplied=None, design
                         "partial; say so, and treat the failure as the first finding")
         model = _model("FLEETOPT_REVIEW_MODEL", "FLEETOPT_MODEL")
         print(f"[fleetopt] auth: {config.auth_summary() or 'unknown (could not run auth status)'}")
+        print("[fleetopt] reviewing: reading the code and the recorded run (about 5 minutes)", flush=True)
         try:
             text, cost = asyncio.run(review_mod.run(project, label, purpose, model=model, max_usd=max_usd,
                                                     design=design))
