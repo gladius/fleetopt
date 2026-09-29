@@ -21,10 +21,10 @@ finding worth reporting and costs nothing.
 - A **single-shot** agent (one call per run, no loop) has nothing to amortize.
 - **Stable literals under ~50 lines** are not a target.
 
-## The patterns - and which skill holds the mechanics
+## The patterns - and where the mechanics are
 
-Each decision below is a skill (`fleetopt:<name>`) with the provider-specific mechanics, the
-skip-rules and the evidence it needs. Use the one the traces point to; never all of them.
+Each pattern's provider-specific mechanics, skip-rules and the evidence it needs are in
+the section marked `fleetopt:<name>` below. Use the one the traces point to; never all of them.
 
 | # | Pattern | Trace signature | Skill |
 |---|---------|-----------------|------|

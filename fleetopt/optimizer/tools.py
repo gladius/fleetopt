@@ -139,7 +139,7 @@ def start(project, out, run_cmd, *, findings, task, cases=None, only=False, desi
                events=[], findings=findings, task=task, eval_cases=cases or None, only=only, design=design,
                max_team_usd=team_usd, max_minutes=minutes, deadline=time.time() + 60 * minutes,
                first_session=first_session, run_dir=run_dir, said_at=time.time(),
-               baseline=None, attempts={}, rows={}, compared={}, pending=None, measured=None, editing=set())
+               baseline=None, attempts={}, rows={}, compared={}, pending=None, measured=None)
     CTX.update(start_sha=_git("rev-parse", "HEAD"), start_state=runner.code_state(CTX["project"]))
     CTX.update(kept_sha=CTX["start_sha"], kept_label="baseline", start_untracked=_untracked())
     CTX["untracked"] = set(CTX["start_untracked"])
@@ -178,16 +178,7 @@ def _reset():
         target = (CTX["project"] / path).resolve()
         if not target.is_relative_to(CTX["out"]):  # fleetopt's own records, if they live in the project
             target.unlink(missing_ok=True)
-    CTX.update(pending=None, measured=None, untracked=_untracked(), editing=set())
-
-
-def _stats(label):
-    ids = _ids(label)
-    with _conn() as conn:
-        stats, _ = measure_mod.aggregate(conn, ids)
-        steps = sorted(conn.execute("SELECT COUNT(*) FROM runs WHERE session_id = ?", (i,)).fetchone()[0] for i in ids)
-    _record("measure", label=label, n=len(ids), stats=stats, code_state=_state(ids))
-    return {**stats, "steps": steps[len(steps) // 2]}
+    CTX.update(pending=None, measured=None, untracked=_untracked())
 
 
 def _measure(label, max_steps=None, probe=False):
@@ -198,7 +189,12 @@ def _measure(label, max_steps=None, probe=False):
     except RuntimeError as exc:
         _record("measure_failed", label=label, error=str(exc)[:300])
         return None, str(exc).removeprefix(f"{label} ")
-    return _stats(label), None
+    ids = _ids(label)
+    with _conn() as conn:
+        stats, _ = measure_mod.aggregate(conn, ids)
+        steps = sorted(conn.execute("SELECT COUNT(*) FROM runs WHERE session_id = ?", (i,)).fetchone()[0] for i in ids)
+    _record("measure", label=label, n=len(ids), stats=stats, code_state=_state(ids))
+    return {**stats, "steps": steps[len(steps) // 2]}, None
 
 
 def _shape(label):
@@ -264,17 +260,12 @@ async def _baseline():
                    "proven in this run; say why in your report.")
     if _dirty():
         return _ok("Refused: measure the agent as it is before changing it. Undo your changes first.")
-    ids = _ids("baseline")
-    if len(ids) >= RUNS and _state(ids) == CTX["start_state"]:
-        say("[fleetopt] the agent as it is was measured before, on this same code: not run again")
-        stats = _stats("baseline")
-    else:
-        say("[fleetopt] measuring the agent as it is")
-        stats, why = await asyncio.to_thread(_measure, "baseline")
-        if stats is None:
-            CTX["baseline_failed"] = why.splitlines()[0]
-            return _ok(f"The agent as it is could not be measured: {why}\n\nNothing can be proven in this run. "
-                       "Say why in your report.")
+    say("[fleetopt] measuring the agent as it is")
+    stats, why = await asyncio.to_thread(_measure, "baseline")
+    if stats is None:
+        CTX["baseline_failed"] = why.splitlines()[0]
+        return _ok(f"The agent as it is could not be measured: {why}\n\nNothing can be proven in this run. "
+                   "Say why in your report.")
     factor = BROKEN_FACTOR if not stats.get("completed") else STEP_FACTOR
     CTX.update(baseline=stats, max_steps=max(MIN_STEPS, factor * stats["steps"]), untracked=_untracked())
     return _ok(f"The agent as it is, medians of {RUNS} runs: {_brief(stats)}.\nEdits are allowed now.")
@@ -311,7 +302,7 @@ async def measure(args):
         return _ok(f"Refused: {finding} has been measured {ATTEMPTS} times, the most a finding gets. Undo it and go on.")
     CTX["attempts"][finding] = tried + 1
     _commit(f"{finding}: trying")
-    CTX.update(pending=finding, measured=None, editing=set())
+    CTX.update(pending=finding, measured=None)
     label = finding if not tried else f"{finding}-{tried + 1}"
     say(f"[fleetopt] {finding}: measuring the change" + (" (second attempt)" if tried else ""))
     stats, why = await asyncio.to_thread(_measure, label, CTX["max_steps"], True)

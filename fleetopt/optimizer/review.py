@@ -3,7 +3,7 @@
 It looks at one capture of the agent and the source, and reports two things: where
 the agent wastes money, and whether its design fits its job. It changes nothing and
 measures nothing. Its findings are numbered and saved against the exact code they
-were made on, so `fleetopt apply` can work from them later, and only from them.
+were made on, so `fleetopt apply` starts from them instead of paying for another look.
 
 Same separation as the judge: whoever patches does not get to grade the design in
 the same breath. (A Claude Code subagent was tried first for this: it ran in the
@@ -20,13 +20,13 @@ import re
 from fleetopt import config
 
 _HERE = pathlib.Path(__file__).parent
-_SKILLS = _HERE / "plugin" / "skills"
+_SKILLS = _HERE / "skills"
 _PATTERNS = _SKILLS / "patterns"
 COST_SKILLS = ("caching", "model-tier", "prompt-growth", "redundant-work", "tool-surface")
 
 
 def _body(path):
-    """A skill's text without its frontmatter: the reviewer reads it, nothing loads it."""
+    """A skill's text without its frontmatter: it goes into the prompt, nothing loads it."""
     text = path.read_text(encoding="utf-8")
     return text.split("---", 2)[2].strip() if text.startswith("---") else text
 
@@ -71,7 +71,7 @@ COST_RULE = """- C, cost: the graph keeps its nodes and edges. What changes is w
   model, how much comes back, or when a loop that already exists stops: caching, a
   trimmed or no longer re-sent prompt, a bounded output, a smaller model or lower
   effort on a node, an early exit, an identical call not repeated. fleetopt checks this:
-  a cost change that alters the graph is undone.
+  a cost change that alters the graph cannot be kept.
 """
 DESIGN_RULE = """- D, design: nodes or edges are removed, merged or rewired. Tier one is mechanical
   (hardwire a branch always taken, drop a round that never changes anything, merge two
@@ -105,45 +105,19 @@ def system(design=False):
     return INTRO + body + "\n\n" + FORMAT.replace("{design_section}", section).replace("{rules}", rules + TAIL)
 
 
-SYSTEM = system(design=True)
-
 READ_ONLY = ["Read", "Grep", "Glob", "mcp__fleetopt__graph_shape",
              "mcp__fleetopt__graph_topology", "mcp__fleetopt__query_traces"]
 
-KINDS = ("cost", "design", "redesign")
-LEVELS = ("fit", "wasteful", "over-built", "wrong shape", "broken")
 _FINDING = re.compile(r"^#{2,4}\s*\**([CD]\d+)\**\s*[-:\u2013\u2014]\s*(.+?)\s*$", re.M)
-_TIER = re.compile(r"^\W*tier\W*:\W*(one|two|1|2)\b", re.M | re.I)
 _NO_CHANGE = re.compile(r"^\W*change\W*:\W*(none|nothing|n/?a)\b", re.M | re.I)
 
 
 def findings(report):
-    """The numbered findings of a report: [{id, title, kind}].
-
-    The kind is read off the report by rule, and what may be tried follows from the
-    kind in cli.chosen, not from an opinion of the reviewer's (observed: left to
-    choose, a reviewer marked every cost finding "needs cases" and nothing was tried).
-    A design finding whose tier cannot be read is taken as the larger change."""
+    """The numbered findings of a report: [{id, title}]. What may be kept is the keep
+    gate's to decide, not a reading of the report."""
     parts = _FINDING.split(report)  # [before, id, title, body, id, title, body, ...]
-    found = []
-    for i in range(1, len(parts) - 2, 3):
-        if _NO_CHANGE.search(parts[i + 2]):  # observed: "C3 - Nothing to cache here", numbered like a finding
-            continue
-        name, tier = parts[i].upper(), _TIER.search(parts[i + 2])
-        if name.startswith("C"):
-            kind = "cost"
-        else:
-            kind = "design" if tier and tier.group(1).lower() in ("one", "1") else "redesign"
-        found.append({"id": name, "title": parts[i + 1].strip("* "), "kind": kind})
-    return found
-
-
-def level(found, unfinished=0):
-    """How far the agent is from where it should be, 0 to 4: the largest kind of change
-    the review found, and above them all an agent that does not finish its requests."""
-    if unfinished:
-        return 4
-    return max([KINDS.index(f["kind"]) + 1 for f in found], default=0)
+    return [{"id": parts[i].upper(), "title": parts[i + 1].strip("* ")} for i in range(1, len(parts) - 2, 3)
+            if not _NO_CHANGE.search(parts[i + 2])]  # observed: "C3 - Nothing to cache here", numbered like one
 
 
 def _pointer(out, project, run_cmd, design=False):
@@ -153,10 +127,9 @@ def _pointer(out, project, run_cmd, design=False):
     return entry.path_for(out, project, "review-" + hashlib.sha1(run_cmd.encode()).hexdigest()[:8] + kind)
 
 
-def remember(out, project, run_cmd, state, label, run_dir, found, unfinished=0, design=False):
+def remember(out, project, run_cmd, state, label, run_dir, found, design=False):
     """Note which code the newest review of this agent was made on. Returns the note."""
     record = {"code_state": state, "label": label, "run_dir": str(run_dir), "findings": found,
-              "unfinished": unfinished, "level": level(found, unfinished),
               "when": datetime.datetime.now().isoformat(sep=" ", timespec="minutes")}
     path = _pointer(out, project, run_cmd, design)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,8 +150,7 @@ def saved(out, project, run_cmd, state, design=False):
     if state is not None and record["code_state"] != state:
         return None
     report = text.read_text(encoding="utf-8")
-    found = findings(report)  # the report is the record; the rule may have moved
-    return {**record, "text": report, "findings": found, "level": level(found, record.get("unfinished", 0))}
+    return {**record, "text": report, "findings": findings(report)}  # the report is the record
 
 
 async def run(project, label, purpose, model=None, max_usd=1.0, design=False):

@@ -25,14 +25,13 @@ from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
 from fleetopt import config
 from fleetopt.evidence import evals as evals_mod
-from fleetopt.optimizer import tools
+from fleetopt.optimizer import review, tools
 from fleetopt.probe import runner
 
-_HERE = pathlib.Path(__file__).parent
-SKILL = "\n\n".join((_HERE / name).read_text(encoding="utf-8") for name in ("APPLY.md", "COST.md"))
-PLUGIN = _HERE / "plugin"  # decision skills, loaded by the harness, triggered by description
-# Only fleetopt's skills are listed to the model; the CLI's built-in ones are noise here.
-SKILLS = sorted(f"fleetopt:{p.name}" for p in (PLUGIN / "skills").iterdir() if p.is_dir())
+# How to work, then what to look for with the mechanics of each pattern: in the prompt,
+# as the reviewer gets them, so both read the same guide.
+SKILL = "\n\n".join([(pathlib.Path(__file__).parent / "APPLY.md").read_text(encoding="utf-8"), review.COST,
+                     "## The mechanics each pattern refers to", review.MECHANICS])
 
 # Eval runners count as running the target too: a deepeval or promptfoo suite
 # invokes the agent on every case and bills the team for its own graders.
@@ -84,10 +83,6 @@ def guard_edit(project, start_branch):
                          "branch fleetopt made for this run; stop and say so in your report.")
         if "baseline" in tools.CTX and tools.CTX["baseline"] is None:
             return _deny("Measure the agent as it is first: call measure with no finding. Edits are allowed after that.")
-        rel = str(target.relative_to(root))
-        if "editing" in tools.CTX and rel not in tools.CTX["editing"]:
-            tools.CTX["editing"].add(rel)
-            tools.say(f"[fleetopt] changing {rel}")
         return {}
 
     return hook
@@ -136,7 +131,7 @@ def _git(project, *args):
 
 def _write_record(run_dir, project, start_sha, started, meta, texts, calls, skills, result, log=()):
     """What this run did: report.md for a human, log.txt for whoever has to find out
-    why, run.json for the ledger and for improving fleetopt, patch.diff when the branch
+    why, run.json with every measurement and judgment, patch.diff when the branch
     changed anything. No prompts or outputs of the target are stored; the 120-char
     input excerpts in judge rows and the diff are the only target content, so sharing
     a run folder is the operator's call, not automatic."""
@@ -232,7 +227,7 @@ def numbers(events, computed, start, final):
     return tried, gained
 
 
-def build_options(project, run_cmd=None, model=None, max_turns=100, max_usd=None, start_branch=None):
+def build_options(project, run_cmd=None, model=None, max_turns=100, max_usd=None, start_branch=None, design=False):
     """Everything the apply session is allowed to be. Apart from run() so the product's
     promises can be read off it in a test without starting a session
     (tests/test_invariants.py). `start_branch` is the branch the run began on: edits
@@ -246,20 +241,19 @@ def build_options(project, run_cmd=None, model=None, max_turns=100, max_usd=None
             "you change the source and call its tools. If an edit, a command or a tool call is "
             "refused, that is an answer, not an obstacle: never look for another way to make the "
             "same change (another tool, a shell write, git plumbing). Say so in your report "
-            "instead.\n\n" + SKILL
+            "instead.\n\n" + SKILL + ("\n\n# Design\n\n" + review.GUIDE + "\n\n" + review.REFERENCES if design else "")
         ),
         mcp_servers={"fleetopt": tools.server()},
         # Built-ins by allowlist. The CLI default is 26 tools including web fetch and
         # search, cron, worktrees, messaging and wake-up scheduling: egress and mutation
         # surfaces an optimizer has no business with, and schema tokens on every turn.
         # Observed before this: a run called ScheduleWakeup to "wait" for a subagent.
-        tools=["Read", "Grep", "Glob", "Bash", "Edit", "Write", "Skill"],
+        tools=["Read", "Grep", "Glob", "Bash", "Edit", "Write"],
         # No questions are asked, so none of these needs a person. What keeps them safe
         # is enforced below, not confirmed: the target is started only by fleetopt's own
         # driver, Bash cannot install, publish or run the target by hand, and an edit
         # lands inside the project on a new branch or not at all.
-        allowed_tools=[*tools.TOOL_NAMES, "Read", "Grep", "Glob", "Skill", "Bash", "Edit", "Write"],
-        plugins=[{"type": "local", "path": str(PLUGIN)}],
+        allowed_tools=[*tools.TOOL_NAMES, "Read", "Grep", "Glob", "Bash", "Edit", "Write"],
         hooks={"PreToolUse": [
             HookMatcher(matcher="Bash", hooks=[guard_bash(run_cmd)]),
             HookMatcher(matcher="Edit|Write", hooks=[guard_edit(
@@ -274,7 +268,7 @@ def build_options(project, run_cmd=None, model=None, max_turns=100, max_usd=None
         setting_sources=config.SETTING_SOURCES,
         extra_args=config.sdk_args(),
         strict_mcp_config=True,
-        skills=SKILLS,
+        skills=[],
         env=config.SDK_ENV,
         max_turns=max_turns,
         # Caps this session's own spend. The agent's API calls go through the team's
@@ -350,7 +344,7 @@ async def run(project, out_dir, run_cmd, review, findings, *, task, model=None, 
         cases=(f"{len(cases)} loaded; where a request matches one, the judge grades the answer against it"
                if cases else "none; the judge compares each answer with the original's"),
         team=team, minutes=minutes, own=max_usd, branch=branch, review=review)
-    options = build_options(project, run_cmd, model, max_usd=max_usd, start_branch=start_branch)
+    options = build_options(project, run_cmd, model, max_usd=max_usd, start_branch=start_branch, design=design)
     log, final, own = [], "", 0.0
     try:
         async with ticking("working on the agent", said_at=lambda: tools.CTX.get("said_at", 0)):

@@ -14,7 +14,6 @@ starts the agent under instrumentation and says how much it saw. Not part of the
 import argparse
 import asyncio
 import datetime
-import io
 import json
 import os
 import pathlib
@@ -22,10 +21,6 @@ import sys
 
 from fleetopt import config
 from fleetopt.probe import runner, store
-
-# Fix Windows Unicode console encoding
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 
 def _start(args):
@@ -62,16 +57,11 @@ def spent(out, project, after):
 def summary(agent, record, facts, runs, team_cost, own_cost):
     """The run in a few lines, for someone who will not read the report. Every line is
     computed from what was recorded; none of it is written by a session."""
-    from fleetopt.optimizer import review as review_mod
-
-    kinds = [f["kind"] for f in record["findings"]]
-    found = ", ".join(f"{kinds.count(k)} {k}" for k in review_mod.KINDS if k in kinds) or "nothing"
     money = lambda usd: "not priced" if usd is None else f"${usd:.2f}"
     undone = max(facts["tried"] - facts["kept"], 0)
     lines = [
         ("Agent", agent),
-        ("Level", f"{record['level']} of 4, {review_mod.LEVELS[record['level']]}"),
-        ("Found", found),
+        ("Found", f"{len(record['findings'])} finding(s) in the review"),
         ("Tried", f"{facts['tried']} changed version(s): {facts['kept']} kept, {undone} undone"),
         ("Gained", ", ".join(facts["gained"]) if facts["gained"] else "nothing proven"),
         ("Verdict", facts["verdict"].split(":")[0].lower()),
@@ -83,30 +73,9 @@ def summary(agent, record, facts, runs, team_cost, own_cost):
 
 
 def _model(*names):
-    """The model for a session: the first of `names` set in the environment, then
-    FLEETOPT_MODEL from a .env, then the default."""
-    for name in names:
-        if os.environ.get(name):
-            return os.environ[name]
-    for path in (pathlib.Path(".env"), config.GLOBAL_ENV):
-        if path.exists():
-            for line in path.read_text().splitlines():
-                if line.strip().startswith("FLEETOPT_MODEL="):
-                    return line.split("=", 1)[1].strip()
-    return "claude-sonnet-5"
-
-
-def _captured(out, project, run_cmd, state):
-    """The label of an earlier review capture of this exact code that never got its
-    review, so the agent is not run on the team's key twice for one answer."""
-    if not state or not (out / "fleetopt.db").exists():
-        return None
-    with store.connect(out / "fleetopt.db") as conn:
-        row = conn.execute(
-            "SELECT label FROM sessions WHERE project = ? AND run_cmd = ? AND code_state = ?"
-            "   AND exit_code = 0 AND label LIKE 'review-%' ORDER BY id DESC LIMIT 1",
-            (str(project), run_cmd, state)).fetchone()
-    return row["label"] if row else None
+    """The model for a session: the first of `names` set (config.load_env has read the
+    .env files into the environment by now), else the default."""
+    return next((os.environ[n] for n in names if os.environ.get(n)), "claude-sonnet-5")
 
 
 def _reviewed(project, out, run_cmd, max_usd, fresh=False, supplied=None, design=False):
@@ -125,17 +94,13 @@ def _reviewed(project, out, run_cmd, max_usd, fresh=False, supplied=None, design
         if kept:
             return kept, False
 
-    label = None if fresh else _captured(out, project, run_cmd, state)
-    if label:
-        print(f"[fleetopt] this code was captured before ({label}); the agent is not run again")
-    else:
-        label = f"review-{datetime.datetime.now():%Y%m%d-%H%M%S}"
-        try:
-            measure_mod.collect(project, run_cmd, out, 1, label)
-        except RuntimeError as exc:
-            # Unusable for a measurement, not for a review: what ran is evidence and the
-            # crash is the first finding.
-            print(f"[fleetopt] the run failed; reviewing what was captured.\n{exc}")
+    label = f"review-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+    try:
+        measure_mod.collect(project, run_cmd, out, 1, label)
+    except RuntimeError as exc:
+        # Unusable for a measurement, not for a review: what ran is evidence and the
+        # crash is the first finding.
+        print(f"[fleetopt] the run failed; reviewing what was captured.\n{exc}")
 
     tools.CTX.update({"project": project, "out": out, "run_cmd": run_cmd, "events": [], "include_failed": True})
     try:
@@ -148,9 +113,6 @@ def _reviewed(project, out, run_cmd, max_usd, fresh=False, supplied=None, design
             facts = shape.analyze(conn, ids)
             failed = conn.execute(
                 f"SELECT COUNT(*) FROM sessions WHERE exit_code != 0 AND id IN ({marks})", ids).fetchone()[0]
-            unfinished = conn.execute(
-                "SELECT COUNT(*) FROM runs WHERE parent_run_id IS NULL AND (error IS NOT NULL OR outputs IS NULL)"
-                f" AND session_id IN ({marks})", ids).fetchone()[0]
         if not facts["traces"]:
             # Observed: an agent that failed at import, and a reviewer session spent
             # describing a graph that never ran.
@@ -194,10 +156,9 @@ def _reviewed(project, out, run_cmd, max_usd, fresh=False, supplied=None, design
     (run_dir / "review.md").write_text(text + "\n", encoding="utf-8")
     (run_dir / "run.json").write_text(json.dumps({
         "kind": "review", "project": str(project), "run_cmd": run_cmd, "label": label, "code_state": state,
-        "model": model, "reviewer_cost_usd": cost, "findings": found, "unfinished": unfinished,
-        "level": review_mod.level(found, unfinished), "shape": facts, "events": tools.CTX["events"],
+        "model": model, "reviewer_cost_usd": cost, "findings": found, "shape": facts, "events": tools.CTX["events"],
     }, indent=1, default=str), encoding="utf-8")
-    record = review_mod.remember(out, project, run_cmd, state, label, run_dir, found, unfinished, design)
+    record = review_mod.remember(out, project, run_cmd, state, label, run_dir, found, design)
     print("\n--- review ---\n" + text)
     print(f"\n--- reviewer ${cost or 0:.4f} ---\n[fleetopt] run record: {run_dir}")
     return {**record, "text": text, "reviewer_cost_usd": cost}, True
@@ -207,41 +168,23 @@ def _named(found):
     return ", ".join(f"{f['id']} ({f['title']})" for f in found)
 
 
-def chosen(found, only, has_cases):
-    """(the findings apply will try, why the others are left). Decided here, in code:
-    a change to the design, small or large, is tried only when the team has eval cases
-    to judge it on. Without them the only evidence would be the old answers, and a
-    different design does not give the old answers."""
-    if only:
-        ids = [i.strip().upper() for i in only.split(",") if i.strip()]
-        unknown = [i for i in ids if i not in {f["id"] for f in found}]
-        if unknown:
-            raise ValueError(f"the review has no finding {', '.join(unknown)}. It has: "
-                             f"{', '.join(f['id'] for f in found) or 'none'}")
-        found = [f for f in found if f["id"] in ids]
-    if has_cases:
-        return found, []
-    design = [f for f in found if f["kind"] != "cost"]
-    left = [f"they change the design and this project has no eval cases to judge the answers on "
-            f"(--evals supplies them): {_named(design)}"] if design else []
-    return [f for f in found if f["kind"] == "cost"], left
-
-
-def _level(record):
-    from fleetopt.optimizer import review as review_mod
-
-    kinds = [f["kind"] for f in record["findings"]]
-    counts = ", ".join(f"{kinds.count(k)} {k}" for k in review_mod.KINDS if k in kinds) or "no findings"
-    broken = f"; {record['unfinished']} request(s) did not finish" if record.get("unfinished") else ""
-    return f"[fleetopt] level {record['level']} of 4, {review_mod.LEVELS[record['level']]}: {counts}{broken}"
+def chosen(found, only):
+    """The findings `--only` names, or all of them. What may be kept is the keep gate's
+    to decide, whatever is tried."""
+    if not only:
+        return found
+    ids = [i.strip().upper() for i in only.split(",") if i.strip()]
+    unknown = [i for i in ids if i not in {f["id"] for f in found}]
+    if unknown:
+        raise ValueError(f"the review has no finding {', '.join(unknown)}. It has: "
+                         f"{', '.join(f['id'] for f in found) or 'none'}")
+    return [f for f in found if f["id"] in ids]
 
 
 def review(args):
     """Look only: capture the agent once, print the structural numbers, run the reviewer.
     Costs the target's own run plus one reviewer session, and nothing when the code has
     not changed since the last review."""
-    from fleetopt.evidence import evals
-
     project = pathlib.Path(args.project).resolve()
     out = pathlib.Path(args.out).resolve()
     run_cmd = _start(args)
@@ -256,18 +199,13 @@ def review(args):
               "Nothing was run, nothing was spent (--fresh runs it again)")
         print("\n--- review ---\n" + record["text"])
 
-    picked, left = chosen(record["findings"], None,
-                          bool(evals.load(pathlib.Path(args.evals).resolve() if args.evals else project)[0]))
-    print("\n" + _level(record))
     print("\n--- what you can do next ---")
-    if picked:
+    if record["findings"]:
         print(f"fleetopt apply {args.project}")
-        print(f"  tries, on a new branch, one commit each: {_named(picked)}")
+        print(f"  tries, on a new branch, one commit each: {_named(record['findings'])}")
         print("  then looks again for what the first fixes uncover. --only C1,D2 tries just those and stops")
     else:
-        print("The review found nothing for `fleetopt apply` to try on its own.")
-    for why in left:
-        print(f"  left alone, {why}")
+        print("The review found nothing for `fleetopt apply` to try.")
     print("Nothing is merged or pushed: the branch is yours to read, keep or drop.")
     return 0
 
@@ -285,7 +223,6 @@ def limits(max_usd):
 def apply(args):
     """The whole loop: review the code as it stands (or reuse the review of it), then
     try the findings on a new branch and prove each one."""
-    from fleetopt.evidence import evals
     from fleetopt.optimizer import session
 
     project = pathlib.Path(args.project).resolve()
@@ -302,18 +239,14 @@ def apply(args):
         print(f"[fleetopt] starting from the review of {record['when']}: the code has not changed since "
               f"({pathlib.Path(record['run_dir']) / 'review.md'})")
 
-    cases, _ = evals.load(pathlib.Path(args.evals).resolve() if args.evals else project)
     try:
-        picked, left = chosen(record["findings"], args.only, bool(cases))
+        picked = chosen(record["findings"], args.only)
     except ValueError as exc:
         print(f"[fleetopt] {exc}")
         return 1
-    for why in left:
-        print(f"[fleetopt] left alone, {why}")
     if not picked:
         print("[fleetopt] nothing to try, so the agent was not run again and nothing was changed.")
-        return 1 if args.only else 0
-    print(_level(record))
+        return 0
     print(f"[fleetopt] findings to try: {_named(picked)}")
     print(limits(args.max_usd))
     print(f"[fleetopt] auth: {config.auth_summary() or 'unknown (could not run auth status)'}")
@@ -366,8 +299,7 @@ def _parser():
     app = sub.add_parser("apply", help="review, then change the agent on a new branch and prove each change")
     app.add_argument("project")
     app.add_argument("--only", metavar="IDS",
-                     help="try just these findings of the review, e.g. C1,D2. Without it, every finding "
-                          "the rules allow")
+                     help="try just these findings of the review, e.g. C1,D2, and nothing else")
     app.add_argument("--max-usd", type=float, default=5.0,
                      help="the most fleetopt's own sessions may spend in this run (default 5). The agent's "
                           "calls on the team's key stop at $2 (FLEETOPT_TEAM_USD)")

@@ -2,10 +2,8 @@
 
     pytest -q
 
-No LLM call anywhere here, so no key and no spend. The optimizer's judgement is
-tested separately: the skills by `claude plugin eval` (see
-fleetopt/optimizer/plugin/evals/), the whole loop by runs on real repos recorded
-in tests/corpus/ledger.md. README, "Testing".
+No LLM call anywhere here, so no key and no spend. The sessions' judgement is tested
+by runs on real agents.
 """
 
 import asyncio
@@ -256,11 +254,11 @@ def test_sdk_args_pass_only_credential_keys_from_settings(tmp_path, monkeypatch)
     assert config.sdk_args() == {}
 
 
-def test_sessions_load_no_operator_settings_and_only_fleetopt_skills():
+def test_sessions_load_no_operator_settings_and_read_every_cost_skill():
     assert config.SETTING_SOURCES == []
-    on_disk = sorted(p.name for p in (session.PLUGIN / "skills").iterdir() if p.is_dir())
-    assert session.SKILLS == [f"fleetopt:{name}" for name in on_disk]
-    assert len(on_disk) >= 6
+    on_disk = {p.name for p in (ROOT / "fleetopt" / "optimizer" / "skills").iterdir() if p.is_dir()}
+    assert on_disk == set(review.COST_SKILLS) | {"patterns"}
+    assert all(f"fleetopt:{name}" in session.SKILL for name in review.COST_SKILLS)
 
 
 # --- the probe on the bundled fixture: no key, no LLM, a few seconds --------------
@@ -534,31 +532,17 @@ change: none - there is no stable prefix
 """
 
 
-def test_what_may_be_tried_is_a_rule_not_the_reviewers_opinion():
+def test_a_review_is_read_for_its_numbered_findings():
     found = review.findings(REPORT)
-    assert [(f["id"], f["kind"]) for f in found] == [
-        ("C1", "cost"), ("C2", "cost"),          # cost stays cost, however cautious the reviewer felt about it
-        ("D1", "redesign"), ("D2", "design"),
-        ("D3", "redesign")]                      # a design finding without a readable tier is taken as the larger change
+    assert [f["id"] for f in found] == ["C1", "C2", "D1", "D2", "D3"]
     assert "C3" not in {f["id"] for f in found}  # something checked and cleared is not a finding to try
-    assert review.level(found) == 3 and review.LEVELS[3] == "wrong shape"
-    assert review.level(found[:2]) == 1 and review.level([]) == 0
-    assert review.level([], unfinished=2) == 4   # an agent that does not finish its requests comes before everything
     assert found[0]["title"] == "System prompt is never cached"
     assert review.findings("Nothing here has a number.") == []
-
-
-def test_what_apply_tries_is_decided_in_code_not_by_the_session():
-    found = review.findings(REPORT)
     ids = lambda picked: [f["id"] for f in picked]
-    picked, left = cli.chosen(found, None, has_cases=True)
-    assert ids(picked) == ["C1", "C2", "D1", "D2", "D3"] and not left   # the team's cases judge a design change
-    picked, left = cli.chosen(found, None, has_cases=False)
-    assert ids(picked) == ["C1", "C2"] and "no eval cases" in left[0] and "D1" in left[0]  # no cases, no change to the design
-    assert ids(cli.chosen(found, "d1, c1", has_cases=True)[0]) == ["C1", "D1"]  # a fence: these and no others
-    assert ids(cli.chosen(found, "D1", has_cases=False)[0]) == []
+    assert ids(cli.chosen(found, None)) == ["C1", "C2", "D1", "D2", "D3"]
+    assert ids(cli.chosen(found, "d1, c1")) == ["C1", "D1"]  # a fence: these and no others
     with pytest.raises(ValueError, match="no finding C9"):
-        cli.chosen(found, "C1,C9", has_cases=True)
+        cli.chosen(found, "C1,C9")
 
 
 def _a_saved_review(tmp_path, state="abc+1"):
@@ -590,7 +574,6 @@ def test_a_review_is_reused_while_the_code_has_not_changed(tmp_path, capsys, mon
     text = capsys.readouterr().out
     assert "has not changed since the review" in text and "C1 - System prompt is never cached" in text
     assert f"fleetopt apply {project}" in text and "D1 (Hand-built agent loop)" in text
-    assert "level 3 of 4, wrong shape: 2 cost, 1 design, 2 redesign" in text
     assert review.saved(out, project, "cmd", "abc+2") is None       # the code moved: that review no longer answers
     assert review.saved(out, project, "other agent", "abc+1") is None  # and it was a review of one agent, not the project
 
@@ -600,22 +583,6 @@ def test_apply_stops_before_spending_when_a_named_finding_does_not_exist(tmp_pat
     _nothing_may_run(monkeypatch, "abc+1")
     assert cli.main(["apply", str(project), "--out", str(out), "--only", "C7"]) == 1
     assert "no finding C7" in capsys.readouterr().out
-    assert cli.main(["apply", str(project), "--out", str(out), "--only", "D1"]) == 1  # a redesign, and no cases
-    assert "nothing to try" in capsys.readouterr().out
-
-
-def test_a_capture_that_never_got_its_review_is_not_run_again(tmp_path):
-    out, project = tmp_path, tmp_path / "p"
-    with store.connect(out / "fleetopt.db") as conn:
-        row = dict(project=str(project), run_cmd="cmd", code_state="abc+1", exit_code=0)
-        _session(conn, label="review-1", **row)
-        _session(conn, label="review-2", **{**row, "exit_code": 1})          # crashed: not evidence to reuse
-        _session(conn, label="baseline", **row)                              # a measurement, not a review capture
-        _session(conn, label="review-3", **{**row, "run_cmd": "another agent"})
-    assert cli._captured(out, project, "cmd", "abc+1") == "review-1"
-    assert cli._captured(out, project, "cmd", "abc+2") is None               # the code moved
-    assert cli._captured(out, project, "cmd", None) is None                  # not a git repo: nothing to go by
-    assert cli._captured(tmp_path / "nowhere", project, "cmd", "abc+1") is None
 
 
 def test_the_summary_is_computed_and_claims_a_gain_only_under_a_proven_verdict(tmp_path):
@@ -632,11 +599,11 @@ def test_the_summary_is_computed_and_claims_a_gain_only_under_a_proven_verdict(t
     assert session.numbers(events, "NOT PROVEN SAFE: ...", "v1", "v3") == (2, [])    # measured, and not a gain
     assert session.numbers(events, "NOTHING LEFT STANDING: ...", "v1", "v1") == (2, [])
 
-    record = {"findings": review.findings(REPORT), "level": 3}
+    record = {"findings": review.findings(REPORT)}
     facts = {"verdict": "NOTHING LEFT STANDING: 1 changed version(s) were judged and undone.", "tried": 3, "kept": 0,
              "gained": [], "branch": "fleetopt/c1-c2-d1", "run_dir": "/runs/x"}
     text = cli.summary("supervisor", record, facts, 27, 1.22, 2.31)
-    assert "Level    3 of 4, wrong shape" in text and "Found    2 cost, 1 design, 2 redesign" in text
+    assert "Found    5 finding(s) in the review" in text
     assert "3 changed version(s): 0 kept, 3 undone" in text and "Gained   nothing proven" in text
     assert "$1.22 on the team's key in 27 run(s)" in text and "the same code it started from" in text
     assert "not priced" in cli.summary("a", record, facts, 1, None, 0.5)
@@ -793,10 +760,14 @@ def test_review_stops_when_it_saw_no_model_call(tmp_path, capsys, monkeypatch):
     project.mkdir()
     out.mkdir()
     monkeypatch.setattr(runner, "code_state", lambda p: "v1")
-    monkeypatch.setattr(cli, "_captured", lambda *a: "review-1")
-    with store.connect(out / "fleetopt.db") as conn:
-        sid = _session(conn, project=str(project), label="review-1", run_cmd="cmd", code_state="v1", exit_code=0)
-        conn.execute("INSERT INTO runs (session_id, run_type, name, trace_id, outputs) VALUES (?, 'chain', 'parse', 't', 'x')", (sid,))
+
+    def captured(project_, run_cmd, out_, n, label):  # the one run: steps recorded, no model call among them
+        with store.connect(out / "fleetopt.db") as conn:
+            sid = _session(conn, project=str(project), label=label, run_cmd="cmd", code_state="v1", exit_code=0)
+            conn.execute("INSERT INTO runs (session_id, run_type, name, trace_id, outputs)"
+                         " VALUES (?, 'chain', 'parse', 't', 'x')", (sid,))
+
+    monkeypatch.setattr(measure, "collect", captured)
 
     def never(*a, **k):
         raise AssertionError("no reviewer is started for a run with no model call")

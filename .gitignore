@@ -5,14 +5,8 @@ __pycache__/
 *.pyc
 *.egg-info/
 
-# test material, never part of the product
+# other teams' agents, for trying fleetopt on; never part of the product
 targets/
-
-# research output, not product
-research_notes/
-reports/
-tests/corpus/corpus.json
-fleetopt/optimizer/plugin/evals/results/
 
 # browser preview scratch
 .playwright-mcp/

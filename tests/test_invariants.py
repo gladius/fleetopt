@@ -35,8 +35,7 @@ def test_a_session_inherits_nothing_from_the_operator():
     o = options()
     assert o.setting_sources == [] and o.strict_mcp_config is True
     assert list(o.mcp_servers) == ["fleetopt"]
-    assert [p["path"] for p in o.plugins] == [str(session.PLUGIN)]
-    assert o.skills and all(s.startswith("fleetopt:") for s in o.skills)
+    assert not o.plugins and o.skills == []  # what it knows is in its prompt, nothing is loaded
 
 
 def test_only_credential_keys_leave_the_operators_settings():
@@ -44,7 +43,7 @@ def test_only_credential_keys_leave_the_operators_settings():
 
 
 def test_a_session_has_no_web_no_scheduler_no_subagents():
-    assert set(options().tools) == {"Read", "Grep", "Glob", "Bash", "Edit", "Write", "Skill"}
+    assert set(options().tools) == {"Read", "Grep", "Glob", "Bash", "Edit", "Write"}
 
 
 def test_a_session_cannot_read_secrets_or_stop_to_ask():
@@ -203,13 +202,12 @@ def test_the_reviewer_gets_no_network_only_local_references():
     assert "WebFetch" not in review.READ_ONLY and "WebSearch" not in review.READ_ONLY
 
 
-def test_structural_patches_wait_for_eval_cases():
-    guide = " ".join((session.PLUGIN / "skills" / "patterns" / "SKILL.md").read_text(encoding="utf-8").split())
-    design = [{"id": "D1", "title": "t", "kind": "redesign"}, {"id": "D2", "title": "t", "kind": "design"}]
-    assert cli.chosen(design, None, has_cases=False)[0] == []      # decided in code, before any session starts
-    assert cli.chosen(design, None, has_cases=True)[0] == design
-    assert "only when eval cases are loaded" in guide
-    assert "what must survive" in guide
+def test_a_design_change_is_the_teams_cases_to_prove():
+    # the gate itself is exercised in test_fleetopt: a change to the structure is refused in
+    # a cost-only run, and kept under --design only on the team's cases
+    assert "what must survive" in review.GUIDE and "only when eval cases are loaded" in " ".join(review.GUIDE.split())
+    marker = "Before recommending a redesign"  # the design guide goes to apply only under --design
+    assert marker not in options().system_prompt and marker in options(design=True).system_prompt
 
 
 def test_starting_an_agent_is_read_and_tried_and_only_a_trial_proves_it():
@@ -245,7 +243,7 @@ def test_design_is_reviewed_only_when_asked_for():
     cost_only, both = review.system(), review.system(design=True)
     assert "# Part two: design" not in cost_only and "## Design" not in cost_only
     assert "# Part two: design" in both and "tier: <one | two>" in both
-    assert "a cost change that alters the graph is undone" in " ".join(cost_only.split())
+    assert "a cost change that alters the graph cannot be kept" in " ".join(cost_only.split())
     args = cli._parser().parse_args(["apply", "repo"])
     assert args.design is False and cli._parser().parse_args(["review", "repo", "--design"]).design is True
 
@@ -261,12 +259,12 @@ def test_the_agent_drives_and_the_limits_live_in_its_tools():
 
 
 def test_the_reviewer_covers_cost_and_design_and_measures_nothing():
-    assert "# Part one: cost" in review.SYSTEM and "# Part two: design" in review.SYSTEM
-    assert "minimum prefix" in review.SYSTEM.lower()          # the mechanics travel with it, no skill to load
+    both = review.system(design=True)
+    assert "# Part one: cost" in both and "# Part two: design" in both
+    assert "minimum prefix" in both.lower() and "minimum prefix" in session.SKILL.lower()  # both read the mechanics
     rules = " ".join(review.system().split())
     assert "never a measured saving" in rules
     assert "never hold a finding back" in rules  # caution goes on the risk line, not in a veto
-    assert review.KINDS == ("cost", "design", "redesign")
 
 
 # --- the verdict belongs to the measurements, not to the agent that wants it --------------

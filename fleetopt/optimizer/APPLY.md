@@ -10,7 +10,7 @@ what the numbers are and whether a change is kept:
 - `undo` puts the code back as it was last kept.
 
 What to look for, and the mechanics of each kind of change, are in the cost guide that
-follows and in the fleetopt skills it names. These are advice. The tools' refusals are not.
+follows. It is advice. The tools' refusals are not.
 
 ## How to work
 
