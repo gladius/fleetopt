@@ -7,6 +7,7 @@ import asyncio
 import json
 import pathlib
 import shutil
+import sys
 
 import pytest
 
@@ -61,6 +62,8 @@ def test_the_driver_puts_the_text_where_the_graph_takes_it():
         driver.build_input(_Graph({"profile": {"type": "object"}}), "hi")
     template = {"jd_text": "{input}", "profile": {"name": "demo"}, "targets": ["resume"]}
     assert driver.build_input(state, "hi", template) == {"jd_text": "hi", "profile": {"name": "demo"}, "targets": ["resume"]}
+    record = {"incident": {"id": "INC1", "text": "disk full"}, "priority": 2}
+    assert driver.build_input(state, record, template) == record   # a whole record per request goes in as it is
 
 
 def test_an_agent_built_to_be_hosted_gets_a_store_and_its_context():
@@ -82,8 +85,11 @@ def test_start_proves_an_entry_by_running_it_and_says_what_it_saw(project, tmp_p
     trying = _trying(project, tmp_path)
     try:
         assert "not in the project" in trying({**ENTRY, "graph": "made_up.py:graph"})   # checked before anything runs
-        assert "1 input(s) given" in trying({**ENTRY, "inputs": ["only one"]})    # too few to see past the noise
+        assert "no input given" in trying({**ENTRY, "inputs": ["", {}]})
         assert tools.CTX["tries"] == 0
+        assert tools._entry({**ENTRY, "inputs": ["the one example"]})["inputs"] == ["the one example"]  # one is enough
+        record = {"incident": {"id": "INC1"}}
+        assert tools._entry({**ENTRY, "inputs": [record, record, "x"]})["inputs"] == [record, "x"]
 
         assert "It did not start" in trying({**ENTRY, "graph": "agent.py:no_such_graph"})
         assert "saw no model call" in trying({**ENTRY, "graph": "plain.py:graph"})      # it ran, and nothing to see
@@ -99,6 +105,22 @@ def test_start_proves_an_entry_by_running_it_and_says_what_it_saw(project, tmp_p
         assert "started already" in trying(ENTRY)
         tools.CTX.update(run_cmd=None, tries=tools.TRIES)
         assert "Refused" in trying(ENTRY)                                               # four tries on the team's key
+    finally:
+        tools.CTX.clear()
+
+
+def test_the_projects_python_is_used_as_named_wherever_it_lives(project, tmp_path):
+    env = tmp_path / "poetry-env" / "bin"
+    env.mkdir(parents=True)
+    try:
+        (env / "python").symlink_to(sys.executable)              # a venv's python is a symlink (Linux, macOS)
+    except OSError:
+        shutil.copy(sys.executable, env / "python")               # Windows without symlink rights
+    _trying(project, tmp_path)
+    try:
+        assert tools._entry({**ENTRY, "interpreter": str(env / "python")})["interpreter"] == str(env / "python")
+        with pytest.raises(ValueError, match="not one"):
+            tools._entry({**ENTRY, "interpreter": "agent.py"})
     finally:
         tools.CTX.clear()
 

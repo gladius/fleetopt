@@ -15,7 +15,8 @@ Limits, each learned on a real agent:
   and after; its model calls count toward the team's cap;
 - keep: better past the noise, the graph keeps its nodes and edges, the team's tests and
   evals are untouched, and a separate reader finds nothing broken, on the strongest proof
-  the project has: its eval suite, else its golden dataset, else its test inputs.
+  the project has: its eval suite, else its golden dataset, else examples of what the agent
+  is sent, one or more.
 """
 
 import asyncio
@@ -40,7 +41,6 @@ from fleetopt.probe import runner, store
 RUNS = 3           # runs of the agent per measurement
 TRIES = 4          # tries to start the agent, one input each
 MAX_INPUTS = 8     # requests a run
-MIN_INPUTS = 3     # fewer, and the variation in a model's answers hides a real saving (observed: 1)
 EVAL_MINUTES = 30  # one run of the team's evals; FLEETOPT_EVAL_MINUTES overrides
 STEP_FACTOR = 3    # a changed agent may take this many times the original's steps per run
 BROKEN_FACTOR = 6  # ... or this many, when the original finished nothing and so stopped early
@@ -118,7 +118,8 @@ def over():
     if limit is not None:
         runs, cost = measure_mod.spent(CTX["out"], CTX["project"], CTX.get("first_session", 0))
         if cost is not None and cost >= limit:
-            return f"the limit on the team's key is reached: ${cost:.2f} spent in {runs} runs of the agent, limit ${limit:.2f}"
+            return (f"the limit on the agent's own API key is reached: ${cost:.2f} spent in {runs} runs of it, "
+                    f"limit ${limit:.2f}")
     if CTX.get("deadline") and time.time() >= CTX["deadline"]:
         return f"the time limit for a run is reached: {CTX.get('max_minutes', 0):g} minutes"
     return None
@@ -173,15 +174,14 @@ def command(path, entry, limit=None):
     return subprocess.list2cmdline(parts) if sys.platform == "win32" else shlex.join(parts)
 
 
-def spread(texts, n):
+def spread(items, n):
     """n of them, taken evenly across the list, so they differ in kind."""
-    texts = list(dict.fromkeys(texts))
-    return texts if len(texts) <= n else [texts[i * len(texts) // n] for i in range(n)]
+    return items if len(items) <= n else [items[i * len(items) // n] for i in range(n)]
 
 
 def key_names(project):
     """Names of the provider keys set in the environment or the project's .env. Names
-    only: a value is never read into fleetopt."""
+    only: a value is never kept or shown."""
     names = {k for k in os.environ if KEYISH.match(k)}
     env = project / ".env"
     if env.exists():
@@ -222,13 +222,17 @@ def _entry(plan):
     if not isinstance(graph, str) or ":" not in graph:
         raise ValueError(f"no graph named as file.py:name or module:name (got {graph!r})")
     graph = graph.removeprefix("./")
-    if graph.split(":")[0].endswith(".py") and not (project / graph.split(":")[0]).exists():
-        raise ValueError(f"the graph names {graph.split(':')[0]}, which is not in the project")
+    file = graph.rpartition(":")[0]  # the last colon: a Windows path has one of its own
+    if file.endswith(".py") and not (project / file).exists():
+        raise ValueError(f"the graph names {file}, which is not in the project")
     python = interpreter(project)
     if plan.get("interpreter"):
-        named = (project / plan["interpreter"]).resolve()
-        if not named.is_relative_to(project) or not named.exists():
-            raise ValueError(f"the interpreter must be one inside the project; {plan['interpreter']} is not")
+        # Not resolved: a venv's python is a symlink, and following it leaves the venv behind.
+        # Its environment may live outside the project (poetry, conda).
+        named = pathlib.Path(os.path.abspath(project / os.path.expanduser(plan["interpreter"])))
+        if not named.is_file() or not re.fullmatch(r"python[\d.]*(\.exe)?", named.name, re.I):
+            raise ValueError(f"the interpreter must be the python of the project's environment; "
+                             f"{plan['interpreter']} is not one")
         python = str(named)
     template = plan.get("input_template")
     if isinstance(template, str):  # observed: the template sent as JSON text, and the graph got a string
@@ -238,22 +242,25 @@ def _entry(plan):
             pass
     texts, expected = plan.get("inputs") or [], plan.get("expected")
     expected = expected if isinstance(expected, list) and len(expected) == len(texts) else [None] * len(texts)
-    cases = list(dict.fromkeys((t, str(e) if e else None) for t, e in zip(texts, expected) if isinstance(t, str) and t.strip()))
-    if len(cases) < MIN_INPUTS:
-        raise ValueError(f"{len(cases)} input(s) given; give 4 to {MAX_INPUTS} that differ in kind (at least "
-                         f"{MIN_INPUTS}), from the team's eval data where there is some")
-    source = plan.get("expected_from")
+    # An input is text, or a JSON object that is the graph's whole input for one request.
+    cases = [(t, str(e) if e else None) for t, e in zip(texts, expected) if (t.strip() if isinstance(t, str) else
+                                                                              isinstance(t, dict) and t)]
+    cases = list({json.dumps(c, sort_keys=True): c for c in cases}.values())
+    if not cases:
+        raise ValueError("no input given: give what the agent is sent, from the project, as text or a JSON object "
+                         f"each (up to {MAX_INPUTS})")
+    golden = plan.get("expected_from")
     if any(e for _, e in cases):
-        _copied(source, [e for _, e in cases if e])
+        _copied(golden, [e for _, e in cases if e])
     cases = spread(cases, MAX_INPUTS)
     env = {k: str(v) for k, v in (plan.get("env") or {}).items() if not SECRET.search(k)}
     return {"project": str(project), "name": plan.get("agent") or "agent", "job": str(plan.get("job") or "")[:300],
             "graph": graph, "paths": [str(p) for p in plan.get("paths") or ["."]], "interpreter": python,
             "env_file": plan.get("env_file"), "env": env, "config": plan.get("config") or {},
             "context": plan.get("context") or {}, "store": plan.get("store"), "input_template": template,
-            "inputs": [t for t, _ in cases], "inputs_from": plan.get("inputs_from") or "written by fleetopt",
+            "inputs": [t for t, _ in cases], "inputs_from": plan.get("inputs_from"),
             "expected": [e for _, e in cases] if any(e for _, e in cases) else None,
-            "expected_from": source if any(e for _, e in cases) else None}
+            "expected_from": golden if any(e for _, e in cases) else None}
 
 
 def _norm(text):
@@ -273,6 +280,11 @@ def _copied(source, answers):
     if missing:
         raise ValueError(f"{len(missing)} expected answer(s) are not in {source}: copy them exactly "
                          f"(e.g. {missing[0][:60]!r})")
+
+
+def source(entry):
+    """Where the inputs came from, in words."""
+    return f"from {entry['inputs_from']}" if entry.get("inputs_from") else "written by fleetopt"
 
 
 def started(entry):
@@ -314,8 +326,9 @@ async def start(args):
         entry["broken"] = None if result["finished"] else result["error"]
         path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
         started(entry)
-        say(f"  started: {entry['name']} ({entry['graph'].rsplit('/', 1)[-1]}), {len(entry['inputs'])} test inputs "
-            f"from {entry['inputs_from']}, each run" + (f" (try {CTX['tries']})" if CTX["tries"] > 1 else ""))
+        n = len(entry["inputs"])
+        say(f"  started: {entry['name']} ({entry['graph'].rsplit('/', 1)[-1]}), {n} request{'s' * (n != 1)} "
+            f"{source(entry)} each run" + (f" (try {CTX['tries']})" if CTX["tries"] > 1 else ""))
         verdict = "It started." + ("" if result["finished"] else
                                                    " No request finished: it is measured and reviewed as broken.")
     elif result["requests"] and not result["model_calls"]:
@@ -446,26 +459,29 @@ def proof():
         return f"the team's evals ({CTX['evals_before']['command']}), before and after"
     n = len(entry.get("inputs") or [])
     if entry.get("expected"):
-        return f"{n} cases from {entry.get('expected_from')} with expected answers, before and after"
-    return f"{n} test inputs from {entry.get('inputs_from')}, answers compared with the original's (no expected answers)"
+        return f"{n} case{'s' * (n != 1)} from {entry.get('expected_from')} with expected answers, before and after"
+    return (f"{n} example request{'s' * (n != 1)} {source(entry)}, answers compared with the original's "
+            "(no expected answers)")
 
 
 def _tests_touched():
-    return [f for f in _git("diff", "--name-only", CTX["kept_sha"], "HEAD").splitlines() if TESTS.search(f)]
+    """The team's tests and evals, and the file its expected answers come from, wherever it is."""
+    golden = pathlib.PurePath((CTX.get("entry") or {}).get("expected_from") or "").as_posix()
+    return [f for f in _git("diff", "--name-only", CTX["kept_sha"], "HEAD").splitlines() if TESTS.search(f) or f == golden]
 
 
 def _run_evals(command):
     """The team's eval command, in the project's own environment, under the probe so its model
-    calls count toward the cap. The project's env file is loaded by the shell that runs it, so
-    its values never pass through fleetopt. Returns (exit code, seconds, full output)."""
-    entry, env_file = CTX.get("entry") or {}, (CTX.get("entry") or {}).get("env_file")
-    shell = (f"set -a; . ./{shlex.quote(env_file)}; set +a; " if env_file and (CTX["project"] / env_file).exists()
-             else "") + command  # ponytail: POSIX shells; a Windows project runs the command as given
+    calls count toward the cap, with the env file the agent runs with. Returns (exit code,
+    seconds, full output)."""
+    entry = CTX.get("entry") or {}
+    env_file = CTX["project"] / entry["env_file"] if entry.get("env_file") else None
     python = pathlib.Path(entry.get("interpreter") or interpreter(CTX["project"]))
     minutes = float(os.environ.get("FLEETOPT_EVAL_MINUTES") or EVAL_MINUTES)
     began = time.time()
-    raw, traces, graphs, code = runner.execute(CTX["project"], shell if os.name != "nt" else command, CTX["out"],
-                                               timeout=60 * minutes, path_first=python.parent)
+    raw, traces, graphs, code = runner.execute(CTX["project"], command, CTX["out"], timeout=60 * minutes,
+                                               path_first=python.parent,
+                                               env_file=env_file if env_file and env_file.is_file() else None)
     text = runner.output_tail(raw, lines=100_000)
     CTX["n_evals"] += 1
     runner.ingest(CTX["project"], command, CTX["out"], f"evals-{CTX['n_evals']}", raw, traces, graphs, code)
@@ -582,7 +598,7 @@ def _refuse(why):
 @tool("keep", "Keep what was saved and measured since the code was last kept, if it has earned it: something got "
       "better past the noise, the graph keeps its nodes and edges, the team's tests and evals are untouched, and "
       "nothing is broken on the strongest proof the project has (its eval suite run again on this code, else "
-      "its golden dataset, else its test inputs, answer by answer). Otherwise it is refused, with the reason.", {})
+      "its golden dataset, else the examples it was run on, answer by answer). Otherwise it is refused, with the reason.", {})
 async def keep(args):
     label = CTX["measured"]
     if not CTX["saved"] or not label:
@@ -608,7 +624,7 @@ async def keep(args):
         say("  reading the team's evals: before and after")
         held, why = await _read_evals(before["command"], before["text"], after["text"])
         checked = "the team's evals pass as before"
-    else:  # a golden dataset, or the team's test inputs: the recorded answers, request by request
+    else:  # a golden dataset, or examples of what it is sent: the recorded answers, request by request
         pairs = _pairs(label)
         if not pairs:
             return _refuse("the two sides did not run the same requests, so their answers cannot be compared")

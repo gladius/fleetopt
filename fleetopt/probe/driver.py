@@ -24,7 +24,7 @@ import uuid
 BLANK = {"string": "", "array": [], "integer": 0, "number": 0, "boolean": False, "object": {}}
 
 
-def load_env(path):
+def load_env(path, env=os.environ):
     """KEY=VALUE lines into the environment, the way the project's own tooling would.
     What is already set wins."""
     for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
@@ -32,12 +32,12 @@ def load_env(path):
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+        env.setdefault(key.strip(), value.strip().strip("'\""))
 
 
 def resolve(spec, root, paths):
     """'pkg/module.py:name', 'pkg.module:name', or either ending in '()' for a factory."""
-    target, _, attr = spec.partition(":")
+    target, _, attr = spec.rpartition(":")  # the last colon: a Windows path has one of its own
     call = attr.endswith("()")
     attr = attr.removesuffix("()")
     if target.endswith(".py"):
@@ -81,9 +81,11 @@ def user_message(text):
 
 
 def build_input(graph, text, template=None):
-    """The graph's input for one piece of text. A `messages` field gets a user message;
-    otherwise the first text field gets the text and the other required fields start
-    empty. Anything more particular belongs in the entry's input_template."""
+    """The graph's input for one request. An object is that input as it is. Text goes into
+    the entry's input_template, else a `messages` field gets it as a user message, else the
+    first text field gets it and the other required fields start empty."""
+    if isinstance(text, dict):
+        return text
     if template is not None:
         return fill(template, text)
     schema = graph.get_input_jsonschema()
@@ -140,19 +142,20 @@ def main(argv):
     extra = platform(graph, entry)
     finished = paused = 0
     for text in inputs:
+        shown = text if isinstance(text, str) else json.dumps(text)
         config = {"configurable": {"thread_id": str(uuid.uuid4()), **(entry.get("config") or {})}}
         try:
             result = asyncio.run(graph.ainvoke(build_input(graph, text, entry.get("input_template")), config=config,
                                                **extra))
         except Exception as exc:  # noqa: BLE001 - one bad input must not hide the others
-            print(f"[driver] FAILED {text[:70]!r}\n         {type(exc).__name__}: {str(exc)[:400]}")
+            print(f"[driver] FAILED {shown[:70]!r}\n         {type(exc).__name__}: {str(exc)[:400]}")
             continue
         if isinstance(result, dict) and result.get("__interrupt__"):
             paused += 1
-            print(f"[driver] PAUSED for a human {text[:70]!r}")
+            print(f"[driver] PAUSED for a human {shown[:70]!r}")
         else:
             finished += 1
-            print(f"[driver] OK {text[:70]!r}")
+            print(f"[driver] OK {shown[:70]!r}")
     print(f"[driver] {finished} finished, {paused} paused, {len(inputs) - finished - paused} failed, of {len(inputs)} inputs")
     # Every input was put to the agent, so the run is complete whatever became of them.
     # An agent none of whose requests finish is a finding to measure, not a run to discard.

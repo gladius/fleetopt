@@ -1,8 +1,8 @@
 """Did a change break anything? Read by a separate model call, before and after.
 
 Two questions, for what a project has: the output of the team's own eval suite (`compare`),
-or the agent's answers to the team's test inputs, with expected answers when the team has a
-golden dataset (`compare_answers`). A clean context that sees only that: not the change, not
+or the agent's answers to examples of what it is sent, with expected answers when the team
+has a golden dataset (`compare_answers`). A clean context that sees only that: not the change, not
 the reasoning, not the saving. The session that made the change does not get to grade it. It
 reads whatever the team's system prints, so no framework is written into fleetopt. It fails
 closed: no answer, an unreadable one, or none in time is a failure.
@@ -46,7 +46,7 @@ WHAT THE AGENT IS FOR
 
 Reply with JSON only: {{"broke": true|false, "what": ["each request it broke, by its input"], "reason": "<one sentence>"}}"""
 
-SYSTEM = "You check an AI agent's results for a central AI team. Reply with JSON only."
+SYSTEM = "You check whether a change to an AI agent broke anything. Reply with JSON only."
 MODEL, FALLBACK = "haiku", "sonnet"  # aliases: whatever this Claude Code setup provides
 USED = {}  # the model that last answered, as the session reported it
 TIMEOUT_S = 300  # observed: a judge call that waited 38 minutes, silently, on the login's usage limit

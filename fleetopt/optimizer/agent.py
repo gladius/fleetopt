@@ -16,6 +16,7 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
 
 from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
@@ -45,7 +46,8 @@ SYSTEM = ((_HERE / "GUIDE.md").read_text(encoding="utf-8") + "\n\n## The mechani
 # a prompt, which is project code outside the cap (the recorded prompts have the sizes).
 RUNS_TARGET = re.compile(
     r"\bpytest\b|\blanggraph\s+dev\b|\bdeepeval\s+test\b|\bpromptfoo\s+eval\b|\bbraintrust\s+eval\b"
-    r"|\b(?:uv|poetry|pdm)\s+run\b|\bpython[\d.]*\b(?!\s+-m\s+py_compile\b)|driver\.py")
+    r"|\b(?:uv|poetry|pdm)\s+run\b|\bpython[\d.]*\b(?!\s+-m\s+py_compile\b)|driver\.py"
+    r"|(?:^|[\s;&|(])py(?:\.exe)?\s+(?!-m\s+py_compile\b)")  # Windows' py launcher
 # Installs and downloads: right for a sandbox, wrong on someone else's machine (observed:
 # a session pulled langgraph from the internet with `uv run --with`).
 ENV_MUTATION = re.compile(
@@ -146,7 +148,7 @@ MISSION = {
     True: "Review the LangGraph agent in this project: start it if needed, measure it once as it is, find where "
           "it wastes tokens and money, and report what is worth changing. This run changes nothing and does not "
           "run the team's evals; say what the project has to check the agent against (an eval suite and how it "
-          "is run, a golden dataset, test inputs) or that it has nothing.",
+          "is run, a golden dataset, examples of what it is sent) or that it has none of these.",
     False: "Make the LangGraph agent in this project cost less without changing what it answers: start it if "
            "needed, measure it, find the waste, change it, prove each change, look again, and report.",
 }
@@ -204,17 +206,21 @@ def _prompt(look_only, entry, evals, graph, team, minutes, max_usd, branch, earl
     lines = [MISSION[look_only], ""]
     if entry:
         lines.append(f"How to start it is known, from an earlier try: {entry['name']} ({entry['graph']}), "
-                     f"{len(entry['inputs'])} inputs from {entry['inputs_from']}. It is started: measure it.")
+                     f"{len(entry['inputs'])} input(s) {tools.source(entry)}. It is started: measure it.")
     else:
+        python = tools.interpreter(ctx["project"])
         lines.append(f"How to start it is not known yet: start it (see the guide). Provider keys that are set "
-                     f"(names only): {', '.join(tools.key_names(ctx['project'])) or 'none found'}. The project's "
-                     f"interpreter: {tools.interpreter(ctx['project'])}.")
+                     f"(names only): {', '.join(tools.key_names(ctx['project'])) or 'none found'}. "
+                     + (f"The project's interpreter: {python}." if python != sys.executable else
+                        "No .venv or venv in the project: if its environment is elsewhere (poetry, conda, a path in "
+                        "its README), name that python as `interpreter`."))
         if graph:
             lines.append(f"The person running fleetopt asked for this agent: {graph}.")
     if evals:
-        lines.append(f"The person running fleetopt says the team runs its evals with: {evals}")
-    lines.append(f"Limits, held by the tools: ${team:.2f} on the team's key, {minutes:g} minutes, ${max_usd:.2f} "
-                 "for you.")
+        lines.append(f"The person running fleetopt says to check the agent with: {evals} (an eval command, or a file "
+                     "of test cases, expected answers or example requests). Use it.")
+    lines.append(f"Limits, held by the tools: ${team:.2f} spent by the agent on its own API key, {minutes:g} minutes, "
+                 f"${max_usd:.2f} for you.")
     if branch:
         lines.append(f"Changes go on fleetopt's branch {branch}.")
     if earlier:
@@ -236,8 +242,6 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     run_dir = out / "runs" / f"{began:%Y%m%d-%H%M%S}-{project.name}"
     path = tools.entry_path(out, project, graph or "agent")
     entry = _saved_entry(path)
-    if entry and len(entry["inputs"]) < tools.MIN_INPUTS:
-        entry = None  # observed: an entry from before the rule, 1 input: too few to see past the noise
     team = float(os.environ.get("FLEETOPT_TEAM_USD") or tools.TEAM_USD)
     minutes = float(os.environ.get("FLEETOPT_MAX_MINUTES") or tools.MAX_MINUTES)
     first = _newest(out)
@@ -346,8 +350,8 @@ def summary(facts):
     elif not facts["measured"]:
         lines.append("  Result   " + ("could not start it" if not facts["started"] else "could not measure it")
                      + ": see why above")
-    lines.append(f"  Spent    {money(facts['team_cost'])} on the team's key ({facts['team_runs']} runs) · "
-                 f"{money(facts['own_cost'])} by fleetopt")
+    lines.append(f"  Spent    {money(facts['team_cost'])} by the agent on its API key ({facts['team_runs']} runs) · "
+                 f"{money(facts['own_cost'])} by fleetopt on your Claude login")
     if facts["mode"] == "review" and facts["measured"]:
         lines.append(f"  Next     fleetopt apply {facts['project']}")
     lines.append(f"  Details  {_shown(pathlib.Path(facts['run_dir']) / 'report.md')}")

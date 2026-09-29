@@ -13,14 +13,16 @@ fleetopt uses the strongest you have and says which:
 | You have | How a change is proven |
 |---|---|
 | An eval suite (any tool: pytest, deepeval, LangSmith, Galileo, your own script) | Run before and after: nothing that passed may fail |
-| A golden dataset: inputs with expected answers (CSV, JSON, any format) | Each answer checked against the expected one, before and after |
-| Test inputs you use (test cases, sample tickets), at least three | Each answer after must be as good as the one before |
+| A golden dataset: requests with expected answers, one or many (CSV, JSON, any text file) | Each answer checked against the expected one, before and after |
+| Examples of what your agent is sent, one or many (a test case, a sample ticket, records in a data or metrics file, an example in the README) | Each answer after must be as good as the one before |
 
-With none of these it says so and stops before spending anything.
+It looks anywhere in the project, whatever the files are called. With none of these it says
+what it looked at, why each fell short, and stops before spending anything. To point it at
+the right thing yourself: `--evals "pytest tests/evals"` or `--evals metrics/cases.csv`.
 
 ```bash
 fleetopt review <project>     # look only: where it wastes tokens and money. Changes nothing
-fleetopt apply <project>      # look, change it on a new branch, prove the changes on your evals
+fleetopt apply <project>      # look, change it on a new branch, prove the changes on your checks
 ```
 
 ## Install
@@ -34,8 +36,7 @@ python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\a
 pip install -e ".[dev]"
 ```
 
-Try `review` on a copy of the bundled fixture (a fake model, nothing spent on any key). The
-fixture has no eval suite, so `apply` on it stops at "No evals found", as it should:
+Try `review` on a copy of the bundled fixture (a fake model, nothing spent on any key):
 
 ```bash
 T=$(mktemp -d) && cp -r fixture/. "$T" && git -C "$T" init -q && git -C "$T" add -A && git -C "$T" commit -qm base
@@ -48,7 +49,7 @@ One Claude agent does the work, the way an expert would; code holds the numbers 
 
 1. **Start it.** The agent reads the project and works out how to run its agent, then
    tries it on one input. It is remembered per project.
-2. **Check it as it is** (apply): your eval suite, or its answers to your test inputs.
+2. **Check it as it is** (apply): your eval suite, or its answers to your golden dataset or examples.
 3. **Measure it** as it is: 3 runs, every model call, token and step recorded.
 4. **Find the waste**: prompts that grow, caching not used, a bigger model than a step
    needs, output with no limit, loops that do not stop early, repeated calls, oversized
@@ -62,15 +63,15 @@ One Claude agent does the work, the way an expert would; code holds the numbers 
    pushed.
 
 When it cannot help it says so and stops: something only the team can provide (a key, a
-service, a dependency, something to check against), or an agent whose model calls it cannot see (they do not go
-through LangChain).
+service, a dependency, something to check against), or an agent whose model calls it cannot
+see (they do not go through LangChain).
 
 ## What ends a run
 
 | Limit | Default |
 |---|---|
-| Spend on the team's key | $2 (`FLEETOPT_TEAM_USD`) |
-| fleetopt's own spend | `--max-usd`: $5 for apply, $2 for review |
+| What the agent spends on its own API key, in fleetopt's runs of it | $2 (`FLEETOPT_TEAM_USD`) |
+| What fleetopt's own work spends on your Claude login | `--max-usd`: $5 for apply, $2 for review |
 | The whole run | 2 hours (`FLEETOPT_MAX_MINUTES`) |
 | One run of the agent | 15 minutes (`FLEETOPT_RUN_MINUTES`), stopped with everything it started |
 | A changed agent's steps | 3 times the original's: stopped, and changed code runs once before three times |
@@ -83,8 +84,9 @@ through LangChain).
 Enforced, not asked; each is a test in `tests/test_invariants.py`.
 
 - The team's code is edited only inside the project, on fleetopt's branch. No push.
-- Nothing installed, nothing downloaded. The values in `.env`, keys and certificates are never
-  read; only the names of provider keys are checked. Your evals get `.env` from your own shell.
+- Nothing installed, nothing downloaded. fleetopt's AI cannot read `.env`, keys or
+  certificates; it is told only the names of provider keys. The values in `.env` go only to
+  your agent's and your evals' own processes, and are never logged.
 - The agent runs only through fleetopt's tools, never by hand.
 - No web access, and nothing loaded from your Claude Code or the project's `.claude/`.
 - Nothing about you goes into what is sent to the agent.
@@ -93,7 +95,7 @@ Enforced, not asked; each is a test in `tests/test_invariants.py`.
 
 | Flag | Meaning |
 |---|---|
-| `--evals COMMAND` | How you run your evals, e.g. `pytest tests/evals`. Found in the project otherwise |
+| `--evals WHAT` | What to check the agent with: your eval command (`pytest tests/evals`) or a file of test cases, expected answers or example requests. Found in the project otherwise |
 | `--graph NAME` | Which agent, when a project has several |
 | `--max-usd N` | Cap on fleetopt's own spend |
 | `--out DIR` | Where records go (default `./.fleetopt`) |
@@ -112,8 +114,9 @@ answers: treat them like the project's own logs.
 - LangGraph in Python only; model calls must go through LangChain to be seen.
 - Only Anthropic has been run; OpenAI and Gemini are priced, untested.
 - Reading eval results has been tried on pytest output only; checking by a golden dataset or
-  test inputs is tested in code, not yet on a real run.
-- Your `.env` is loaded for evals through a POSIX shell (Linux, macOS), not on Windows.
+  examples is tested in code, not yet on a real run.
+- A golden dataset has to be a text file in the project. A spreadsheet, or a dataset kept only
+  in an eval service, counts through your eval script, or not at all.
 
 ## More
 

@@ -53,13 +53,14 @@ def _guard(cmd):
     "python agent.py", "pytest tests/", "langgraph dev", "deepeval test run tests/", "promptfoo eval",
     "/proj/.venv/bin/python /x/fleetopt/probe/driver.py e.json --limit 1",
     '.venv/bin/python -c "from agents.sql_agent import build; print(len(build()))"',  # project code, outside the cap
-    "uv run python -m agents.main", "poetry run agent",
+    "uv run python -m agents.main", "poetry run agent", 'py -c "import agent"', r".venv\Scripts\python.exe agent.py",
 ])
 def test_guard_denies_installs_and_running_the_target(cmd):
     assert _guard(cmd)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-@pytest.mark.parametrize("cmd", ["git status", "ls -la", "wc -l README.md", "grep -rn StateGraph src"])
+@pytest.mark.parametrize("cmd", ["git status", "ls -la", "wc -l README.md", "grep -rn StateGraph src", "cat agent.py",
+                                 "py -m py_compile agent.py", "poetry env info -p"])
 def test_guard_allows_everything_else(cmd):
     assert _guard(cmd) == {}
 
@@ -487,7 +488,7 @@ def test_a_stopped_run_puts_the_teams_copy_back(tmp_path, monkeypatch, capsys):
     assert "your copy is back on main" in capsys.readouterr().out
 
 
-def test_a_saved_start_with_too_few_inputs_is_worked_out_again(tmp_path, monkeypatch):
+def test_a_saved_start_is_used_again_even_with_one_input(tmp_path, monkeypatch):
     import claude_agent_sdk
 
     project = _repo(tmp_path)
@@ -506,7 +507,7 @@ def test_a_saved_start_with_too_few_inputs_is_worked_out_again(tmp_path, monkeyp
         asyncio.run(agent.run(project, tmp_path / "out"))
     finally:
         tools.CTX.clear()
-    assert "How to start it is not known yet" in seen["prompt"]
+    assert "How to start it is known" in seen["prompt"]            # one example is enough for a simple agent
 
 
 def test_runs_of_the_same_code_on_other_inputs_are_never_pooled(tmp_path):
@@ -522,6 +523,20 @@ def test_runs_of_the_same_code_on_other_inputs_are_never_pooled(tmp_path):
         assert tools.CTX["base"] != base                                   # nor another setting
         tools.started({**four, "proven": "later", "job": "reworded"})
         assert tools.CTX["base"] == base and tools.CTX["kept_label"] == base  # the same run: reused, not rerun
+    finally:
+        tools.CTX.clear()
+
+
+def test_the_file_the_expected_answers_come_from_counts_as_the_teams_evals(tmp_path):
+    project = _repo(tmp_path)
+    tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", run_dir=tmp_path / "r",
+                entry={**ENTRY, "project": str(project), "expected": ["a"], "expected_from": "metrics/golden.csv"})
+    try:
+        (project / "metrics").mkdir()
+        (project / "metrics" / "golden.csv").write_text("q,a\n", encoding="utf-8")
+        tools._git("add", "-A")
+        tools._git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+        assert tools._tests_touched() == ["metrics/golden.csv"]      # keep refuses it, wherever the file lives
     finally:
         tools.CTX.clear()
 
@@ -568,8 +583,8 @@ def test_without_a_suite_the_answers_are_the_proof(tmp_path, monkeypatch):
         (project / "agent.py").write_text("x = 2\n", encoding="utf-8")
         _call("save_change", name="smaller model"), _call("measure")
         assert "the answers: INC017302340: the root cause is gone" in _call("keep")
-        assert tools.proof() == ("3 test inputs from the team's test incidents, answers compared with the original's "
-                                 "(no expected answers)")
+        assert tools.proof() == ("3 example requests from the team's test incidents, answers compared with the "
+                                 "original's (no expected answers)")
     finally:
         tools.CTX.clear()
 

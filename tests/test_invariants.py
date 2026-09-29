@@ -161,9 +161,11 @@ def test_the_agent_drives_and_the_limits_live_in_its_tools():
 
 
 def test_the_teams_own_evals_are_the_proof_and_without_them_it_stops():
-    assert "Nothing to check the agent against: add evals, a golden dataset or test inputs" in GUIDE
+    assert "Nothing to check the agent against: add evals, a golden dataset or an example" in GUIDE
+    assert "one is enough when that is all there is" in GUIDE                 # a simple agent may have one case
+    assert "look anywhere in the project" in GUIDE and "why each fell short" in GUIDE
     assert "Never touch the team's tests, evals or eval data" in GUIDE
-    assert "any vendor" in GUIDE and "any format" in GUIDE                     # no framework is written in
+    assert "any vendor" in GUIDE and "any text format" in GUIDE                       # no framework is written in
     assert "Never invent an expected answer" in GUIDE
     for path in ("tests/test_agent.py", "evals/cases.jsonl", "src/agent_test.py", "conftest.py", "datasets/golden.json"):
         assert tools.TESTS.search(path), path                                   # changes to these are never kept
@@ -195,7 +197,7 @@ def test_what_is_shown_is_for_a_person():
              "own_cost": 0.77, "project": "/p", "run_dir": "/r"}
     text = "\n".join(agent.summary(facts))
     assert "1 change(s) kept on branch fleetopt/x: cost -24%" in text and "cache the system prompt  kept" in text
-    assert "$0.31 on the team's key (16 runs)" in text and "C1" not in text and "label" not in text
+    assert "$0.31 by the agent on its API key (16 runs)" in text and "C1" not in text and "label" not in text
 
 
 # --- a number is only a claim when it has earned it ------------------------------------
@@ -283,7 +285,7 @@ def test_the_teams_money_and_the_clock_both_end_a_run(tmp_path, monkeypatch, cap
     monkeypatch.setattr(measure, "spent", lambda out, proj, after: (12, 4.99))
     assert tools.over() is None
     monkeypatch.setattr(measure, "spent", lambda out, proj, after: (13, 5.01))
-    assert "limit on the team's key is reached: $5.01 spent in 13 runs" in tools.over()
+    assert "limit on the agent's own API key is reached: $5.01 spent in 13 runs" in tools.over()
     monkeypatch.setattr(measure, "spent", lambda out, proj, after: (3, None))   # no price: the clock still holds
     assert tools.over() is None
     tools.CTX["deadline"] = time.time() - 1

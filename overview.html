@@ -126,7 +126,7 @@
   <section class="opening">
     <h2>Central AI team</h2>
     <h1>fleetopt</h1>
-    <p class="lede">Makes our AI agents cheaper, and proves every change on the team's own evals before keeping it.</p>
+    <p class="lede">Makes our AI agents cheaper, and proves every change on the team's own checks before keeping it.</p>
   </section>
 
   <section>
@@ -134,20 +134,20 @@
     <ul class="needs">
       <li><b>The project in git</b><span>Changes land on a new branch</span></li>
       <li><b>The agent runs</b><span>Its own setup, keys and services</span></li>
-      <li class="key"><b>Their eval suite</b><span>Any tool: pytest, LangSmith, Galileo, their own</span></li>
+      <li class="key"><b>Something to check against</b><span>Their eval suite (any tool), a golden dataset, or even one example request</span></li>
       <li><b>Visible model calls</b><span>Through LangChain</span></li>
     </ul>
-    <p class="stop">If anything is missing, it says what and stops before spending: <q>No evals found: create them, then run this again.</q></p>
+    <p class="stop">It uses the strongest check the project has. If anything is missing, it says what it looked at and stops before spending: <q>Nothing to check the agent against: add evals, a golden dataset or an example of what it is sent.</q></p>
   </section>
 
   <section>
     <h2>How it works &middot; one command, unattended</h2>
     <ol class="flow">
       <li><h3>Check</h3><span>Everything is ready</span></li>
-      <li><h3>Baseline</h3><span>Runs the team's evals, measures cost</span></li>
+      <li><h3>Baseline</h3><span>Checks it as it is, measures cost</span></li>
       <li class="loop"><h3>Find</h3><span>Where tokens and money go</span></li>
       <li class="loop"><h3>Change</h3><span>Every fix, on a branch</span></li>
-      <li class="loop"><h3>Prove</h3><span>Cheaper, and the evals still pass</span></li>
+      <li class="loop"><h3>Prove</h3><span>Cheaper, and it still works</span></li>
       <li><h3>Report</h3><span>What was kept and saved</span></li>
     </ol>
     <div class="again"><div></div><p>Looks again after each kept change</p></div>
@@ -177,11 +177,11 @@
       <div class="part">
         <h3>Rules</h3>
         <p>Enforced, never asked: edits only on its branch, no push, no installs, no secrets.</p>
-        <div class="chips"><span>$2 on the team's key</span><span>2 hours</span></div>
+        <div class="chips"><span>$2 on the agent's own key</span><span>2 hours</span></div>
       </div>
       <div class="under">
         <b>Code decides what counts</b>
-        <span>Records every model call &middot; measures cost past the noise &middot; a separate reader checks the evals</span>
+        <span>Records every model call &middot; measures cost past the noise &middot; a separate reader checks the results</span>
       </div>
     </div>
   </section>
@@ -190,7 +190,7 @@
     <h2>What keeps it safe</h2>
     <ul class="safe">
       <li>Never touches a team's live code</li>
-      <li>Kept only if cheaper and the team's evals still pass</li>
+      <li>Kept only if cheaper and the team's own checks still pass</li>
       <li>A person decides what is merged</li>
     </ul>
   </section>
@@ -203,7 +203,7 @@
       <div><strong>2</strong><span>changes kept on a branch</span></div>
       <div><strong>$0.28</strong><span>spent on the agent's key</span></div>
     </div>
-    <p class="note">First kept result, on a demo research agent running on Claude, with an eval suite we wrote for it. Next: a real team's agent with its own evals.</p>
+    <p class="note">First kept result, on a demo research agent running on Claude, with an eval suite we wrote for it. Next: a real team's agent, checked its own way.</p>
   </section>
 
   <footer>Works today on LangGraph agents in Python. Figures are from test runs. The same day, an open-source example agent was found already lean: nothing to save, and it said so.</footer>

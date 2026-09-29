@@ -27,13 +27,14 @@ def _parser():
                             ("apply", 5.0, "look, change the agent on a new branch, and prove each change")):
         p = sub.add_parser(name, help=text)
         p.add_argument("project")
-        p.add_argument("--evals", metavar="COMMAND", help="how the team runs its evals, e.g. 'pytest tests/evals'. "
-                                                          "Found in the project otherwise")
+        p.add_argument("--evals", metavar="WHAT", help="what to check the agent with: the eval command you run "
+                                                       "(e.g. 'pytest tests/evals'), or a file of test cases, expected "
+                                                       "answers or example requests. Found in the project otherwise")
         p.add_argument("--graph", help="which agent, when the project has several: a name from langgraph.json, "
                                        "or file.py:variable")
         p.add_argument("--max-usd", type=float, default=usd,
-                       help=f"the most fleetopt itself may spend (default {usd:g}). Runs of the agent on the "
-                            "team's key stop at $2 (FLEETOPT_TEAM_USD)")
+                       help=f"the most fleetopt's own work may spend on your Claude login (default {usd:g}). "
+                            "The agent's runs stop at $2 on its own API key (FLEETOPT_TEAM_USD)")
         p.add_argument("--out", default=argparse.SUPPRESS, help="where records go (default ./.fleetopt)")
     return parser
 
@@ -61,8 +62,8 @@ def main(argv=None):
     project = pathlib.Path(args.project).resolve()
     team = float(os.environ.get("FLEETOPT_TEAM_USD") or tools.TEAM_USD)
     minutes = float(os.environ.get("FLEETOPT_MAX_MINUTES") or tools.MAX_MINUTES)
-    print(f"fleetopt {args.cmd} · {project.name} · limits: ${team:.2f} on the team's key · {minutes:g} min · "
-          f"${args.max_usd:.2f} by fleetopt", flush=True)
+    print(f"fleetopt {args.cmd} · {project.name}\n  stops at: {minutes:g} min · ${team:.2f} spent by the agent on its "
+          f"own API key · ${args.max_usd:.2f} spent by fleetopt on your Claude login", flush=True)
     try:
         facts = asyncio.run(agent.run(project, args.out, look_only=args.cmd == "review", evals=args.evals,
                                       graph=args.graph, model=os.environ.get("FLEETOPT_MODEL") or None,

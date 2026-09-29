@@ -14,18 +14,22 @@ have ready. Check it first, before anything is spent, and if any of it is missin
 all of it plainly and stop:
 
 1. The agent starts in its own environment (its dependencies, keys and services).
-2. **Something that shows the agent still works**, the strongest the project has. Look
-   in `tests/`, `evals/`, `data/`, `metrics/`, the README, their CI config:
+2. **Something to check the agent against**, the strongest the project has. Agents and
+   teams differ, so look anywhere in the project, whatever it is called: tests, evals,
+   data and metrics files, notebooks, scripts, the README, CI config.
    - **an eval suite** the team runs (tests, an eval script, any vendor): run it with
      `run_evals` before and after;
-   - else **a golden dataset**, inputs with the answers expected (CSV, JSON, a sheet
-     export, any format): put them in the entry as `inputs` and `expected`, copied
-     exactly, with `expected_from` naming the file; the answers are checked against them;
-   - else **test inputs the team uses** (test cases, sample tickets, examples), at least
-     three: the answers after are compared with the answers before.
+   - else **a golden dataset**, requests with the answers expected, one or many, in any
+     text format: put them in the entry as `inputs` and `expected`, copied exactly, with
+     `expected_from` naming the file; the answers are checked against them;
+   - else **examples of what the agent is sent**, one or many: test cases, sample
+     requests, records of real ones in a data or metrics file, an example in the README,
+     a script or notebook. The answers after are compared with the original's.
 
-   Nothing of the kind: "Nothing to check the agent against: add evals, a golden dataset
-   or test inputs, then run this again." Never invent an expected answer.
+   Stop only when the project has none of these. Then name what you looked at and why
+   each fell short (the file, and what it held), and say: "Nothing to check the agent
+   against: add evals, a golden dataset or an example of what it is sent, then run this
+   again." Never invent an expected answer.
 3. Model calls fleetopt can see: the first measurement shows them. If it ran and none
    were recorded, it calls its model without LangChain: find where, and say so.
 
@@ -36,7 +40,8 @@ all of it plainly and stop:
    team uses. This is what "still works" means for this agent.
 3. **Measure it as it is**: `measure`, once. Edits are refused until then.
 4. **Find the waste**: `query` the recorded runs and read the source, with "What to look
-   for" below. Every finding rests on a number from the traces and a line of source.
+   for" below. Every finding rests on a number from the traces and a line of source. Ask
+   for what you need together: several files, searches or queries in one turn.
 5. **Change it**: make every change the evidence supports, saving each with
    `save_change` and a plain name.
 6. **Prove it**: `measure` (and `run_evals` again, the same command, when there is a
@@ -68,10 +73,13 @@ without a store an empty in-memory one, as a hosting platform would.
   entry point passes.
 - **Settings**: its env file; plain settings that are not secrets. If it supports several
   providers, choose one whose key is set. Never put a key, token or password in an entry.
-- **Inputs**: four to eight that differ in kind (at least three), what its end users send
-  it, taken from the team's eval data where there is some. More requests a run average
-  out the variation in a model's answers, which is what lets a real saving clear the
-  noise. Invent any person you need; never use anything about whoever runs this tool.
+- **Inputs**: what you found to check it against, as the agent is sent it: all of it up
+  to eight, picking ones that differ in kind; one is enough when that is all there is.
+  Several average out the variation in a model's answers, so a smaller saving clears the
+  noise. An input is text, or a JSON object when the agent takes a whole record per
+  request (the object is then the graph's input as it is). Name where they came from in
+  `inputs_from`. A request that needs a person gets an invented one; never use anything
+  about whoever runs this tool.
 - **Reading a failed try**: a missing module, a refused key, a service that cannot be
   reached, a file the agent needs: that is the team's to provide. Stop and list it. An
   input that did not fit: fix the entry. The model answered and the agent's own code then
@@ -82,9 +90,9 @@ The entry:
 ```json
 {"graph": "path/to/file.py:name  or  package.module:name  (end with () for a factory)",
  "agent": "a short name", "job": "what it is for, one sentence", "paths": ["."],
- "interpreter": "only if its environment is not .venv or venv: its python, inside the project",
+ "interpreter": "only if its environment is not .venv or venv in the project: the path to its python",
  "env_file": ".env or null", "env": {}, "config": {}, "context": {}, "store": null,
- "input_template": null, "inputs": [], "inputs_from": "where the inputs came from",
+ "input_template": null, "inputs": ["text, or a JSON object"], "inputs_from": "the file or place",
  "expected": null, "expected_from": null}
 ```
 
@@ -123,7 +131,7 @@ no tool names. It starts with `What it is for:`.
 ```
 What it is for: <one sentence>
 What it spends: <cost a run, requests a run, model calls, tokens in and out, from measure>
-How it was checked: <the eval command, the golden dataset, or the test inputs, and what the original scored>
+How it was checked: <the eval command, the golden dataset, or the examples, and what the original scored>
 Changed:            (when you change it)
 - <plain name>: kept or undone, and why in a few words
 Worth changing:     (when you only look)
