@@ -691,3 +691,25 @@ def test_the_loop_keeps_what_passes_undoes_the_rest_and_tries_twice_at_most(tmp_
     assert log[0] == "C1: change 1" and facts["kept"] == 1                    # one commit per kept finding, nothing else
     assert facts["branch"].startswith("fleetopt/")
     assert (project / "agent.py").read_text(encoding="utf-8") == "x = 1\n"   # what was undone is gone
+
+
+def test_review_stops_when_it_saw_no_model_call(tmp_path, capsys, monkeypatch):
+    from fleetopt.optimizer import review as review_mod
+
+    project, out = tmp_path / "p", tmp_path / "out"
+    project.mkdir()
+    out.mkdir()
+    monkeypatch.setattr(runner, "code_state", lambda p: "v1")
+    monkeypatch.setattr(cli, "_captured", lambda *a: "review-1")
+    with store.connect(out / "fleetopt.db") as conn:
+        sid = _session(conn, project=str(project), label="review-1", run_cmd="cmd", code_state="v1", exit_code=0)
+        conn.execute("INSERT INTO runs (session_id, run_type, name, trace_id, outputs) VALUES (?, 'chain', 'parse', 't', 'x')", (sid,))
+
+    def never(*a, **k):
+        raise AssertionError("no reviewer is started for a run with no model call")
+
+    monkeypatch.setattr(review_mod, "run", never)
+    monkeypatch.setattr(shape, "analyze", lambda conn, ids: {"traces": 4})   # it ran: 4 requests
+    monkeypatch.setattr(shape, "render", lambda facts: "")
+    assert cli._reviewed(project, out, "cmd", 1.0) == (None, False)
+    assert "no model calls in it" in capsys.readouterr().out

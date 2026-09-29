@@ -156,6 +156,17 @@ def _reviewed(project, out, run_cmd, max_usd, fresh=False, supplied=None, design
             # describing a graph that never ran.
             print("[fleetopt] the agent never ran, so there is nothing to review.")
             return None, False
+        with store.connect(out / "fleetopt.db") as conn:
+            calls = conn.execute(f"SELECT COUNT(*) FROM runs WHERE run_type = 'llm' AND session_id IN ({marks})",
+                                 ids).fetchone()[0]
+        if not calls and not design:
+            # Observed: an agent that calls Claude through the command-line program, not
+            # through LangChain. 52 steps recorded, no model call, and a reviewer that spent
+            # five minutes looking for costs in a run that had none to show.
+            print("[fleetopt] fleetopt saw the agent run, but no model calls in it. It calls its models in a way\n"
+                  "           fleetopt cannot see (not through LangChain), so there is nothing to review for cost.\n"
+                  "           Nothing more was spent.")
+            return None, False
         print(f"\n--- structure, from the traces (label {label}) ---\n" + shape.render(facts))
 
         cases, _ = evals.load(pathlib.Path(supplied).resolve() if supplied else project)
