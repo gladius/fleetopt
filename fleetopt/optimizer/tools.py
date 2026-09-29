@@ -263,8 +263,15 @@ def _entry(plan):
 
 
 def started(entry):
-    """Use this entry from now on: the run command for every measurement."""
-    CTX.update(entry=entry, run_cmd=command(CTX["entry_path"], entry), job=entry.get("job") or "answer the user's request")
+    """Use this entry from now on: the run command for every measurement, and the name its
+    measurements go under. The name carries a fingerprint of how it is run, inputs included:
+    observed, a 1-input and a 4-input baseline of the same code pooled into one median (12.5
+    model calls). With it, a baseline is reused only when both the code and the run match."""
+    how = {k: entry.get(k) for k in ("graph", "paths", "interpreter", "env_file", "env", "config", "context", "store",
+                                     "input_template", "inputs")}
+    tag = hashlib.sha1(json.dumps(how, sort_keys=True, default=str).encode()).hexdigest()[:8]
+    CTX.update(entry=entry, run_cmd=command(CTX["entry_path"], entry), job=entry.get("job") or "answer the user's request",
+               tag=tag, base=f"baseline-{tag}", kept_label=f"baseline-{tag}")
 
 
 @tool("start", "Start the agent on one input with this entry, under fleetopt's probe, and say what happened: "
@@ -310,16 +317,16 @@ async def start(args):
 # --- the run: git, measurement and the gate -----------------------------------------------
 
 def begin(project, out, *, entry_file, entry=None, cases=(), inputs=(), inputs_from=None, look_only=False,
-          team_usd=TEAM_USD, minutes=MAX_MINUTES, first_session=0, reuse_baseline=False):
+          team_usd=TEAM_USD, minutes=MAX_MINUTES, first_session=0):
     """Everything the tools share for one run, from the code as it stands."""
     CTX.clear()
     CTX.update(project=pathlib.Path(project).resolve(), out=pathlib.Path(out).resolve(), events=[], entry_path=entry_file,
                eval_cases=list(cases) or None, inputs=list(inputs), inputs_from=inputs_from, look_only=look_only,
                max_team_usd=team_usd, max_minutes=minutes, deadline=time.time() + 60 * minutes,
                first_session=first_session, said_at=time.time(), tries=0, run_cmd=None, job="answer the user's request",
-               baseline=None, reuse_baseline=reuse_baseline, saved=[], measured=None, results={}, changes={}, n=0)
+               baseline=None, saved=[], measured=None, results={}, changes={}, n=0)
     CTX.update(start_sha=_git("rev-parse", "HEAD"), start_state=runner.code_state(CTX["project"]))
-    CTX.update(kept_sha=CTX["start_sha"], kept_label="baseline", start_untracked=_untracked())
+    CTX.update(kept_sha=CTX["start_sha"], start_untracked=_untracked())
     CTX["untracked"] = set(CTX["start_untracked"])
     if entry:
         started(entry)
@@ -388,11 +395,11 @@ def _compare(before, after):
 
 
 async def _judge(label):
-    base, cand = _ids("baseline"), _ids(label)
+    base, cand = _ids(CTX["base"]), _ids(label)
     with _conn() as conn:
         passed, results, correctness = await judge_mod.judge_sessions(conn, CTX["job"], base[0], cand[0],
                                                                       CTX.get("eval_cases"))
-    _record("judge", baseline="baseline", candidate=label, passed=passed, equivalence=results,
+    _record("judge", baseline=CTX["base"], candidate=label, passed=passed, equivalence=results,
             correctness=correctness, baseline_state=_state(base), candidate_state=_state(cand))
     return passed, results
 
@@ -420,13 +427,13 @@ def _mark(outcome, detail):
 
 
 async def _baseline():
-    ids = _ids("baseline")
-    if CTX["reuse_baseline"] and len(ids) >= RUNS and _state(ids) == CTX["start_state"]:
+    ids = _ids(CTX["base"])
+    if len(ids) >= RUNS and _state(ids) == CTX["start_state"]:
         say("  measuring it as it is: measured before on this same code, not run again")
-        stats = _stats("baseline")
+        stats = _stats(CTX["base"])
     else:
         say(f"  measuring it as it is ({RUNS} runs)")
-        stats, why = await asyncio.to_thread(_measure, "baseline")
+        stats, why = await asyncio.to_thread(_measure, CTX["base"])
         if stats is None:
             CTX["baseline_failed"] = why.splitlines()[0]
             say(f"  could not measure it: {CTX['baseline_failed'][:160]}")
@@ -464,7 +471,7 @@ async def measure(args):
     if CTX["measured"]:
         return _ok("This code was measured already: keep or undo it, or save another change and measure again.")
     CTX["n"] += 1
-    label, names = f"change-{CTX['n']}", " + ".join(CTX["saved"])
+    label, names = f"change-{CTX['n']}-{CTX['tag']}", " + ".join(CTX["saved"])
     say(f"  measuring: {names}")
     stats, why = await asyncio.to_thread(_measure, label, CTX["max_steps"], True)
     CTX["untracked"] = _untracked()
@@ -480,7 +487,7 @@ async def measure(args):
     say(f"  measured: {line}")
     notes = ["Something got better past the noise: keep judges the answers and keeps it if they hold." if gain(result)
              else "Nothing got better past the noise, so keep will refuse it."]
-    if _shape(label) != _shape("baseline"):
+    if _shape(label) != _shape(CTX["base"]):
         notes.append("It changes the graph's nodes or edges, so keep will refuse it.")
     return _ok(f"{names}, medians of {RUNS} runs of {_requests()}: {brief(stats)}.\nAgainst the code as last kept: {line}\n\n"
                f"{measure_mod.render(result)}\n\n" + " ".join(notes))
@@ -528,7 +535,7 @@ async def keep(args):
     result = CTX["results"][label]
     if not gain(result):
         return _refuse("nothing got better past the noise")
-    if _shape(label) != _shape("baseline"):
+    if _shape(label) != _shape(CTX["base"]):
         return _refuse("it changes the graph's nodes or edges, which is a design change")
     written = _answers_written()
     if written:

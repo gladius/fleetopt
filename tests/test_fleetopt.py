@@ -397,7 +397,7 @@ def _fake_runs(monkeypatch, failing=(), flat=(), wrong=(), reshaped=()):
     monkeypatch.setattr(tools, "_compare", lambda before, after: {"cost_usd": {
         "before": 0.0125, "after": 0.01, "delta_pct": -20.0, "verdict": "within noise" if last() in flat else "improved"}})
     monkeypatch.setattr(tools, "_judge", judge)
-    monkeypatch.setattr(tools, "_shape", lambda label: ["changed"] if label != "baseline" and last() in reshaped
+    monkeypatch.setattr(tools, "_shape", lambda label: ["changed"] if not label.startswith("baseline") and last() in reshaped
                         else ["same"])
     return seen
 
@@ -454,7 +454,7 @@ def test_the_tools_keep_what_earns_it_and_undo_the_rest(tmp_path, monkeypatch):
                            "hardcode the answer": "undone"}
         assert "150 steps" in tools.CTX["changes"]["loop forever"][1]
         assert seen["judged"] == ["bound the output", "smaller model"]     # nothing is judged that did not gain
-        assert seen["measured"][0] == ("baseline", None, False)
+        assert seen["measured"][0][0].startswith("baseline-") and seen["measured"][0][1:] == (None, False)
         assert all(probe and steps == 150 for _, steps, probe in seen["measured"][1:])  # changed code is watched
         assert git("log", "--format=%s").split("\n")[:3] == ["bound the output", "cache the system prompt", "base"]
         assert (project / "agent.py").read_text(encoding="utf-8") == "x = 1\n" and (project / "helper.py").exists()
@@ -474,7 +474,7 @@ def test_an_agent_whose_model_calls_cannot_be_seen_is_said_so_and_nothing_more_i
     tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", entry={**ENTRY, "project": str(project)})
     try:
         assert "without LangChain" in _call("measure")
-        assert "Refused" in _call("measure") and runs == ["baseline"]
+        assert "Refused" in _call("measure") and len(runs) == 1 and runs[0].startswith("baseline-")
     finally:
         tools.CTX.clear()
 
@@ -607,3 +607,20 @@ def test_a_saved_start_with_too_few_inputs_is_worked_out_again(tmp_path, monkeyp
     finally:
         tools.CTX.clear()
     assert "How to start it is not known yet" in seen["prompt"]
+
+
+def test_runs_of_the_same_code_on_other_inputs_are_never_pooled(tmp_path):
+    tools.CTX.clear()
+    tools.CTX["entry_path"] = tmp_path / "e.json"
+    try:
+        four = {**ENTRY, "inputs": ["a", "b", "c", "d"]}
+        tools.started(four)
+        base = tools.CTX["base"]
+        tools.started({**four, "inputs": ["a"]})
+        assert tools.CTX["base"] != base                                   # observed: 1 and 4 inputs, one median
+        tools.started({**four, "config": {"tenant_id": "t2"}})
+        assert tools.CTX["base"] != base                                   # nor another setting
+        tools.started({**four, "proven": "later", "job": "reworded"})
+        assert tools.CTX["base"] == base and tools.CTX["kept_label"] == base  # the same run: reused, not rerun
+    finally:
+        tools.CTX.clear()

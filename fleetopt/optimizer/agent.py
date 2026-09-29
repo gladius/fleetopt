@@ -267,19 +267,17 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     run_dir = out / "runs" / f"{began:%Y%m%d-%H%M%S}-{project.name}"
     cases, inputs, inputs_from = tools.team_inputs(project, evals)
     path = tools.entry_path(out, project, graph or "agent")
-    entry, reuse = _saved_entry(path), False
+    entry = _saved_entry(path)
     if entry and not inputs and len(entry["inputs"]) < tools.MIN_INPUTS:
         entry = None  # observed: an entry from before the rule, 1 input: too few to see past the noise
     if entry and inputs and entry["inputs"] != inputs:  # the same agent, asked the team's cases now
         entry.update(inputs=inputs, inputs_from=inputs_from)
         path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
-    elif entry:
-        reuse = True
     team = float(os.environ.get("FLEETOPT_TEAM_USD") or tools.TEAM_USD)
     minutes = float(os.environ.get("FLEETOPT_MAX_MINUTES") or tools.MAX_MINUTES)
     first = _newest(out)
     tools.begin(project, out, entry_file=path, entry=entry, cases=cases, inputs=inputs, inputs_from=inputs_from,
-                look_only=look_only, team_usd=team, minutes=minutes, first_session=first, reuse_baseline=reuse)
+                look_only=look_only, team_usd=team, minutes=minutes, first_session=first)
     ctx = tools.CTX
     start_branch = _git(project, "rev-parse", "--abbrev-ref", "HEAD")
     branch = None if look_only else f"fleetopt/{began:%Y%m%d-%H%M%S}"
@@ -337,7 +335,7 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
 
     kept = int(tools._git("rev-list", "--count", f"{ctx['start_sha']}..HEAD") or 0) if branch else 0
     final_state = runner.code_state(project)
-    whole = tools.moved(tools._compare("baseline", ctx["kept_label"])) if kept else None
+    whole = tools.moved(tools._compare(ctx["base"], ctx["kept_label"])) if kept else None
     diff = tools._git("diff", ctx["start_sha"], "HEAD") if kept else ""
     if branch:  # the team's working copy goes back where it was; the branch holds what was kept
         tools._git("checkout", "-q", start_branch)
