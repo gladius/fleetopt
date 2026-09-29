@@ -13,15 +13,16 @@ import pytest
 
 from fleetopt import cli, config
 from fleetopt.evidence import judge, measure
-from fleetopt.optimizer import review, session, tools
+from fleetopt.optimizer import agent, tools
 from fleetopt.probe import store
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 HOOK = (ROOT / "fleetopt" / "probe" / "hooks" / "_fleetopt_hook.py").read_text(encoding="utf-8")
+GUIDE = " ".join(agent.SYSTEM.split())
 
 
 def options(**kw):
-    return session.build_options(ROOT / "fixture", **kw)
+    return agent.build_options(ROOT / "fixture", **kw)
 
 
 def _session(conn, **row):
@@ -51,25 +52,29 @@ def test_a_session_cannot_read_secrets_or_stop_to_ask():
     assert {"AskUserQuestion", "Read(**/.env)", "Read(**/*.pem)", "Read(**/*secret*)"} <= set(denied)
 
 
+def test_a_review_can_only_look():
+    o = options(look_only=True)
+    assert set(o.tools) == {"Read", "Grep", "Glob"} and o.hooks is None
+    assert set(o.allowed_tools) == {"Read", "Grep", "Glob", "mcp__fleetopt__start", "mcp__fleetopt__measure",
+                                    "mcp__fleetopt__query"}
+
+
 # --- what touches the target is enforced, not asked ----------------------------------
 
 def test_fleetopt_starts_an_agent_only_through_its_own_driver(tmp_path):
-    from fleetopt.drive import entry
-
-    command = entry.command(tmp_path / "e.json", {"interpreter": "/proj/.venv/bin/python"})
-    assert command.split()[:2] == ["/proj/.venv/bin/python", str(entry.DRIVER)]
+    command = tools.command(tmp_path / "e.json", {"interpreter": "/proj/.venv/bin/python"})
+    assert command.split()[:2] == ["/proj/.venv/bin/python", str(tools.DRIVER)]
     for gone in ("--run", "--auto"):  # nobody hands fleetopt a command, and nobody is asked to approve one
         with pytest.raises(SystemExit):
             cli._parser().parse_args(["apply", "repo", gone, "x"])
-    assert "set_run_command" not in {t.name for t in tools._TOOLS}
+    assert tools.TRIES == 4  # tries to start it, each one input on the team's key
+    assert "Never put a key, token or password in an entry" in GUIDE
 
 
 def test_the_driver_needs_nothing_but_the_projects_own_packages():
-    from fleetopt.drive import entry
-
     import ast
 
-    tree = ast.parse(entry.DRIVER.read_text(encoding="utf-8"))
+    tree = ast.parse(tools.DRIVER.read_text(encoding="utf-8"))
     # The one exception: the project's own framework, tried and done without. It is how a
     # user message is made the way the project makes one, and where a store comes from.
     optional = {id(n) for t in ast.walk(tree) if isinstance(t, ast.Try)
@@ -84,7 +89,7 @@ def test_the_driver_needs_nothing_but_the_projects_own_packages():
     assert tried == {"langchain_core", "langgraph"}
 
 
-def test_an_edit_lands_inside_the_project_on_a_new_branch_or_not_at_all(tmp_path):
+def test_an_edit_lands_inside_the_project_on_fleetopts_branch_or_not_at_all(tmp_path):
     import subprocess
 
     project = tmp_path / "repo"
@@ -94,7 +99,7 @@ def test_an_edit_lands_inside_the_project_on_a_new_branch_or_not_at_all(tmp_path
                                     check=True, capture_output=True)
     git("init", "-q", "-b", "main"); git("add", "-A"); git("commit", "-qm", "base")
     tools.CTX.clear()
-    guard = session.guard_edit(project, "main")
+    guard = agent.guard_edit(project, "main")
     ask = lambda path: asyncio.run(guard({"tool_input": {"file_path": str(path)}}, "id", None))
     denied = lambda v: v.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
 
@@ -110,21 +115,19 @@ def test_an_edit_lands_inside_the_project_on_a_new_branch_or_not_at_all(tmp_path
     assert denied(ask(project / ".git" / "config"))     # not the repository's own files
 
 
-def test_nothing_is_published():
-    guard = session.guard_bash("driver entry.json")
-    verdict = asyncio.run(guard({"tool_input": {"command": "git push origin fleetopt/change"}}, "id", None))
-    assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
-    # git is the loop's: the edit session can look, not commit, branch, undo or go round a refusal
-    for cmd in ("git checkout -b x", "git commit -am x", "git reset --hard HEAD~1", "git -C . update-index --add x",
-                "git hash-object -w f", "git stash", "git add -A"):
-        denied = asyncio.run(guard({"tool_input": {"command": cmd}}, "id", None))
-        assert denied["hookSpecificOutput"]["permissionDecision"] == "deny", cmd
+def test_nothing_is_published_and_git_is_fleetopts():
+    guard = agent.guard_bash()
+    ask = lambda cmd: asyncio.run(guard({"tool_input": {"command": cmd}}, "id", None))
+    for cmd in ("git push origin fleetopt/change", "git checkout -b x", "git commit -am x", "git reset --hard HEAD~1",
+                "git -C . update-index --add x", "git hash-object -w f", "git stash", "git add -A"):
+        assert ask(cmd)["hookSpecificOutput"]["permissionDecision"] == "deny", cmd
     for cmd in ("git status", "git diff HEAD", "git log --oneline -3", "python -m py_compile agent.py"):
-        assert asyncio.run(guard({"tool_input": {"command": cmd}}, "id", None)) == {}, cmd
+        assert ask(cmd) == {}, cmd
 
 
-def test_the_optimizers_own_spend_is_capped_by_default():
+def test_fleetopts_own_spend_is_capped_by_default():
     assert cli._parser().parse_args(["apply", "repo"]).max_usd == 5.0
+    assert cli._parser().parse_args(["review", "repo"]).max_usd == 2.0
 
 
 def test_the_probe_only_observes():
@@ -142,6 +145,43 @@ def test_the_target_never_inherits_fleetopts_own_environment(tmp_path, monkeypat
     finally:
         config._injected.discard("FLEETOPT_INVARIANT_KEY")
         monkeypatch.delenv("FLEETOPT_INVARIANT_KEY", raising=False)
+
+
+# --- the agent decides how; the tools decide what counts --------------------------------
+
+def test_the_agent_drives_and_the_limits_live_in_its_tools():
+    assert (tools.RUNS, tools.TEAM_USD, tools.STEP_FACTOR, tools.MAX_MINUTES) == (3, 2.0, 3, 120)
+    served = {n.removeprefix("mcp__fleetopt__") for n in options().allowed_tools if n.startswith("mcp__")}
+    # it measures, saves, keeps and undoes through fleetopt; nothing judges on its word
+    assert served == {"start", "measure", "query", "save_change", "keep", "undo"}
+    assert "never remove what ends a loop" in GUIDE.lower() and "when you cannot help" in GUIDE.lower()
+    assert "Never look for another way to do what was refused" in GUIDE      # a refusal is an answer
+    assert "never use anything about whoever runs this tool" in GUIDE          # nothing about the operator goes out
+    assert "The graph keeps its nodes and edges" in GUIDE                      # design is out of scope for now
+
+
+def test_token_savings_count_when_the_model_has_no_price():
+    unpriced = {"cost_usd": {"verdict": "unpriced"}, "input_tokens": {"verdict": "improved"}}
+    priced = {"cost_usd": {"verdict": "within noise"}, "input_tokens": {"verdict": "improved"}}
+    assert tools.gain(unpriced) == "input_tokens"
+    assert tools.gain(priced) is None  # a price is the truth: fewer tokens on a dearer model is not a saving
+    assert tools.gain({"cost_usd": {"verdict": "improved"}, "completed": {"verdict": "regressed"}}) is None
+
+
+def test_what_is_shown_is_for_a_person():
+    result = {"cost_usd": {"delta_pct": -14.6, "verdict": "within noise"},
+              "input_tokens": {"delta_pct": -28.4, "verdict": "improved"},
+              "wall_ms": {"delta_pct": -23.4, "verdict": "improved"},
+              "completed": {"before": 0, "after": 2, "verdict": "improved"}}
+    assert tools.moved(result) == "tokens in -28% · time -23% · requests finished 0 to 2"
+    assert tools.moved({"cost_usd": {"delta_pct": 1.0, "verdict": "within noise"}}) == "no real change"
+    facts = {"mode": "apply", "measured": True, "kept": 1, "branch": "fleetopt/x", "whole": "cost -24%",
+             "changes": [{"name": "cache the system prompt", "outcome": "kept", "detail": "cost -24%"}],
+             "cases": 0, "verdict": "PROVEN ON THIS EVIDENCE: ...", "team_cost": 0.31, "team_runs": 16,
+             "own_cost": 0.77, "project": "/p", "run_dir": "/r"}
+    text = "\n".join(agent.summary(facts))
+    assert "1 change(s) kept on branch fleetopt/x: cost -24%" in text and "cache the system prompt  kept" in text
+    assert "$0.31 on the team's key (16 runs)" in text and "C1" not in text and "label" not in text
 
 
 # --- a number is only a claim when it has earned it ------------------------------------
@@ -189,84 +229,6 @@ def test_the_judge_fails_closed(monkeypatch):
     assert asyncio.run(judge.judge_expected("task", "in", "expected", "out"))["pass"] is False
 
 
-# --- the review looks, and a structural change waits for the team's cases --------------
-
-def test_the_reviewer_can_only_look():
-    assert not {"Bash", "Edit", "Write", "Skill"} & set(review.READ_ONLY)
-    served = {t.name for t in tools._TOOLS if f"mcp__fleetopt__{t.name}" in review.READ_ONLY}
-    assert served == {"graph_shape", "graph_topology", "query_traces"}
-
-
-def test_the_reviewer_gets_no_network_only_local_references():
-    assert "create_agent" in review.REFERENCES and "Checked 20" in review.REFERENCES
-    assert "WebFetch" not in review.READ_ONLY and "WebSearch" not in review.READ_ONLY
-
-
-def test_a_design_change_is_the_teams_cases_to_prove():
-    # the gate itself is exercised in test_fleetopt: a change to the structure is refused in
-    # a cost-only run, and kept under --design only on the team's cases
-    assert "what must survive" in review.GUIDE and "only when eval cases are loaded" in " ".join(review.GUIDE.split())
-    marker = "Before recommending a redesign"  # the design guide goes to apply only under --design
-    assert marker not in options().system_prompt and marker in options(design=True).system_prompt
-
-
-def test_starting_an_agent_is_read_and_tried_and_only_a_trial_proves_it():
-    from fleetopt.drive import entry, start
-
-    for gone in ("preflight", "refused", "starts_but_fails", "prove", "scanned", "choose", "other_provider"):
-        assert not hasattr(entry, gone), gone        # the rules that each came from one agent
-    o = start.options(ROOT / "fixture")
-    assert set(o.tools) == {"Read", "Grep", "Glob"}  # no shell, no writing: it runs the agent only by trying it
-    assert set(o.allowed_tools) == {"Read", "Grep", "Glob", "mcp__fleetopt__try_start"}
-    assert start.TRIALS == 4
-    skill = " ".join(start.SKILL.split())
-    assert "List each missing thing in `missing`" in skill and "`started` counts only if a trial said so" in skill
-    assert "Never put a key, token or password anywhere" in skill
-
-
-def test_nothing_about_the_operator_goes_into_what_is_sent_to_the_agent():
-    # Observed 2026-09-28: inputs written for an agent opened with the operator's first
-    # name, and the same name was set as the agent's user id.
-    from fleetopt.drive import start
-
-    assert "never use anything about whoever runs this tool" in " ".join(start.SKILL.split())
-
-
-def test_a_refusal_is_an_answer_not_an_obstacle():
-    # Observed 2026-09-28: edits were refused, and the session spent 50 turns getting the
-    # same change in through sed, a glob and git plumbing. It succeeded. That is the fault.
-    prompt = " ".join(options().system_prompt.split())
-    assert "never look for another way to make the same change" in prompt
-
-
-def test_design_is_reviewed_only_when_asked_for():
-    cost_only, both = review.system(), review.system(design=True)
-    assert "# Part two: design" not in cost_only and "## Design" not in cost_only
-    assert "# Part two: design" in both and "tier: <one | two>" in both
-    assert "a cost change that alters the graph cannot be kept" in " ".join(cost_only.split())
-    args = cli._parser().parse_args(["apply", "repo"])
-    assert args.design is False and cli._parser().parse_args(["review", "repo", "--design"]).design is True
-
-
-def test_the_agent_drives_and_the_limits_live_in_its_tools():
-    assert (tools.RUNS, tools.ATTEMPTS, tools.TEAM_USD, tools.STEP_FACTOR) == (3, 2, 2.0, 3)
-    served = {n.removeprefix("mcp__fleetopt__") for n in options().allowed_tools if n.startswith("mcp__")}
-    # it measures, keeps and undoes through fleetopt; there is no tool that judges on its say-so
-    assert served == {"measure", "keep", "undo", "query_traces", "graph_topology", "graph_shape"}
-    guide = " ".join(session.SKILL.split()).lower()
-    assert "never remove what ends a loop" in guide and "when you cannot help" in guide
-    assert "review_architecture" not in {t.name for t in tools._TOOLS}  # whoever patches does not also review
-
-
-def test_the_reviewer_covers_cost_and_design_and_measures_nothing():
-    both = review.system(design=True)
-    assert "# Part one: cost" in both and "# Part two: design" in both
-    assert "minimum prefix" in both.lower() and "minimum prefix" in session.SKILL.lower()  # both read the mechanics
-    rules = " ".join(review.system().split())
-    assert "never a measured saving" in rules
-    assert "never hold a finding back" in rules  # caution goes on the risk line, not in a veto
-
-
 # --- the verdict belongs to the measurements, not to the agent that wants it --------------
 
 def _judged(candidate, passed, base_state="v1", cand_state="v2", before=4, after=4):
@@ -280,28 +242,28 @@ def test_a_failed_gate_cannot_be_argued_away():
     events = [_judged("patched", False, after=3),
               _judged("patched-again", True),                                       # one pass does not erase a failure
               _judged("baseline-retest", False, base_state="v2", cand_state="v2")]  # same code: not a before/after
-    text = session.verdict(events)
+    text = agent.verdict(events)
     assert text.startswith("NOT PROVEN SAFE") and "4/4 before and 3/4 after" in text
     assert "patched-again" in text and "baseline-retest" not in text
 
 
 def test_nothing_is_proven_without_a_judged_change():
-    assert session.verdict([]).startswith("NOTHING PROVEN")
-    assert session.verdict([_judged("again", True, cand_state="v1")]).startswith("NOTHING PROVEN")
-    assert session.verdict([_judged("patched", True)]).startswith("PROVEN ON THIS EVIDENCE")
+    assert agent.verdict([]).startswith("NOTHING PROVEN")
+    assert agent.verdict([_judged("again", True, cand_state="v1")]).startswith("NOTHING PROVEN")
+    assert agent.verdict([_judged("patched", True)]).startswith("PROVEN ON THIS EVIDENCE")
 
 
 def test_the_verdict_is_about_the_code_left_on_the_branch():
     events = [_judged("C1", True, cand_state="v2"), _judged("C2", False, cand_state="v3", after=2)]
     # C2 failed and was undone: the branch holds v2, and v2 passed
-    assert session.verdict(events, final="v2", start="v1").startswith("PROVEN ON THIS EVIDENCE")
+    assert agent.verdict(events, final="v2", start="v1").startswith("PROVEN ON THIS EVIDENCE")
     # the same events with the failed change still on the branch
-    assert session.verdict(events, final="v3", start="v1").startswith("NOT PROVEN SAFE")
+    assert agent.verdict(events, final="v3", start="v1").startswith("NOT PROVEN SAFE")
     # code nobody judged is not proven by its neighbours
-    text = session.verdict(events, final="v4", start="v1")
+    text = agent.verdict(events, final="v4", start="v1")
     assert text.startswith("NOT PROVEN") and "never judged" in text and "v4" in text
     # everything undone
-    assert session.verdict(events, final="v1", start="v1").startswith("NOTHING LEFT STANDING")
+    assert agent.verdict(events, final="v1", start="v1").startswith("NOTHING LEFT STANDING")
 
 
 def test_a_run_of_the_agent_that_does_not_end_is_stopped_with_what_it_started(tmp_path):
@@ -338,15 +300,3 @@ def test_the_teams_money_and_the_clock_both_end_a_run(tmp_path, monkeypatch, cap
     assert "time limit for a run is reached: 120 minutes" in tools.over()
 
     tools.CTX.clear()
-
-
-def test_what_is_shown_is_for_a_person():
-    assert measure.plain("baseline") == measure.plain("baseline-clean") == "the agent as it is"
-    assert measure.plain("review-20260928-173438") == "a first look" and measure.plain("D1-n5") == "D1-n5"
-    line = tools.compared("D1", {
-        "cost_usd": {"delta_pct": -14.6, "verdict": "within noise"},
-        "wall_ms": {"delta_pct": -23.4, "verdict": "improved"},
-        "llm_calls": {"delta_pct": None, "verdict": "unpriced"},
-        "completed": {"before": 0, "after": 2, "verdict": "improved"}})
-    assert line == ("[fleetopt] D1 against the original: cost -15% (no real change), time -23% (better), "
-                    "requests finished per run 0 to 2 (better)")

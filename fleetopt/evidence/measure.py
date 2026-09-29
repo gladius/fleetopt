@@ -17,15 +17,6 @@ from fleetopt.probe import runner, store
 RUN_MINUTES = 15  # one run of the agent, all its inputs; FLEETOPT_RUN_MINUTES overrides
 
 
-def plain(label):
-    """A label as somebody outside fleetopt would say it."""
-    if label.startswith("review-"):
-        return "a first look"
-    if label.startswith("baseline"):
-        return "the agent as it is"
-    return label
-
-
 def spent(out_dir, project, after=0):
     """(runs of the agent, what they cost on the team's key) since capture `after`.
     The cost is None when a model it used has no price here."""
@@ -82,7 +73,7 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True, say=print, max_st
         ended = ("stopped, it had not ended" if code == runner.TIMED_OUT else
                  "stopped, far more steps than the original" if code == runner.RAN_AWAY else
                  "done" if code == 0 and n_runs else "failed")
-        say(f"[fleetopt] {plain(label)}: run {i + 1} of {n} {ended}")
+        say(f"    run {i + 1} of {n}: {ended}")
         # A run that crashed produced a truncated trace. Averaging it in drags the
         # median toward "cheaper" for the worst possible reason - the work didn't
         # happen. Refuse the whole measurement rather than quietly discount it.

@@ -1,29 +1,31 @@
-"""The tools the sessions work with, and the limits inside them.
+"""The agent's tools, and the limits inside them.
 
-The agent decides what to look at, what to change, what to try next and when to stop.
-It does not decide what the numbers are or whether a change is kept, and it cannot go
-past a limit: those are here, the same for every agent. Measuring, keeping and undoing
-are code because what they establish is a claim handed to another team, and a claim has
-to be reproducible. Git is theirs alone, so a session cannot fake a baseline (observed:
-a session ran `git checkout` to measure "the original" and measured its own change).
+The agent decides how to start the project's agent, what to change, what to bundle, what
+to try next and when to stop. It does not decide what the numbers are or whether a change
+is kept, and it cannot go past a limit: those are here, the same for every agent. Git is
+fleetopt's alone, so a session cannot fake a baseline.
 
-The limits, each learned on a real agent:
-- a changed agent runs once before it runs three times, and a run that takes far more
-  steps than the original is stopped (observed: a fix removed the crash that was the
-  only thing ending a loop; the next run went 170 rounds on the team's key);
-- the team's key, the clock and fleetopt's own spend each end a run;
-- a finding gets two measured attempts (observed: four attempts at one fix);
-- the agent as it is is measured once, and edits wait for it (observed: the original
-  measured again for no reason);
-- a change is kept only if something got better past the noise and the judge passed
-  it; a change to the graph's structure only under --design and on the team's cases;
-  never one that writes the team's expected answers into the code.
+Limits, each learned on a real agent:
+- start: 4 tries, one input each on the team's key; "started" only when a try shows
+  requests ran and a model answered, never on the session's word;
+- measure: changed code runs once before three times, and a run that takes 3x the
+  original's steps is stopped (a fix once removed the only exit from a loop: 170 rounds);
+- the team's key, the clock and fleetopt's own spend each end the run;
+- keep: better past the noise, the judge passes every request, the graph keeps its nodes
+  and edges, and no answer from the team's eval cases is written into the code.
 """
 
 import asyncio
 import datetime
+import hashlib
+import json
+import os
 import pathlib
+import re
+import shlex
+import shutil
 import subprocess
+import sys
 import time
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
@@ -31,20 +33,21 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 from fleetopt.evidence import evals as evals_mod
 from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
-from fleetopt.evidence import shape as shape_mod
 from fleetopt.probe import runner, store
 
 RUNS = 3           # runs of the agent per measurement
-ATTEMPTS = 2       # measured versions per finding
+TRIES = 4          # tries to start the agent, one input each
+MAX_INPUTS = 4
 STEP_FACTOR = 3    # a changed agent may take this many times the original's steps per run
 BROKEN_FACTOR = 6  # ... or this many, when the original finished nothing and so stopped early
 MIN_STEPS = 150
 TEAM_USD = 2.0     # cap on the team's key; FLEETOPT_TEAM_USD overrides
 MAX_MINUTES = 120  # the whole run; FLEETOPT_MAX_MINUTES overrides
-GAINS = ("cost_usd", "wall_ms", "completed", "cost_per_completed")
+DRIVER = pathlib.Path(runner.__file__).with_name("driver.py")
+SECRET = re.compile(r"key|token|secret|password|credential", re.I)
+KEYISH = re.compile(r"^[A-Z][A-Z0-9_]*(?:API_KEY|AUTH_TOKEN)$")
 
-# Set by start() before the apply session, by cli.py before the reviewer.
-CTX = {}
+CTX = {}  # set by begin() for one run
 
 
 def _ok(text):
@@ -52,33 +55,53 @@ def _ok(text):
 
 
 def say(line):
-    """A line for whoever is watching the run. What the tools established, in words a
-    person outside fleetopt reads; the names of tools and what a session thinks aloud
-    go to the log."""
+    """A line for whoever is watching: what the tools established, in plain words."""
     CTX["said_at"] = time.time()
     print(line, flush=True)
 
 
+# --- numbers in words ---------------------------------------------------------------------
+
 WORDS = {"improved": "better", "regressed": "worse", "within noise": "no real change",
          "baseline finished nothing": "the original finished nothing"}
-SHOWN = (("cost_usd", "cost"), ("wall_ms", "time"), ("llm_calls", "model calls"))
+SHOWN = (("cost_usd", "cost"), ("input_tokens", "tokens in"), ("output_tokens", "tokens out"),
+         ("llm_calls", "model calls"), ("wall_ms", "time"))
 
 
-def compared(name, result):
-    """One line for a comparison: what moved, and whether it is past the noise."""
-    parts = [f"{word} {v['delta_pct']:+.0f}% ({WORDS.get(v['verdict'], v['verdict'])})"
-             for key, word in SHOWN if (v := result.get(key)) and v.get("delta_pct") is not None]
+def moved(result):
+    """What changed past the noise, in words: 'cost -24% · tokens in -28%', or 'no real change'."""
+    parts = [f"{word} {v['delta_pct']:+.0f}%" for key, word in SHOWN
+             if (v := result.get(key)) and v.get("delta_pct") is not None and v["verdict"] in ("improved", "regressed")]
     done = result.get("completed") or {}
     if done.get("before") is not None and done.get("after") is not None and done["before"] != done["after"]:
-        parts.append(f"requests finished per run {done['before']:g} to {done['after']:g} "
-                     f"({WORDS.get(done['verdict'], done['verdict'])})")
-    return f"[fleetopt] {name} against the original: " + (", ".join(parts) or "nothing could be compared")
+        parts.append(f"requests finished {done['before']:g} to {done['after']:g}")
+    return " · ".join(parts) or "no real change"
 
+
+def brief(stats):
+    cost = "cost not priced" if stats.get("cost_usd") is None else f"${stats['cost_usd']:.4f} a run"
+    return (f"{cost} · {stats.get('input_tokens') or 0:,.0f} tokens in · {stats.get('output_tokens') or 0:,.0f} out · "
+            f"{stats.get('llm_calls') or 0:g} model calls · {(stats.get('wall_ms') or 0) / 1000:.1f} s")
+
+
+GAINS = ("cost_usd", "wall_ms", "completed", "cost_per_completed")
+
+
+def gain(result):
+    """What got better past the noise, or None; nothing may finish less often. Tokens count
+    when the model has no price, since cost cannot show them then."""
+    if (result.get("completed") or {}).get("verdict") == "regressed":
+        return None
+    keys = GAINS + (("input_tokens", "output_tokens") if (result.get("cost_usd") or {}).get("verdict") == "unpriced"
+                    else ())
+    return next((k for k in keys if (result.get(k) or {}).get("verdict") in ("improved", "baseline finished nothing")),
+                None)
+
+
+# --- limits and records -------------------------------------------------------------------
 
 def over():
-    """Why no further run of the agent may start, or None. The session's own spend and
-    turns are capped by the SDK; these two are what it could otherwise spend without
-    end: the team's money, and time."""
+    """Why no further run of the agent may start, or None."""
     limit = CTX.get("max_team_usd")
     if limit is not None:
         runs, cost = measure_mod.spent(CTX["out"], CTX["project"], CTX.get("first_session", 0))
@@ -90,59 +113,204 @@ def over():
 
 
 def _record(event, **data):
-    """One line in the run record (session.py writes run.json): what a tool
-    established, never the target's prompts or outputs."""
+    """One line in run.json: what a tool established, never the target's prompts or outputs."""
     CTX.setdefault("events", []).append(
         {"t": datetime.datetime.now().isoformat(timespec="seconds"), "event": event, **data})
-
-
-def _state(ids):
-    """The code fingerprint the sessions ran against."""
-    if not ids:
-        return None
-    with _conn() as conn:
-        return conn.execute("SELECT code_state FROM sessions WHERE id = ?", (ids[0],)).fetchone()["code_state"]
 
 
 def _conn():
     return store.connect(CTX["out"] / "fleetopt.db")
 
 
-def _ids(label):
-    """Sessions under a label, for THIS project, that actually completed, at the code
-    state of the newest measurement under that label.
+def _state(ids):
+    if not ids:
+        return None
+    with _conn() as conn:
+        return conn.execute("SELECT code_state FROM sessions WHERE id = ?", (ids[0],)).fetchone()["code_state"]
 
-    Three filters, each learned the expensive way. exit_code: a crashed run leaves a
-    truncated trace that must not reach a median. project: the db is shared, and a
-    'baseline' from another repo must never be pooled. code_state: labels get reused
-    across days, and a 'baseline' measured on last week's source is not this baseline."""
-    # A review reads crashed runs too: the crash is its first finding. Nothing that
-    # feeds a median ever sets this.
-    ok = "" if CTX.get("include_failed") else " AND exit_code = 0"
+
+def _ids(label):
+    """Sessions under a label, for THIS project, that completed, at the code state of the
+    newest measurement under that label: a crashed run must not reach a median, the db is
+    shared between projects, and labels are reused across days."""
     with _conn() as conn:
         return [r["id"] for r in conn.execute(
-            f"SELECT id FROM sessions WHERE label = ?{ok} AND project = ?"
-            "   AND code_state IS (SELECT code_state FROM sessions"
-            f"                       WHERE label = ?{ok} AND project = ?"
+            "SELECT id FROM sessions WHERE label = ? AND exit_code = 0 AND project = ?"
+            "   AND code_state IS (SELECT code_state FROM sessions WHERE label = ? AND exit_code = 0 AND project = ?"
             "                       ORDER BY id DESC LIMIT 1)",
-            (label, str(CTX["project"]), label, str(CTX["project"])),
-        )]
+            (label, str(CTX["project"]), label, str(CTX["project"])))]
 
 
-# --- the apply run: git, measurement and the gate, all in code --------------------------
+# --- how the project's agent is started ---------------------------------------------------
 
-def start(project, out, run_cmd, *, findings, task, cases=None, only=False, design=False, team_usd=TEAM_USD,
-          minutes=MAX_MINUTES, first_session=0, run_dir=None):
-    """Everything the apply tools share for one run, from the code as it stands."""
+def interpreter(project):
+    """The project's own environment; fleetopt's only when it has none."""
+    for rel in (".venv/bin/python", "venv/bin/python", ".venv/Scripts/python.exe", "venv/Scripts/python.exe"):
+        if (project / rel).exists():
+            return str(project / rel)
+    return sys.executable
+
+
+def entry_path(out, project, name="agent"):
+    key = hashlib.sha1(str(project).encode()).hexdigest()[:8]
+    return pathlib.Path(out) / "entries" / f"{project.name}-{key}-{re.sub(r'[^A-Za-z0-9_.-]+', '-', name)}.json"
+
+
+def command(path, entry, limit=None):
+    parts = [entry["interpreter"], str(DRIVER), str(path)] + (["--limit", str(limit)] if limit else [])
+    return subprocess.list2cmdline(parts) if sys.platform == "win32" else shlex.join(parts)
+
+
+def spread(texts, n=MAX_INPUTS):
+    """n of them, taken evenly across the list, so they differ in kind."""
+    texts = list(dict.fromkeys(texts))
+    return texts if len(texts) <= n else [texts[i * len(texts) // n] for i in range(n)]
+
+
+def team_inputs(project, supplied=None):
+    """(cases, inputs, where from): the team's eval cases, supplied or found in the project.
+    Their inputs are what the agent is run on, so every request can be judged on its case."""
+    cases, _ = evals_mod.load(pathlib.Path(supplied).resolve() if supplied else project)
+    if not cases:
+        if supplied:
+            raise ValueError(f"no eval cases could be read from {supplied}: a case is an input and its expected answer")
+        return [], [], None
+    by_source = {}
+    for case in cases:
+        by_source.setdefault(case["source"], []).append(case["input"])
+    source, texts = max(by_source.items(), key=lambda kv: len(kv[1]))
+    return cases, spread(texts), pathlib.Path(source).name
+
+
+def key_names(project):
+    """Names of the provider keys set in the environment or the project's .env. Names
+    only: a value is never read into fleetopt."""
+    names = {k for k in os.environ if KEYISH.match(k)}
+    env = project / ".env"
+    if env.exists():
+        for line in env.read_text(encoding="utf-8", errors="replace").splitlines():
+            name, _, value = line.strip().removeprefix("export ").partition("=")
+            if KEYISH.match(name.strip()) and value.strip():
+                names.add(name.strip())
+    return sorted(names)
+
+
+def trial(path, entry, timeout=600):
+    """One input, for real, under the probe: what the agent did, and its last lines."""
+    raw, traces, _, code = runner.execute(entry["project"], command(path, entry, limit=1), CTX["out"], timeout=timeout)
+    runs = []
+    if traces.exists():
+        for line in traces.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                runs.append(json.loads(line))
+            except ValueError:
+                pass
+    log = raw / "target.log"
+    tail = "\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-30:]) if log.exists() else ""
+    shutil.rmtree(raw, ignore_errors=True)
+    roots = [r for r in runs if not r.get("parent_run_id")]
+    failed = [r["error"] for r in roots if r.get("error") and not r["error"].startswith("GraphInterrupt")]
+    return {"exit": code, "requests": len(roots), "finished": len(roots) - len(failed),
+            "model_calls": sum(r.get("run_type") == "llm" for r in runs),
+            "answered": sum(r.get("run_type") == "llm" and not r.get("error") for r in runs),
+            "error": (failed[0].splitlines() or [""])[0][:300] if failed else None, "tail": tail}
+
+
+def _entry(plan):
+    """The entry the session proposed, checked where code can check it."""
+    project = CTX["project"]
+    if not isinstance(plan, dict):
+        raise ValueError("the entry must be a JSON object")
+    graph = plan.get("graph")
+    if not isinstance(graph, str) or ":" not in graph:
+        raise ValueError(f"no graph named as file.py:name or module:name (got {graph!r})")
+    graph = graph.removeprefix("./")
+    if graph.split(":")[0].endswith(".py") and not (project / graph.split(":")[0]).exists():
+        raise ValueError(f"the graph names {graph.split(':')[0]}, which is not in the project")
+    python = interpreter(project)
+    if plan.get("interpreter"):
+        named = (project / plan["interpreter"]).resolve()
+        if not named.is_relative_to(project) or not named.exists():
+            raise ValueError(f"the interpreter must be one inside the project; {plan['interpreter']} is not")
+        python = str(named)
+    template = plan.get("input_template")
+    if isinstance(template, str):  # observed: the template sent as JSON text, and the graph got a string
+        try:
+            template = json.loads(template)
+        except ValueError:
+            pass
+    inputs = CTX["inputs"] or [t for t in plan.get("inputs") or [] if isinstance(t, str) and t.strip()]
+    if not inputs:
+        raise ValueError("no inputs: give the ones the agent's users would send")
+    env = {k: str(v) for k, v in (plan.get("env") or {}).items() if not SECRET.search(k)}
+    return {"project": str(project), "name": plan.get("agent") or "agent", "job": str(plan.get("job") or "")[:300],
+            "graph": graph, "paths": [str(p) for p in plan.get("paths") or ["."]], "interpreter": python,
+            "env_file": plan.get("env_file"), "env": env, "config": plan.get("config") or {},
+            "context": plan.get("context") or {}, "store": plan.get("store"), "input_template": template,
+            "inputs": spread(inputs), "inputs_from": CTX["inputs_from"] or plan.get("inputs_from") or "written by fleetopt"}
+
+
+def started(entry):
+    """Use this entry from now on: the run command for every measurement."""
+    CTX.update(entry=entry, run_cmd=command(CTX["entry_path"], entry), job=entry.get("job") or "answer the user's request")
+
+
+@tool("start", "Start the agent on one input with this entry, under fleetopt's probe, and say what happened: "
+      "requests seen and finished, model calls seen, the first error, the last lines it printed. `entry`: "
+      "the entry as a JSON object (see the guide). At most 4 tries, each on the team's key.", {"entry": str})
+async def start(args):
+    if CTX.get("run_cmd"):
+        return _ok("The agent is started already. Measure it.")
+    if CTX["tries"] >= TRIES:
+        return _ok(f"Refused: {TRIES} tries, the most a start gets. Report what stops it.")
+    try:
+        entry = _entry(json.loads(args.get("entry") or ""))
+    except ValueError as exc:  # JSONDecodeError included
+        return _ok(f"Not tried: {exc}.")
+    CTX["tries"] += 1
+    path = CTX["entry_path"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
+    result = await asyncio.to_thread(trial, path, entry)
+    ok = bool(result["exit"] == 0 and result["requests"] and result["answered"])
+    with path.with_suffix(".log").open("a", encoding="utf-8") as log:
+        log.write(f"--- try {CTX['tries']}, {datetime.datetime.now():%H:%M:%S}\n{result['tail']}\n")
+    facts = (f"exit {result['exit']}; {result['requests']} request(s) seen, {result['finished']} finished; "
+             f"{result['model_calls']} model call(s) seen; first error: {result['error'] or 'none'}")
+    if ok:
+        entry["proven"] = datetime.datetime.now().isoformat(timespec="seconds")
+        entry["broken"] = None if result["finished"] else result["error"]
+        path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
+        started(entry)
+        say(f"  started: {entry['name']} ({entry['graph'].rsplit('/', 1)[-1]}), {len(entry['inputs'])} test inputs "
+            f"from {entry['inputs_from']}" + (f" (try {CTX['tries']})" if CTX["tries"] > 1 else ""))
+        verdict = "It started. Now measure it." + ("" if result["finished"] else
+                                                   " No request finished: it is measured and reviewed as broken.")
+    elif result["requests"] and not result["model_calls"]:
+        say(f"  try {CTX['tries']}: it ran, and no model call was seen")
+        verdict = "It ran, and fleetopt saw no model call: find out how it calls its model."
+    else:
+        say(f"  try {CTX['tries']}: did not start ({(result['error'] or 'see its output')[:100]})")
+        verdict = "It did not start."
+    return _ok(f"{verdict}\n{facts}\n\nLast lines it printed:\n{result['tail']}\n\n{TRIES - CTX['tries']} try(s) left.")
+
+
+# --- the run: git, measurement and the gate -----------------------------------------------
+
+def begin(project, out, *, entry_file, entry=None, cases=(), inputs=(), inputs_from=None, look_only=False,
+          team_usd=TEAM_USD, minutes=MAX_MINUTES, first_session=0, reuse_baseline=False):
+    """Everything the tools share for one run, from the code as it stands."""
     CTX.clear()
-    CTX.update(project=pathlib.Path(project).resolve(), out=pathlib.Path(out).resolve(), run_cmd=run_cmd,
-               events=[], findings=findings, task=task, eval_cases=cases or None, only=only, design=design,
+    CTX.update(project=pathlib.Path(project).resolve(), out=pathlib.Path(out).resolve(), events=[], entry_path=entry_file,
+               eval_cases=list(cases) or None, inputs=list(inputs), inputs_from=inputs_from, look_only=look_only,
                max_team_usd=team_usd, max_minutes=minutes, deadline=time.time() + 60 * minutes,
-               first_session=first_session, run_dir=run_dir, said_at=time.time(),
-               baseline=None, attempts={}, rows={}, compared={}, pending=None, measured=None)
+               first_session=first_session, said_at=time.time(), tries=0, run_cmd=None, job="answer the user's request",
+               baseline=None, reuse_baseline=reuse_baseline, saved=[], measured=None, results={}, changes={}, n=0)
     CTX.update(start_sha=_git("rev-parse", "HEAD"), start_state=runner.code_state(CTX["project"]))
     CTX.update(kept_sha=CTX["start_sha"], kept_label="baseline", start_untracked=_untracked())
     CTX["untracked"] = set(CTX["start_untracked"])
+    if entry:
+        started(entry)
 
 
 def _git(*args):
@@ -157,18 +325,8 @@ def _untracked():
 
 
 def _dirty():
-    """Edits not yet measured: changed tracked files, or files created since the last run."""
+    """Edits not yet saved: changed tracked files, or files created since the last run."""
     return bool(_git("status", "--porcelain", "--untracked-files=no")) or bool(_untracked() - CTX["untracked"])
-
-
-def _commit(message):
-    """Commit what the session changed: tracked files, and files it created. Not files
-    the agent wrote into its own repository while it ran (observed)."""
-    new = sorted(_untracked() - CTX["untracked"])
-    _git("add", "-u")
-    if new:
-        _git("add", "--", *new)
-    _git("-c", "user.name=fleetopt", "-c", "user.email=fleetopt@localhost", "commit", "-q", "-m", message)
 
 
 def _reset():
@@ -178,7 +336,7 @@ def _reset():
         target = (CTX["project"] / path).resolve()
         if not target.is_relative_to(CTX["out"]):  # fleetopt's own records, if they live in the project
             target.unlink(missing_ok=True)
-    CTX.update(pending=None, measured=None, untracked=_untracked())
+    CTX.update(saved=[], measured=None, untracked=_untracked())
 
 
 def _measure(label, max_steps=None, probe=False):
@@ -189,12 +347,16 @@ def _measure(label, max_steps=None, probe=False):
     except RuntimeError as exc:
         _record("measure_failed", label=label, error=str(exc)[:300])
         return None, str(exc).removeprefix(f"{label} ")
+    return _stats(label), None
+
+
+def _stats(label):
     ids = _ids(label)
     with _conn() as conn:
         stats, _ = measure_mod.aggregate(conn, ids)
         steps = sorted(conn.execute("SELECT COUNT(*) FROM runs WHERE session_id = ?", (i,)).fetchone()[0] for i in ids)
     _record("measure", label=label, n=len(ids), stats=stats, code_state=_state(ids))
-    return {**stats, "steps": steps[len(steps) // 2]}, None
+    return {**stats, "steps": steps[len(steps) // 2]}
 
 
 def _shape(label):
@@ -216,22 +378,15 @@ def _compare(before, after):
 async def _judge(label):
     base, cand = _ids("baseline"), _ids(label)
     with _conn() as conn:
-        passed, results, correctness = await judge_mod.judge_sessions(conn, CTX["task"], base[0], cand[0],
+        passed, results, correctness = await judge_mod.judge_sessions(conn, CTX["job"], base[0], cand[0],
                                                                       CTX.get("eval_cases"))
     _record("judge", baseline="baseline", candidate=label, passed=passed, equivalence=results,
             correctness=correctness, baseline_state=_state(base), candidate_state=_state(cand))
-    return passed, results, correctness
-
-
-def _gain(result):
-    """The first thing that got better, past the noise, and nothing finished less often."""
-    if (result.get("completed") or {}).get("verdict") == "regressed":
-        return None
-    return next((k for k in GAINS if (result.get(k) or {}).get("verdict") in ("improved", "baseline finished nothing")), None)
+    return passed, results
 
 
 def _answers_written():
-    """Expected answers from the team's cases that the pending change writes into the code.
+    """Expected answers from the team's cases written into the code since it was last kept.
     A coding agent was caught hardcoding answers for its test inputs (arXiv 2607.18064)."""
     added = " ".join(line[1:] for line in _git("diff", CTX["kept_sha"], "HEAD").splitlines()
                      if line.startswith("+") and not line.startswith("+++"))
@@ -242,251 +397,197 @@ def _answers_written():
     return [n for n in needles if len(n) >= 20 and n in text]
 
 
-def _brief(stats):
-    cost = "not priced" if stats.get("cost_usd") is None else f"${stats['cost_usd']:.4f}"
-    done = "?" if stats.get("completed") is None else f"{stats['completed']:g}"
-    return (f"cost {cost} per run, {stats.get('wall_ms') or 0:,.0f} ms, {stats.get('llm_calls') or 0:g} model calls, "
-            f"{stats.get('input_tokens') or 0:,.0f} input and {stats.get('output_tokens') or 0:,.0f} output tokens, "
-            f"{done} requests finished, {stats['steps']} steps")
-
-
-def _row(finding, outcome, detail):
-    CTX["rows"][finding] = [outcome, detail]
+def _mark(outcome, detail):
+    for name in CTX["saved"]:
+        CTX["changes"][name] = [outcome, detail]
 
 
 async def _baseline():
-    if CTX.get("baseline_failed"):
-        return _ok(f"Refused: the agent as it is could not be measured ({CTX['baseline_failed']}). Nothing can be "
-                   "proven in this run; say why in your report.")
-    if _dirty():
-        return _ok("Refused: measure the agent as it is before changing it. Undo your changes first.")
-    say("[fleetopt] measuring the agent as it is")
-    stats, why = await asyncio.to_thread(_measure, "baseline")
-    if stats is None:
-        CTX["baseline_failed"] = why.splitlines()[0]
-        return _ok(f"The agent as it is could not be measured: {why}\n\nNothing can be proven in this run. "
-                   "Say why in your report.")
+    ids = _ids("baseline")
+    if CTX["reuse_baseline"] and len(ids) >= RUNS and _state(ids) == CTX["start_state"]:
+        say("  measuring it as it is: measured before on this same code, not run again")
+        stats = _stats("baseline")
+    else:
+        say(f"  measuring it as it is ({RUNS} runs)")
+        stats, why = await asyncio.to_thread(_measure, "baseline")
+        if stats is None:
+            CTX["baseline_failed"] = why.splitlines()[0]
+            say(f"  could not measure it: {CTX['baseline_failed'][:160]}")
+            return _ok(f"The agent as it is could not be measured: {why}\n\nNothing can be proven. Say why and stop.")
+    if not stats.get("llm_calls"):
+        CTX["baseline_failed"] = "no model call was seen"
+        say("  it ran, and no model call was seen: fleetopt cannot see what it spends")
+        return _ok("It ran and no model call was recorded: it calls its model without LangChain. Find where "
+                   "(file and line), say so, and stop.")
     factor = BROKEN_FACTOR if not stats.get("completed") else STEP_FACTOR
     CTX.update(baseline=stats, max_steps=max(MIN_STEPS, factor * stats["steps"]), untracked=_untracked())
-    return _ok(f"The agent as it is, medians of {RUNS} runs: {_brief(stats)}.\nEdits are allowed now.")
+    say(f"  as it is: {brief(stats)}")
+    return _ok(f"The agent as it is, medians of {RUNS} runs: {brief(stats)}; {stats.get('completed')} requests "
+               f"finished, {stats['steps']} steps a run." + ("" if CTX["look_only"] else " Edits are allowed now."))
 
 
-@tool(
-    "measure",
-    "Run the agent 3 times as the code stands now and compare it with the code as last kept. "
-    "`finding`: the id of the finding the change is for (C1, D2, or N1 for one you found). Leave it "
-    "empty once, before any change, to measure the agent as it is. fleetopt commits the change first. "
-    "Changed code runs once before it runs three times, and a run that takes far more steps than the "
-    "original is stopped. Two measured attempts per finding.",
-    {"finding": str},
-)
+@tool("measure", "Run the agent 3 times as the code stands and compare it with the code as last kept. The first "
+      "time, before any edit, it measures the agent as it is. After that it measures what you saved with "
+      "save_change; changed code runs once before three times, and a run that takes far more steps than the "
+      "original is stopped.", {})
 async def measure(args):
-    finding = (args.get("finding") or "").strip().upper()
+    if not CTX.get("run_cmd"):
+        return _ok("Refused: start the agent first.")
+    if CTX.get("baseline_failed"):
+        return _ok(f"Refused: the agent as it is could not be measured ({CTX['baseline_failed']}). Say why and stop.")
     stop = over()
     if stop:
-        return _ok(f"Refused: {stop}. Undo what is not kept, and write your report.")
+        return _ok(f"Refused: {stop}. Undo what is not kept, and report.")
     if CTX["baseline"] is None:
         return await _baseline()
-    if not finding:
-        return _ok("The agent as it is was measured already. Name the finding the change is for.")
-    if CTX["only"] and finding not in {f["id"] for f in CTX["findings"]}:
-        return _ok(f"Refused: a person chose exactly {', '.join(f['id'] for f in CTX['findings'])}. "
-                   f"Leave {finding} for your report.")
-    pending = CTX["pending"]
-    if pending and pending != finding:
-        return _ok(f"Refused: {pending} is neither kept nor undone. Call keep or undo for it first.")
-    if not _dirty():
-        return _ok("Nothing changed since the last measurement. Make the change first.")
-    tried = CTX["attempts"].get(finding, 0)
-    if tried >= ATTEMPTS:
-        return _ok(f"Refused: {finding} has been measured {ATTEMPTS} times, the most a finding gets. Undo it and go on.")
-    CTX["attempts"][finding] = tried + 1
-    _commit(f"{finding}: trying")
-    CTX.update(pending=finding, measured=None)
-    label = finding if not tried else f"{finding}-{tried + 1}"
-    say(f"[fleetopt] {finding}: measuring the change" + (" (second attempt)" if tried else ""))
+    if _dirty():
+        return _ok("Refused: there are unsaved edits. save_change them with a plain name, or undo.")
+    if not CTX["saved"]:
+        return _ok("Nothing saved since the code was last kept, so nothing new to measure.")
+    if CTX["measured"]:
+        return _ok("This code was measured already: keep or undo it, or save another change and measure again.")
+    CTX["n"] += 1
+    label, names = f"change-{CTX['n']}", " + ".join(CTX["saved"])
+    say(f"  measuring: {names}")
     stats, why = await asyncio.to_thread(_measure, label, CTX["max_steps"], True)
     CTX["untracked"] = _untracked()
-    left = ATTEMPTS - tried - 1
     if stats is None:
-        _row(finding, "failed", why.splitlines()[0])
-        say(f"[fleetopt] {finding}: {why.splitlines()[0]}")
-        return _ok(f"The changed agent could not be measured: {why}\n\nUndo it, or fix what this points to and "
-                   f"measure again ({left} attempt(s) left).")
+        _mark("failed", why.splitlines()[0][:160])
+        say(f"  could not measure it: {why.splitlines()[0][:160]}")
+        return _ok(f"The changed agent could not be measured: {why}\n\nUndo it, or fix what this points to, save the "
+                   "fix and measure again.")
     result = _compare(CTX["kept_label"], label)
-    line = compared(finding, result).replace("against the original", "against the code before it")
-    say(line)
-    CTX["compared"][label] = result
-    CTX["measured"] = label
-    _row(finding, "measured", line.removeprefix("[fleetopt] "))
-    structural = _shape(label) != _shape("baseline")
-    notes = ["It got better past the noise: keep judges its answers and keeps it if they hold." if _gain(result)
-             else f"Nothing got better past the noise, so keep will refuse it ({left} attempt(s) left)."]
-    if structural:
-        notes.append("It changes the agent's structure (its nodes or edges)"
-                     + (": it is kept only if the team's cases cover every request and it passes them."
-                        if CTX["design"] else ": this run is cost only, so it cannot be kept."))
-    return _ok(f"{finding} ({label}), medians of {RUNS} runs: {_brief(stats)}.\n{line.removeprefix('[fleetopt] ')}\n\n"
+    CTX["results"][label], CTX["measured"] = result, label
+    line = moved(result)
+    _mark("measured", line)
+    say(f"  measured: {line}")
+    notes = ["Something got better past the noise: keep judges the answers and keeps it if they hold." if gain(result)
+             else "Nothing got better past the noise, so keep will refuse it."]
+    if _shape(label) != _shape("baseline"):
+        notes.append("It changes the graph's nodes or edges, so keep will refuse it.")
+    return _ok(f"{names}, medians of {RUNS} runs: {brief(stats)}.\nAgainst the code as last kept: {line}\n\n"
                f"{measure_mod.render(result)}\n\n" + " ".join(notes))
 
 
-def _refuse(finding, why):
-    _row(finding, "not kept", why)
-    _record("refused", finding=finding, why=why)
-    say(f"[fleetopt] {finding}: not kept, {why}")
-    left = ATTEMPTS - CTX["attempts"].get(finding, 0)
-    return _ok(f"Refused: {why}.\n\nUndo it, or fix that and measure again ({left} attempt(s) left).")
+@tool("save_change", "Save your edits as one change, its own commit, named in plain words for the team "
+      "(e.g. 'cache the system prompt'). Save several changes you are sure of, then measure them together.",
+      {"name": str})
+async def save_change(args):
+    name = " ".join((args.get("name") or "").split())[:80]
+    if not name:
+        return _ok("Refused: name the change in plain words.")
+    if CTX["baseline"] is None:
+        return _ok("Refused: measure the agent as it is first.")
+    if not _dirty():
+        return _ok("Nothing changed since the last save.")
+    new = sorted(_untracked() - CTX["untracked"])
+    _git("add", "-u")
+    if new:
+        _git("add", "--", *new)
+    _git("-c", "user.name=fleetopt", "-c", "user.email=fleetopt@localhost", "commit", "-q", "-m", name)
+    CTX["saved"].append(name)
+    CTX.update(measured=None, untracked=_untracked())
+    CTX["changes"][name] = ["saved", ""]
+    say(f"  changed: {name}")
+    return _ok(f"Saved '{name}' as its own commit. Save more, or measure.")
 
 
-@tool(
-    "keep",
-    "Keep the change for a finding on the branch, if it has earned it: something got better past the "
-    "noise, the judge finds the answers still hold, and it stays within what this run allows. Otherwise "
-    "it is refused, with the reason. `summary`: what you changed, in under 15 words.",
-    {"finding": str, "summary": str},
-)
+def _refuse(why):
+    _mark("not kept", why)
+    _record("refused", changes=list(CTX["saved"]), why=why)
+    say(f"  not kept: {why}")
+    return _ok(f"Refused: {why}.\n\nUndo it, or change what this points to, save the fix and measure again.")
+
+
+@tool("keep", "Keep what was saved and measured since the code was last kept, if it has earned it: something got "
+      "better past the noise, the judge finds the answers still hold, the graph keeps its nodes and edges. "
+      "Otherwise it is refused, with the reason.", {})
 async def keep(args):
-    finding = (args.get("finding") or "").strip().upper()
     label = CTX["measured"]
-    if CTX["pending"] != finding or label is None:
-        return _ok(f"Refused: no measured change for {finding} is waiting. Measure it first.")
+    if not CTX["saved"] or not label:
+        return _ok("Refused: nothing measured is waiting. Save and measure first.")
     if _dirty():
-        return _ok("Refused: the code changed after it was measured. Measure it again, or undo.")
-    if not _gain(CTX["compared"][label]):
-        return _refuse(finding, "nothing got better past the noise")
-    structural = _shape(label) != _shape("baseline")
-    if structural and not CTX["design"]:
-        return _refuse(finding, "it changes the agent's structure (its nodes or edges), and this run is cost only")
+        return _ok("Refused: there are edits since the measurement. Save and measure them, or undo.")
+    result = CTX["results"][label]
+    if not gain(result):
+        return _refuse("nothing got better past the noise")
+    if _shape(label) != _shape("baseline"):
+        return _refuse("it changes the graph's nodes or edges, which is a design change")
     written = _answers_written()
     if written:
-        return _refuse(finding, f"it writes an answer from the team's cases into the code ({written[0][:40]!r}...); "
-                                "a change has to earn its answers")
+        return _refuse(f"it writes an answer from the team's eval cases into the code ({written[0][:40]!r}...)")
     stop = over()
     if stop:
-        return _ok(f"Refused: {stop}. Undo what is not kept, and write your report.")
-    say(f"[fleetopt] {finding}: judging the answers")
-    passed, results, correctness = await _judge(label)
+        return _ok(f"Refused: {stop}. Undo what is not kept, and report.")
+    passed, results = await _judge(label)
     ok = sum(bool(r["kept_on"]) for r in results)
     if not passed:
         reasons = "; ".join(r["reason"][:150] for r in results if not r["kept_on"])[:600]
-        return _refuse(finding, f"the judge failed {len(results) - ok} of {len(results)} requests: {reasons}")
-    covered = correctness["matched"] if correctness else 0
-    if structural and covered < len(results):
-        return _refuse(finding, f"a change to the structure is kept only on the team's cases, and they cover "
-                                f"{covered} of {len(results)} requests")
-    # one commit per kept finding, whatever it took to get there
-    _git("reset", "-q", "--soft", CTX["kept_sha"])
-    summary = " ".join((args.get("summary") or "").split())[:100] or "a change"
-    _git("-c", "user.name=fleetopt", "-c", "user.email=fleetopt@localhost", "commit", "-q", "-m", f"{finding}: {summary}")
-    CTX.update(kept_sha=_git("rev-parse", "HEAD"), kept_label=label, pending=None, measured=None)
-    detail = CTX["rows"][finding][1].split(": ", 1)[-1] + f"; judge {ok} of {len(results)} passed"
-    _row(finding, "kept", detail)
-    _record("keep", finding=finding, label=label)
-    say(f"[fleetopt] {finding}: kept. {detail}")
-    return _ok(f"Kept: {detail}. The next change is compared with the code as it is now.")
+        return _refuse(f"answers changed on {len(results) - ok} of {len(results)} requests: {reasons}")
+    detail = f"{moved(result)} · answers hold {ok}/{len(results)}"
+    names = list(CTX["saved"])
+    _mark("kept", detail)
+    CTX.update(kept_sha=_git("rev-parse", "HEAD"), kept_label=label, saved=[], measured=None)
+    _record("keep", changes=names, label=label)
+    say(f"  kept: {' + '.join(names)} ({detail})")
+    return _ok(f"Kept: {detail}. What comes next is compared with the code as it is now.")
 
 
-@tool(
-    "undo",
-    "Put the code back as it was last kept, dropping the change for a finding. `why`: in under 25 words.",
-    {"finding": str, "why": str},
-)
+@tool("undo", "Put the code back as it was last kept, dropping every change saved since. `why`: a few words.",
+      {"why": str})
 async def undo(args):
-    finding = (args.get("finding") or "").strip().upper() or CTX["pending"] or "?"
-    if not CTX["pending"] and not _dirty():
+    if not CTX["saved"] and not _dirty():
         return _ok("Nothing to undo: the code is as it was last kept.")
+    why = " ".join((args.get("why") or "").split())[:160]
+    names = list(CTX["saved"])
+    for name in names:
+        outcome, detail = CTX["changes"].get(name, ["", ""])
+        CTX["changes"][name] = ["undone", detail if outcome in ("failed", "not kept") else (why or detail)]
     _reset()
-    outcome, detail = CTX["rows"].get(finding, [None, ""])
-    why = " ".join((args.get("why") or "").split())[:200]
-    _row(finding, "undone", detail if outcome in ("failed", "not kept") else (why or detail))
-    _record("undo", finding=finding, why=why)
-    say(f"[fleetopt] {finding}: undone. {CTX['rows'][finding][1]}")
+    _record("undo", changes=names, why=why)
+    say(f"  undone: {' + '.join(names) or 'unsaved edits'}" + (f" ({why})" if why else ""))
     return _ok("Undone. The code is as it was last kept.")
 
 
 def finish():
-    """Nothing unproven is left on the branch: a change neither kept nor undone is undone."""
-    if not CTX.get("pending") and not _dirty():
+    """Nothing unproven is left on the branch."""
+    if not CTX.get("saved") and not _dirty():
         return
-    finding = CTX.get("pending") or "(an edit never measured)"
-    detail = CTX["rows"].get(finding, [None, ""])[1]
+    for name in CTX["saved"]:
+        detail = CTX["changes"].get(name, ["", ""])[1]
+        CTX["changes"][name] = ["undone", (detail + "; " if detail else "") + "not proven when the session ended"]
     _reset()
-    _row(finding, "undone", (detail + "; " if detail else "") + "left unproven when the session ended")
-    _record("undo", finding=finding, why="left unproven when the session ended")
+    _record("undo", why="not proven when the session ended")
 
 
-# --- reading: what the sessions look at ------------------------------------------------
-
-@tool(
-    "query_traces",
-    "Run read-only SQL against the capture database. Tables: runs(session_id, "
-    "run_id, parent_run_id, trace_id, name, run_type, node, step, model, "
-    "provider, duration_ms, input_tokens, output_tokens, cache_read_tokens, "
-    "cache_write_tokens, prompt_chars, prompt, completion, inputs, outputs, "
-    "error), sessions(id, label, run_cmd, exit_code), graphs(session_id, nodes, "
-    "edges, mermaid). Prefer aggregates - full prompt text is large.",
-    {"sql": str},
-)
-async def query_traces(args):
+@tool("query", "Read-only SQL on what fleetopt recorded. Tables: runs(session_id, run_id, parent_run_id, trace_id, "
+      "name, run_type, node, step, model, provider, duration_ms, input_tokens, output_tokens, cache_read_tokens, "
+      "cache_write_tokens, prompt_chars, prompt, completion, inputs, outputs, error), sessions(id, label, "
+      "code_state, exit_code), graphs(session_id, name, nodes, edges, mermaid). Prefer aggregates.", {"sql": str})
+async def query(args):
     sql = args["sql"].strip()
-    if not sql.lower().startswith("select"):
+    if not sql.lower().startswith(("select", "with")):
         return _ok("refused: read-only, SELECT statements only")
     with _conn() as conn:
-        rows = conn.execute(sql).fetchall()
+        try:
+            rows = conn.execute(sql).fetchall()
+        except Exception as exc:  # noqa: BLE001 - a bad query is the session's to fix
+            return _ok(f"error: {exc}")
     if not rows:
         return _ok("(no rows)")
-    out = [" | ".join(rows[0].keys())]
-    out += [" | ".join(str(r[c])[:200] for c in rows[0].keys()) for r in rows[:100]]
+    out = [" | ".join(rows[0].keys())] + [" | ".join(str(r[c])[:200] for c in rows[0].keys()) for r in rows[:100]]
     if len(rows) > 100:
         out.append(f"... {len(rows) - 100} more rows")
     return _ok("\n".join(out))
 
 
-@tool(
-    "graph_topology",
-    "The target's LangGraph structure: nodes, edges, which edges are conditional, "
-    "and a mermaid diagram. Captured from the compiled graph, not parsed from source.",
-    {},
-)
-async def graph_topology(args):
-    with _conn() as conn:
-        row = conn.execute(
-            "SELECT nodes, edges, mermaid FROM graphs ORDER BY session_id DESC LIMIT 1"
-        ).fetchone()
-    if not row:
-        return _ok("no graph captured - the target may not be a LangGraph project")
-    return _ok(
-        f"nodes: {row['nodes']}\n\nedges: {row['edges']}\n\n{row['mermaid'] or ''}"
-    )
+LOOK = [start, measure, query]
+CHANGE = LOOK + [save_change, keep, undo]
 
 
-@tool(
-    "graph_shape",
-    "Structural facts from the traces under a label: branches declared but never taken, "
-    "dispatchers whose target order never varies (and whether a model was consulted to "
-    "decide it), loops that run the same number of rounds in every trace, repeated model "
-    "calls with identical replies. Numbers only - the evidence an architecture review cites.",
-    {"label": str},
-)
-async def graph_shape(args):
-    ids = _ids(args["label"])
-    if not ids:
-        return _ok(f"no completed measurement under label {args['label']!r}")
-    with _conn() as conn:
-        result = shape_mod.analyze(conn, ids)
-    _record("graph_shape", label=args["label"], traces=result["traces"], findings=result["findings"])
-    return _ok(shape_mod.render(result))
+def server(look_only=False):
+    return create_sdk_mcp_server(name="fleetopt", tools=LOOK if look_only else CHANGE)
 
 
-_TOOLS = [measure, keep, undo, query_traces, graph_topology, graph_shape]
-
-
-def server(names=None):
-    """The in-process tool server; `names` (mcp__fleetopt__* or bare) selects a subset,
-    which is how the reviewer gets a read-only one."""
-    chosen = _TOOLS if names is None else [
-        t for t in _TOOLS if t.name in names or f"mcp__fleetopt__{t.name}" in names]
-    return create_sdk_mcp_server(name="fleetopt", tools=chosen)
-
-
-TOOL_NAMES = [f"mcp__fleetopt__{t.name}" for t in _TOOLS]
+def names(look_only=False):
+    return [f"mcp__fleetopt__{t.name}" for t in (LOOK if look_only else CHANGE)]

@@ -1,16 +1,15 @@
-"""fleetopt's own tests: the deterministic parts, plus one capture of the fixture.
+"""fleetopt's own tests: the deterministic parts, plus captures of the fixture.
 
     pytest -q
 
-No LLM call anywhere here, so no key and no spend. The sessions' judgement is tested
-by runs on real agents.
+No model is called anywhere here (conftest.py fails any test that tries), so no key and no
+spend. The agent's judgement is tested by runs on real agents.
 """
 
 import asyncio
 import json
 import os
 import pathlib
-import re
 import shutil
 import subprocess
 import sys
@@ -18,8 +17,8 @@ import sys
 import pytest
 
 from fleetopt import cli, config
-from fleetopt.evidence import evals, measure, shape
-from fleetopt.optimizer import review, session, tools
+from fleetopt.evidence import evals, measure
+from fleetopt.optimizer import agent, tools
 from fleetopt.probe import runner, store
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -79,23 +78,17 @@ def test_ids_scope_to_project_and_newest_code_state(tmp_path):
         fresh = [_session(conn, project=a, label="baseline", code_state="v2", exit_code=0) for _ in range(2)]
     assert tools._ids("baseline") == fresh
     assert tools._ids("candidate") == []
-    tools.CTX["include_failed"] = True   # a review, never a measurement
-    try:
-        assert len(tools._ids("baseline")) == 2  # newest code state has no crashed run; still scoped to it
-    finally:
-        tools.CTX.pop("include_failed")
-
-
 # --- the Bash guard: enforced, not asked ------------------------------------------
 
-def _guard(cmd, run_cmd="python agent.py"):
-    return asyncio.run(session.guard_bash(run_cmd)({"tool_input": {"command": cmd}}, "id", None))
+def _guard(cmd):
+    return asyncio.run(agent.guard_bash()({"tool_input": {"command": cmd}}, "id", None))
 
 
 @pytest.mark.parametrize("cmd", [
     "pip install rich", "python -m pip install -q x", "uv run --with rich python x.py", "uv add rich",
     "poetry add rich", "npm install", "npx something", "curl https://example.com -o f", "brew install jq",
     "python agent.py", "pytest tests/", "langgraph dev", "deepeval test run tests/", "promptfoo eval",
+    "/proj/.venv/bin/python /x/fleetopt/probe/driver.py e.json --limit 1",
 ])
 def test_guard_denies_installs_and_running_the_target(cmd):
     assert _guard(cmd)["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -254,156 +247,6 @@ def test_sdk_args_pass_only_credential_keys_from_settings(tmp_path, monkeypatch)
     assert config.sdk_args() == {}
 
 
-def test_sessions_load_no_operator_settings_and_read_every_cost_skill():
-    assert config.SETTING_SOURCES == []
-    on_disk = {p.name for p in (ROOT / "fleetopt" / "optimizer" / "skills").iterdir() if p.is_dir()}
-    assert on_disk == set(review.COST_SKILLS) | {"patterns"}
-    assert all(f"fleetopt:{name}" in session.SKILL for name in review.COST_SKILLS)
-
-
-# --- the probe on the bundled fixture: no key, no LLM, a few seconds --------------
-
-def test_capture_fixture_end_to_end(tmp_path):
-    target = tmp_path / "fixture"
-    shutil.copytree(ROOT / "fixture", target)
-
-    def git(*args):
-        subprocess.run(["git", "-C", str(target), *args], check=True, capture_output=True)
-
-    git("init", "-q")
-    git("add", "-A")
-    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
-    out = subprocess.run(
-        [sys.executable, "-c", "from fleetopt.cli import main; main()",
-         "capture", str(target), "--out", str(tmp_path / "out")],
-        cwd=tmp_path, capture_output=True, text=True, timeout=300,
-    )
-    assert out.returncode == 0, out.stdout + out.stderr
-    assert (tmp_path / "out" / "fleetopt.db").exists()
-    runs = re.search(r"(\d+) runs, (\d+) graphs", out.stdout)
-    assert runs and int(runs.group(1)) > 0 and int(runs.group(2)) == 1, out.stdout
-
-
-# --- the second fixture ------------------------------------------------------------------
-
-def _capture_fixture(tmp_path, script, *extra):
-    """Capture one of the fixture's two agents, named by its file: agent.py or supervisor.py.
-
-    It runs as a separate program, where no stand-in reaches, so it is handed a start-up
-    already settled, as fleetopt keeps one after the first run. Nothing asks a model."""
-    from fleetopt.drive import entry
-
-    target = tmp_path / "fixture"
-    if not target.exists():
-        shutil.copytree(ROOT / "fixture", target)
-        for args in (["init", "-q"], ["add", "-A"],
-                     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"]):
-            subprocess.run(["git", "-C", str(target), *args], check=True, capture_output=True)
-    spec, project = f"{script}:graph", target.resolve()
-    entry.save(entry.path_for((tmp_path / "out").resolve(), project, spec), {
-        "adapter": "langgraph", "project": str(project), "name": script, "graph": spec, "paths": ["."],
-        "interpreter": sys.executable, "env_file": None, "env": {}, "config": {}, "input_template": None,
-        "inputs": ["battery degradation", "route optimization"], "inputs_source": "the fixture", "proven": "test"})
-    return subprocess.run(
-        [sys.executable, "-c", "from fleetopt.cli import main; main()", "capture", str(target),
-         "--graph", f"{script}:graph", "--out", str(tmp_path / "out"), *extra],
-        cwd=tmp_path, capture_output=True, text=True, timeout=300,
-    )
-
-
-def test_supervisor_fixture_captures_its_planted_smells(tmp_path):
-    out = _capture_fixture(tmp_path, "supervisor.py")
-    assert out.returncode == 0, out.stdout + out.stderr
-    conn = store.connect(tmp_path / "out" / "fleetopt.db")
-    nodes = {r[0] for r in conn.execute("SELECT DISTINCT node FROM runs WHERE node IS NOT NULL")}
-    assert {"route", "technical", "supervisor", "worker_a", "worker_b", "worker_c", "draft", "reflect"} <= nodes
-    assert not {"billing", "other"} & nodes  # in the graph, never taken
-
-
-def test_out_is_accepted_before_and_after_the_subcommand():
-    parse = cli._parser().parse_args
-    assert parse(["apply", "repo"]).out == ".fleetopt"
-    assert parse(["apply", "repo", "--out", "after"]).out == "after"
-    assert parse(["--out", "before", "apply", "repo"]).out == "before"
-    assert parse(["--out", "before", "capture", "repo", "--out", "after"]).out == "after"
-    args = parse(["review", "repo"])
-    assert (args.out, args.fresh, args.graph, args.max_usd, args.fn.__name__) == (".fleetopt", False, None, 1.0, "review")
-    assert parse(["review", "repo", "--fresh", "--graph", "supervisor"]).graph == "supervisor"
-    assert parse(["review", "repo", "--evals", "cases.jsonl"]).evals == "cases.jsonl"  # the same cases to look and to change
-    args = parse(["apply", "repo", "--only", "C1,D2"])
-    assert (args.only, args.evals, args.max_usd, args.fn.__name__) == ("C1,D2", None, 5.0, "apply")
-
-
-# --- structural smells: numbers, not opinions ------------------------------------------
-
-def test_shape_finds_the_supervisor_fixtures_planted_smells_and_nothing_else(tmp_path):
-    assert _capture_fixture(tmp_path, "supervisor.py").returncode == 0
-    conn = store.connect(tmp_path / "out" / "fleetopt.db")
-    ids = [r[0] for r in conn.execute("SELECT id FROM sessions")]
-    result = shape.analyze(conn, ids)
-    kinds = {(f["kind"], f["node"]) for f in result["findings"]}
-    assert result["traces"] == 2 and result["distinct_inputs"] == 2
-    assert ("branch_never_taken", "route") in kinds          # billing, other exist and are never taken
-    assert ("fixed_dispatch", "supervisor") in kinds         # worker_a -> worker_b -> worker_c -> draft, every time
-    assert ("constant_rounds", "reflect") in kinds           # three rounds, always
-    assert ("repeated_identical_reply", "reflect") in kinds  # the critic never says anything new
-    never = next(f for f in result["findings"] if f["kind"] == "branch_never_taken")
-    assert sorted(never["targets"]) == ["billing", "other"]
-    dispatches = [f for f in result["findings"] if f["kind"] == "fixed_dispatch"]
-    assert [d["node"] for d in dispatches] == ["supervisor"]  # reflect's self-loop is rounds, not dispatch
-    assert dispatches[0]["order"] == ["worker_a", "worker_b", "worker_c", "draft"] and dispatches[0]["calls_model"]
-    assert not {n for _, n in kinds} - {"route", "supervisor", "reflect"}  # no finding on a healthy node
-    text = shape.render(result)
-    assert "2 traces" in text and "never taken in 2 traces" in text
-
-
-def test_shape_on_the_cost_fixture_sees_only_the_research_loop(tmp_path):
-    assert _capture_fixture(tmp_path, "agent.py").returncode == 0
-    conn = store.connect(tmp_path / "out" / "fleetopt.db")
-    result = shape.analyze(conn, [r[0] for r in conn.execute("SELECT id FROM sessions")])
-    assert {f["node"] for f in result["findings"]} == {"research"}  # runs 3 rounds to its cap
-    assert shape.render({"traces": 0, "nodes": [], "findings": []}) == "no traces to analyze"
-
-
-def test_graph_shape_tool_renders_the_fixtures_smells(tmp_path):
-    assert _capture_fixture(tmp_path, "supervisor.py").returncode == 0
-    tools.CTX.update(out=tmp_path / "out", project=(tmp_path / "fixture").resolve(), events=[])
-    reply = json.dumps(asyncio.run(tools.graph_shape.handler({"label": "manual"})))
-    assert "2 traces" in reply and "never taken" in reply and "same order" in reply
-    assert tools.CTX["events"][-1]["event"] == "graph_shape"
-    assert "no completed measurement" in json.dumps(asyncio.run(tools.graph_shape.handler({"label": "nope"})))
-
-
-def test_shape_counts_distinct_inputs_not_just_traces(tmp_path):
-    for _ in range(3):  # a baseline: the same command, three times
-        assert _capture_fixture(tmp_path, "supervisor.py").returncode == 0
-    conn = store.connect(tmp_path / "out" / "fleetopt.db")
-    result = shape.analyze(conn, [r[0] for r in conn.execute("SELECT id FROM sessions")])
-    assert (result["traces"], result["distinct_inputs"]) == (6, 2)
-    assert "2 inputs wide" in shape.render(result)
-
-
-def test_shape_reports_swallowed_errors_and_human_pauses(tmp_path):
-    conn = store.connect(tmp_path / "e.db")
-    sid = _session(conn, project="p", label="x", code_state="v1", exit_code=0)
-
-    def run(trace, step, name, node, run_type="chain", error=None):
-        conn.execute(
-            "INSERT INTO runs (session_id, trace_id, run_type, name, node, step, error, start_time)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (sid, trace, run_type, name, node, step, error, f"{trace}-{step:02d}-{name}"))
-
-    for trace in ("t1", "t2"):
-        run(trace, 1, "draft", "draft")
-        run(trace, 2, "critic", "critic")                       # the node itself did not fail...
-        run(trace, 2, "ChatAnthropic", "critic", "llm",         # ...the call inside it did
-            error="BadRequestError(\"Error code: 400 - temperature is deprecated\")Traceback (most recent call last): ...")
-        run(trace, 3, "human_gate", "human_gate", error="GraphInterrupt((Interrupt(value={}),))Traceback ...")
-    result = shape.analyze(conn, [sid])
-    first, *_ = result["findings"]
-    assert (first["kind"], first["node"], first["count"], first["swallowed"]) == ("node_error", "critic", 2, True)
-    assert "temperature is deprecated" in first["text"] and "caught inside the node" in first["text"]
-    pause = next(f for f in result["findings"] if f["kind"] == "interrupt")
-    assert (pause["node"], pause["count"]) == ("human_gate", 2) and "paused for a human in 2/2" in pause["text"]
 
 
 def test_a_capture_that_fails_late_keeps_the_targets_last_words(tmp_path):
@@ -412,42 +255,6 @@ def test_a_capture_that_fails_late_keeps_the_targets_last_words(tmp_path):
     cmd = f'{sys.executable} agent.py && {sys.executable} -c "print(\'the reason it failed\'); raise SystemExit(3)"'
     with pytest.raises(RuntimeError, match="exited 3 after .* runs(.|\\n)*the reason it failed"):
         measure.collect(target, cmd, tmp_path / "out", 1, "x")
-
-
-def test_shape_counts_model_calls_per_tool_round_and_stays_quiet_on_one_trace(tmp_path):
-    conn = store.connect(tmp_path / "r.db")
-    sid = _session(conn, project="p", label="x", code_state="v1", exit_code=0)
-    rows = [(1, "plan", "plan", "chain"), (1, "M", "plan", "llm"), (2, "decide", "decide", "chain"), (2, "M", "decide", "llm"),
-            (3, "act", "act", "chain"), (3, "M", "act", "llm"), (4, "tools", "tools", "chain"), (4, "search", "tools", "tool"),
-            (5, "reflect", "reflect", "chain"), (5, "M", "reflect", "llm"), (6, "decide", "decide", "chain"), (6, "M", "decide", "llm")]
-    for step, name, node, kind in rows:
-        conn.execute("INSERT INTO runs (session_id, trace_id, run_type, name, node, step, completion, start_time)"
-                     " VALUES (?, 't1', ?, ?, ?, ?, 'search', ?)", (sid, kind, name, node, step, f"{step:02d}{kind}"))
-    result = shape.analyze(conn, [sid])
-    kinds = {f["kind"] for f in result["findings"]}
-    ratio = next(f for f in result["findings"] if f["kind"] == "calls_per_tool_round")
-    assert (ratio["model_calls"], ratio["tool_rounds"], ratio["ratio"]) == (4, 1, 4.0)  # 5 calls, less the answer
-    assert not kinds & {"constant_rounds", "fixed_dispatch", "repeated_identical_reply"}  # one trace proves no habit
-
-
-def test_a_plain_tool_calling_agent_is_not_called_over_built(tmp_path):
-    conn = store.connect(tmp_path / "p.db")
-    sid = _session(conn, project="p", label="x", code_state="v1", exit_code=0)
-
-    def run(trace, step, kind, node):
-        conn.execute("INSERT INTO runs (session_id, trace_id, run_type, name, node, step, start_time)"
-                     " VALUES (?, ?, ?, ?, ?, ?, ?)", (sid, trace, kind, node, node, step, f"{trace}{step:02d}{kind}"))
-
-    for trace in ("with-tool-1", "with-tool-2"):      # call the tool, then answer: 2 model calls, 1 round
-        for step, kind, node in ((1, "chain", "assistant"), (1, "llm", "assistant"), (2, "chain", "tools"),
-                                 (2, "tool", "tools"), (3, "chain", "assistant"), (3, "llm", "assistant")):
-            run(trace, step, kind, node)
-    for trace in ("no-tool-1", "no-tool-2", "no-tool-3"):  # answers directly: these used to inflate the ratio
-        run(trace, 1, "chain", "assistant")
-        run(trace, 1, "llm", "assistant")
-    kinds = {f["kind"] for f in shape.analyze(conn, [sid])["findings"]}
-    assert "calls_per_tool_round" not in kinds
-    assert "fixed_dispatch" not in kinds  # going round the same loop is not choosing among workers
 
 
 def test_compare_counts_finished_requests_and_prices_only_those(tmp_path):
@@ -472,152 +279,63 @@ def test_compare_counts_finished_requests_and_prices_only_those(tmp_path):
     assert "completed" in measure.render(result)
 
 
-def test_review_stops_when_there_is_no_agent_to_start(tmp_path, capsys, monkeypatch):
-    target = tmp_path / "t"
-    target.mkdir()
-    (target / "notes.py").write_text("print('no graph in here')\n", encoding="utf-8")
-    monkeypatch.setattr(config, "auth_summary", lambda: "test")
+# --- the probe on the bundled fixture: no key, no model, a few seconds ---------------------
 
-    def never(*a, **k):
-        raise AssertionError("the reviewer must not be started when the agent never ran")
-
-    from fleetopt.optimizer import review as review_mod
-    monkeypatch.setattr(review_mod, "run", never)
-    from fleetopt.drive import start
-    monkeypatch.setattr(start, "settle", lambda project, path, **kw: (
-        {"status": "missing", "missing": ["There is no LangGraph agent in this project: no graph is built anywhere"]},
-        None))
-    code = cli.main(["review", str(target), "--out", str(tmp_path / "out")])
-    assert code == 1 and "no LangGraph agent in this project" in capsys.readouterr().out
+def _fixture(tmp_path):
+    target = tmp_path / "fixture"
+    if not target.exists():
+        shutil.copytree(ROOT / "fixture", target)
+    return target.resolve()
 
 
-# --- a review is a list of numbered findings, kept against the code it saw -----------------
-
-REPORT = """Job: answers questions about orders.
-Evidence: 4 traces of 4 distinct inputs, from one capture. Eval cases: 12 found in the repository
-
-## Cost
-
-### C1 - System prompt is never cached
-pattern: caching not used on assistant
-evidence: cache_read_tokens = 0 across 9 calls, 2,310-token prefix repeated
-source: agent.py:41
-risk: none seen
-
-### C2 - Router on a frontier model
-evidence: 4 calls, completions of 1 token
-risk: it may route differently; I would want the team's cases before trusting this
-apply: needs cases
-
-## Design
-
-### D1 — Hand-built agent loop
-evidence: calls_per_tool_round 3.0
-**tier:** two
-
-### D2 - Reflection never changes the draft
-evidence: repeated_identical_reply on reflect in 4/4 traces
-change: drop the round
-tier: one
-
-### D3 - Planner nobody reads
-change: drop the planner call
-
-### C3 - Nothing to cache here
-change: none - there is no stable prefix
-
-## Checked and fine
-
-- supervisor: 3 distinct worker orders in 4 traces
-"""
+def _captured(tmp_path, graph, inputs=("battery degradation", "route optimization")):
+    """Run one of the fixture's agents the way fleetopt does: its driver, under the probe."""
+    project = _fixture(tmp_path)
+    entry = {"project": str(project), "graph": graph, "paths": ["."], "interpreter": sys.executable,
+             "env_file": None, "env": {}, "config": {}, "input_template": None, "inputs": list(inputs)}
+    path = tmp_path / "entry.json"
+    path.write_text(json.dumps(entry), encoding="utf-8")
+    return runner.run(project, tools.command(path, entry), tmp_path / "out", with_io=True, label="x")
 
 
-def test_a_review_is_read_for_its_numbered_findings():
-    found = review.findings(REPORT)
-    assert [f["id"] for f in found] == ["C1", "C2", "D1", "D2", "D3"]
-    assert "C3" not in {f["id"] for f in found}  # something checked and cleared is not a finding to try
-    assert found[0]["title"] == "System prompt is never cached"
-    assert review.findings("Nothing here has a number.") == []
-    ids = lambda picked: [f["id"] for f in picked]
-    assert ids(cli.chosen(found, None)) == ["C1", "C2", "D1", "D2", "D3"]
-    assert ids(cli.chosen(found, "d1, c1")) == ["C1", "D1"]  # a fence: these and no others
-    with pytest.raises(ValueError, match="no finding C9"):
-        cli.chosen(found, "C1,C9")
+def test_the_probe_records_an_agent_it_never_edited(tmp_path):
+    _, code, n_runs, n_graphs = _captured(tmp_path, "agent.py:graph")
+    assert code == 0 and n_runs > 0 and n_graphs == 1
+    conn = store.connect(tmp_path / "out" / "fleetopt.db")
+    assert conn.execute("SELECT COUNT(*) FROM runs WHERE run_type = 'llm' AND input_tokens > 0").fetchone()[0] > 0
 
 
-def _a_saved_review(tmp_path, state="abc+1"):
-    project, out = tmp_path / "p", tmp_path / "out"
-    run_dir = out / "runs" / "review-x-p"
-    project.mkdir()
-    run_dir.mkdir(parents=True)
-    (run_dir / "review.md").write_text(REPORT, encoding="utf-8")
-    review.remember(out, project, "cmd", state, "review-x", run_dir, review.findings(REPORT))
-    return project, out
+def test_the_probe_sees_every_node_that_ran_and_none_that_did_not(tmp_path):
+    assert _captured(tmp_path, "supervisor.py:graph")[1] == 0
+    conn = store.connect(tmp_path / "out" / "fleetopt.db")
+    nodes = {r[0] for r in conn.execute("SELECT DISTINCT node FROM runs WHERE node IS NOT NULL")}
+    assert {"route", "technical", "supervisor", "worker_a", "worker_b", "worker_c", "draft", "reflect"} <= nodes
+    assert not {"billing", "other"} & nodes  # in the graph, never taken
 
 
-def _nothing_may_run(monkeypatch, state):
-    def never(*a, **k):
-        raise AssertionError("nothing may be run or spent here")
+# --- the one agent: its guide, its command line ----------------------------------------------
 
-    monkeypatch.setattr(cli, "_start", lambda args: setattr(args, "asked_anew", False) or setattr(args, "agent", "a") or "cmd")
-    monkeypatch.setattr(runner, "code_state", lambda project: state)
-    monkeypatch.setattr(config, "auth_summary", lambda: "test")
-    monkeypatch.setattr(review, "run", never)
-    monkeypatch.setattr(measure, "collect", never)
-    monkeypatch.setattr(session, "run", never)
+def test_the_agent_reads_one_guide_and_every_cost_skill():
+    assert config.SETTING_SOURCES == []
+    on_disk = {p.name for p in (ROOT / "fleetopt" / "optimizer" / "skills").iterdir() if p.is_dir()}
+    assert on_disk == set(agent.SKILLS)
+    assert all(f"fleetopt:{name}" in agent.SYSTEM for name in agent.SKILLS)
+    assert "minimum prefix" in agent.SYSTEM and "## The flow" in agent.SYSTEM
 
 
-def test_a_review_is_reused_while_the_code_has_not_changed(tmp_path, capsys, monkeypatch):
-    project, out = _a_saved_review(tmp_path)
-    _nothing_may_run(monkeypatch, "abc+1")
-    assert cli.main(["review", str(project), "--out", str(out)]) == 0
-    text = capsys.readouterr().out
-    assert "has not changed since the review" in text and "C1 - System prompt is never cached" in text
-    assert f"fleetopt apply {project}" in text and "D1 (Hand-built agent loop)" in text
-    assert review.saved(out, project, "cmd", "abc+2") is None       # the code moved: that review no longer answers
-    assert review.saved(out, project, "other agent", "abc+1") is None  # and it was a review of one agent, not the project
+def test_the_command_line_is_two_commands_and_a_few_flags():
+    parse = cli._parser().parse_args
+    assert parse(["apply", "repo"]).out == ".fleetopt" and parse(["apply", "repo"]).max_usd == 5.0
+    assert parse(["apply", "repo", "--out", "after"]).out == "after"
+    assert parse(["--out", "before", "review", "repo"]).out == "before"
+    args = parse(["review", "repo", "--evals", "cases.jsonl", "--graph", "supervisor"])
+    assert (args.cmd, args.evals, args.graph, args.max_usd) == ("review", "cases.jsonl", "supervisor", 2.0)
+    for gone in (["apply", "repo", "--only", "C1"], ["review", "repo", "--design"], ["capture", "repo"]):
+        with pytest.raises(SystemExit):
+            parse(gone)
 
 
-def test_apply_stops_before_spending_when_a_named_finding_does_not_exist(tmp_path, capsys, monkeypatch):
-    project, out = _a_saved_review(tmp_path)
-    _nothing_may_run(monkeypatch, "abc+1")
-    assert cli.main(["apply", str(project), "--out", str(out), "--only", "C7"]) == 1
-    assert "no finding C7" in capsys.readouterr().out
-
-
-def test_the_summary_is_computed_and_claims_a_gain_only_under_a_proven_verdict(tmp_path):
-    def measured(label, state):
-        return {"event": "measure", "label": label, "code_state": state}
-
-    def compared(state, **verdicts):
-        return {"event": "compare", "baseline_state": "v1", "candidate_state": state,
-                "result": {k: {"verdict": v, "delta_pct": pct} for k, (v, pct) in verdicts.items()}}
-
-    events = [measured("baseline", "v1"), measured("C1", "v2"), measured("C1-n5", "v2"), measured("D1", "v3"),
-              compared("v3", cost_usd=("within noise", -14.6), wall_ms=("improved", -23.4), llm_calls=("improved", -33.3))]
-    assert session.numbers(events, "PROVEN ON THIS EVIDENCE: ...", "v1", "v3") == (2, ["time -23%", "model calls -33%"])
-    assert session.numbers(events, "NOT PROVEN SAFE: ...", "v1", "v3") == (2, [])    # measured, and not a gain
-    assert session.numbers(events, "NOTHING LEFT STANDING: ...", "v1", "v1") == (2, [])
-
-    record = {"findings": review.findings(REPORT)}
-    facts = {"verdict": "NOTHING LEFT STANDING: 1 changed version(s) were judged and undone.", "tried": 3, "kept": 0,
-             "gained": [], "branch": "fleetopt/c1-c2-d1", "run_dir": "/runs/x"}
-    text = cli.summary("supervisor", record, facts, 27, 1.22, 2.31)
-    assert "Found    5 finding(s) in the review" in text
-    assert "3 changed version(s): 0 kept, 3 undone" in text and "Gained   nothing proven" in text
-    assert "$1.22 on the team's key in 27 run(s)" in text and "the same code it started from" in text
-    assert "not priced" in cli.summary("a", record, facts, 1, None, 0.5)
-
-    out, project = tmp_path, tmp_path / "p"
-    with store.connect(out / "fleetopt.db") as conn:
-        for label in ("old", "baseline", "C1"):
-            sid = _session(conn, project=str(project), label=label, run_cmd="cmd", code_state="v1", exit_code=0)
-            conn.execute("INSERT INTO runs (session_id, run_type, model, input_tokens, output_tokens)"
-                         " VALUES (?, 'llm', 'claude-haiku-4-5', 1000000, 0)", (sid,))
-        _session(conn, project="another project", label="baseline", run_cmd="cmd", code_state="v1", exit_code=0)
-    runs, cost = cli.spent(out, project, after=1)
-    assert runs == 2 and cost == pytest.approx(2 * measure.session_stats(store.connect(out / "fleetopt.db"), 1)["cost_usd"])
-
+# --- the tools: what is kept has earned it ---------------------------------------------------
 
 def _repo(tmp_path):
     project = tmp_path / "agent"
@@ -627,153 +345,191 @@ def _repo(tmp_path):
                  ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"]):
         subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True)
     (tmp_path / "out").mkdir()
-    return project
+    return project.resolve()
+
+
+ENTRY = {"name": "agent", "graph": "agent.py:graph", "inputs": ["x"], "interpreter": sys.executable,
+         "inputs_from": "the test"}
 
 
 def _fake_runs(monkeypatch, failing=(), flat=(), wrong=(), reshaped=()):
-    """Running, comparing, judging and the graph's structure, faked by finding: nothing runs."""
+    """Running, comparing, judging and the graph's structure, faked by the change saved last."""
     seen = {"measured": [], "judged": []}
-    finding = lambda label: label.split("-")[0]
+    last = lambda: tools.CTX["saved"][-1] if tools.CTX["saved"] else ""
 
     def run(label, max_steps=None, probe=False):
         seen["measured"].append((label, max_steps, probe))
-        if finding(label) in failing:
+        if last() in failing:
             return None, "run 1 took more than 150 steps, far more than the original, and was stopped."
-        return {"steps": 40, "completed": 3, "cost_usd": 0.01}, None
+        return {"steps": 40, "completed": 3, "cost_usd": 0.01, "llm_calls": 5}, None
 
     async def judge(label):
-        seen["judged"].append(label)
-        ok = finding(label) not in wrong
-        return ok, [{"kept_on": "unchanged answer" if ok else None, "reason": "an answer was cut off"}], None
+        seen["judged"].append(last())
+        ok = last() not in wrong
+        return ok, [{"kept_on": "unchanged answer" if ok else None, "reason": "an answer was cut off"}]
 
     monkeypatch.setattr(tools, "_measure", run)
     monkeypatch.setattr(tools, "_compare", lambda before, after: {"cost_usd": {
-        "before": 0.0125, "after": 0.01, "delta_pct": -20.0,
-        "verdict": "within noise" if finding(after) in flat else "improved"}})
+        "before": 0.0125, "after": 0.01, "delta_pct": -20.0, "verdict": "within noise" if last() in flat else "improved"}})
     monkeypatch.setattr(tools, "_judge", judge)
-    monkeypatch.setattr(tools, "_shape", lambda label: ["changed"] if finding(label) in reshaped else ["same"])
+    monkeypatch.setattr(tools, "_shape", lambda label: ["changed"] if label != "baseline" and last() in reshaped
+                        else ["same"])
     return seen
+
+
+def _call(tool_name, **args):
+    return asyncio.run(getattr(tools, tool_name).handler(args))["content"][0]["text"]
 
 
 def test_the_tools_keep_what_earns_it_and_undo_the_rest(tmp_path, monkeypatch):
     project = _repo(tmp_path)
-    seen = _fake_runs(monkeypatch, failing={"C2"}, flat={"C3"}, wrong={"C4"}, reshaped={"C5"})
+    seen = _fake_runs(monkeypatch, failing={"loop forever"}, flat={"trim notes"}, wrong={"smaller model"},
+                      reshaped={"merge two steps"})
     cases = [{"input": "when is my refund due?", "expected": "Refunds are issued within 14 days of the request.",
               "source": "x"}]
-    findings = [{"id": f"C{i}", "title": f"t{i}", "kind": "cost"} for i in range(1, 6)]
-    call = lambda name, **a: asyncio.run(getattr(tools, name).handler(a))["content"][0]["text"]
     edit = lambda text, name="agent.py": (project / name).write_text(text, encoding="utf-8")
     git = lambda *a: subprocess.run(["git", "-C", str(project), *a], capture_output=True, text=True, check=True).stdout
-    tools.start(project, tmp_path / "out", "cmd", findings=findings, task="t", cases=cases)
+    tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", entry={**ENTRY, "project": str(project)},
+                cases=cases)
     git("checkout", "-q", "-b", "fleetopt/test")
     try:
-        assert "Edits are allowed now" in call("measure")                  # the agent as it is, once
-        assert "measured already" in call("measure")
-        assert "Nothing changed" in call("measure", finding="C1")
+        assert "measure the agent as it is first" in _call("save_change", name="too early")
+        assert "Edits are allowed now" in _call("measure")                 # the agent as it is, once
+        assert "Nothing saved" in _call("measure")
 
-        edit("x = 1\n"), edit("y = 1\n", "helper.py")
-        assert "got better past the noise" in call("measure", finding="C1")
-        assert "Kept" in call("keep", finding="C1", summary="cap the prompt")
+        edit("x = 1\n"), _call("save_change", name="cache the system prompt")   # a bundle of two, measured once
+        edit("y = 1\n", "helper.py"), _call("save_change", name="bound the output")
+        assert "got better past the noise" in _call("measure")
+        assert "Kept" in _call("keep")
 
-        edit("x = 2\n"), edit("z = 2\n", "scratch.py")
-        assert "could not be measured" in call("measure", finding="C2")   # it ran away and was stopped
-        assert "C2 is neither kept nor undone" in call("measure", finding="C3")
-        assert "Undone" in call("undo", finding="C2", why="it looped")
-        assert not (project / "scratch.py").exists()                      # nothing half-made is left
+        edit("x = 2\n"), edit("z = 2\n", "scratch.py"), _call("save_change", name="loop forever")
+        assert "could not be measured" in _call("measure")                 # it ran away and was stopped
+        assert "Undone" in _call("undo", why="it looped")
+        assert not (project / "scratch.py").exists()                       # nothing half-made is left
 
-        for text in ("x = 3\n", "x = 4\n"):
-            edit(text)
-            call("measure", finding="C3")
-            assert "nothing got better past the noise" in call("keep", finding="C3")
-        edit("x = 5\n")
-        assert "measured 2 times" in call("measure", finding="C3")        # two attempts, never a third
-        call("undo", finding="C3", why="no gain")
+        edit("x = 3\n"), _call("save_change", name="trim notes"), _call("measure")
+        assert "nothing got better past the noise" in _call("keep")
+        _call("undo", why="")
+        edit("x = 4\n"), _call("save_change", name="smaller model"), _call("measure")
+        assert "answers changed on 1 of 1 requests: an answer was cut off" in _call("keep")
+        _call("undo", why="")
+        edit("x = 5\n"), _call("save_change", name="merge two steps"), _call("measure")
+        assert "nodes or edges" in _call("keep")                            # design is not this run's to change
+        _call("undo", why="")
+        edit("x = 6\n")
+        assert "unsaved edits" in _call("measure")
+        edit('ANSWER = "Refunds are issued within 14 days of the request."\n')
+        _call("save_change", name="hardcode the answer"), _call("measure")
+        assert "writes an answer from the team's eval cases" in _call("keep")
+        tools.finish()                                                     # left unproven: undone for it
 
-        edit("x = 6\n"), call("measure", finding="C4")
-        assert "the judge failed 1 of 1 requests: an answer was cut off" in call("keep", finding="C4")
-        call("undo", finding="C4", why="")
-
-        edit("x = 7\n"), call("measure", finding="C5")
-        assert "structure" in call("keep", finding="C5")                  # cost only: the graph stays as it is
-        call("undo", finding="C5", why="")
-
-        edit('ANSWER = "Refunds are issued within 14 days of the request."\n'), call("measure", finding="N1")
-        assert "writes an answer from the team's cases" in call("keep", finding="N1")
-        tools.finish()                                                    # left pending: undone for the agent
-
-        rows = tools.CTX["rows"]
-        assert {k: v[0] for k, v in rows.items()} == {"C1": "kept", "C2": "undone", "C3": "undone", "C4": "undone",
-                                                      "C5": "undone", "N1": "undone"}
-        assert "150 steps" in rows["C2"][1] and "left unproven" in rows["N1"][1]
-        assert seen["judged"] == ["C1", "C4"]                            # nothing is judged that did not gain
+        changes = {k: v[0] for k, v in tools.CTX["changes"].items()}
+        assert changes == {"cache the system prompt": "kept", "bound the output": "kept", "loop forever": "undone",
+                           "trim notes": "undone", "smaller model": "undone", "merge two steps": "undone",
+                           "hardcode the answer": "undone"}
+        assert "150 steps" in tools.CTX["changes"]["loop forever"][1]
+        assert seen["judged"] == ["bound the output", "smaller model"]     # nothing is judged that did not gain
         assert seen["measured"][0] == ("baseline", None, False)
         assert all(probe and steps == 150 for _, steps, probe in seen["measured"][1:])  # changed code is watched
-        assert git("log", "--format=%s").split("\n")[:2] == ["C1: cap the prompt", "base"]  # one commit per kept finding
+        assert git("log", "--format=%s").split("\n")[:3] == ["bound the output", "cache the system prompt", "base"]
         assert (project / "agent.py").read_text(encoding="utf-8") == "x = 1\n" and (project / "helper.py").exists()
 
         tools.CTX["deadline"] = 1
-        edit("x = 8\n")
-        assert "time limit" in call("measure", finding="C6")
+        edit("x = 9\n"), _call("save_change", name="late")
+        assert "time limit" in _call("measure")
     finally:
         tools.CTX.clear()
 
 
-def test_apply_is_one_session_that_drives_and_leaves_nothing_unproven(tmp_path, monkeypatch, capsys):
+def test_an_agent_whose_model_calls_cannot_be_seen_is_said_so_and_nothing_more_is_spent(tmp_path, monkeypatch):
+    project = _repo(tmp_path)
+    runs = []
+    monkeypatch.setattr(tools, "_measure", lambda label, max_steps=None, probe=False: runs.append(label) or (
+        {"steps": 12, "completed": 2, "llm_calls": 0}, None))
+    tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", entry={**ENTRY, "project": str(project)})
+    try:
+        assert "without LangChain" in _call("measure")
+        assert "Refused" in _call("measure") and runs == ["baseline"]
+    finally:
+        tools.CTX.clear()
+
+
+# --- the one session, end to end, with a scripted stand-in for the model ----------------------
+
+def _tried(monkeypatch):
+    monkeypatch.setattr(tools, "trial", lambda path, entry, timeout=600: {
+        "exit": 0, "requests": 1, "finished": 1, "model_calls": 3, "answered": 3, "error": None, "tail": "ok"})
+
+
+def test_one_agent_starts_measures_changes_and_leaves_nothing_unproven(tmp_path, monkeypatch):
     import claude_agent_sdk
 
     project = _repo(tmp_path)
     _fake_runs(monkeypatch)
+    _tried(monkeypatch)
     seen = {}
 
-    async def the_agent(prompt, options):  # a session that keeps C1 and walks away from C2
-        seen["prompt"] = prompt
-        call = lambda name, **a: getattr(tools, name).handler(a)
+    async def the_agent(prompt, options):  # starts it, keeps one change, walks away from another
+        seen["prompt"], seen["tools"] = prompt, options.allowed_tools
+        call = lambda tool_name, **a: getattr(tools, tool_name).handler(a)
+        await call("start", entry=json.dumps({"graph": "agent.py:graph", "agent": "researcher", "job": "research",
+                                              "inputs": ["battery degradation"]}))
         await call("measure")
         (project / "agent.py").write_text("x = 1\n", encoding="utf-8")
-        await call("measure", finding="C1")
-        await call("keep", finding="C1", summary="cap the prompt")
+        await call("save_change", name="cache the system prompt")
+        await call("measure")
+        await call("keep")
         (project / "agent.py").write_text("x = 2\n", encoding="utf-8")
-        await call("measure", finding="C2")
+        await call("save_change", name="trim notes")
+        await call("measure")
         return
         yield
 
     monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
-    findings = [{"id": "C1", "title": "cache the prompt", "kind": "cost"}, {"id": "C2", "title": "trim", "kind": "cost"}]
     try:
-        facts = asyncio.run(session.run(project, tmp_path / "out", "cmd", "Job: answers", findings, task="t"))
+        facts = asyncio.run(agent.run(project, tmp_path / "out"))
     finally:
         tools.CTX.clear()
-
-    assert "C1, C2" in seen["prompt"] and "Cost only" in seen["prompt"] and "$2.00 on the team's key" in seen["prompt"]
-    assert "look again" in seen["prompt"]
+    git = lambda *a: subprocess.run(["git", "-C", str(project), *a], capture_output=True, text=True).stdout.strip()
+    assert "How to start it is not known yet" in seen["prompt"] and "Eval cases: none" in seen["prompt"]
+    assert "mcp__fleetopt__keep" in seen["tools"]
     assert facts["kept"] == 1 and facts["branch"].startswith("fleetopt/")
-    assert (project / "agent.py").read_text(encoding="utf-8") == "x = 1\n"  # C2 was never kept: undone at the end
-    record = json.loads((pathlib.Path(facts["run_dir"]) / "run.json").read_text(encoding="utf-8"))
-    assert {r["id"]: r["outcome"] for r in record["rows"]} == {"C1": "kept", "C2": "undone"}
-    assert "| C2 trim | undone |" in capsys.readouterr().out
+    assert [(c["name"], c["outcome"]) for c in facts["changes"]] == [("cache the system prompt", "kept"),
+                                                                    ("trim notes", "undone")]
+    assert git("rev-parse", "--abbrev-ref", "HEAD") == "main"                # the team's copy is where it was
+    assert git("show", f"{facts['branch']}:agent.py") == "x = 1"             # the branch holds what was kept
+    text = "\n".join(agent.summary(facts))
+    assert "1 change(s) kept on branch fleetopt/" in text and "no eval cases" in text
+    entry = json.loads(tools.entry_path(tmp_path / "out", project).read_text(encoding="utf-8"))
+    assert entry["proven"] and entry["name"] == "researcher"                 # the next run knows how to start it
 
 
-def test_review_stops_when_it_saw_no_model_call(tmp_path, capsys, monkeypatch):
-    from fleetopt.optimizer import review as review_mod
+def test_review_is_the_same_agent_without_anything_that_changes_code(tmp_path, monkeypatch):
+    import claude_agent_sdk
 
-    project, out = tmp_path / "p", tmp_path / "out"
-    project.mkdir()
-    out.mkdir()
-    monkeypatch.setattr(runner, "code_state", lambda p: "v1")
+    project = _repo(tmp_path)
+    _fake_runs(monkeypatch)
+    _tried(monkeypatch)
+    seen = {}
 
-    def captured(project_, run_cmd, out_, n, label):  # the one run: steps recorded, no model call among them
-        with store.connect(out / "fleetopt.db") as conn:
-            sid = _session(conn, project=str(project), label=label, run_cmd="cmd", code_state="v1", exit_code=0)
-            conn.execute("INSERT INTO runs (session_id, run_type, name, trace_id, outputs)"
-                         " VALUES (?, 'chain', 'parse', 't', 'x')", (sid,))
+    async def the_agent(prompt, options):
+        seen["tools"] = set(options.allowed_tools)
+        await tools.start.handler({"entry": json.dumps({"graph": "agent.py:graph", "inputs": ["x"]})})
+        await tools.measure.handler({})
+        yield claude_agent_sdk.ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
+                                             num_turns=3, session_id="s", total_cost_usd=0.1,
+                                             result="Worth changing:\n- cache the system prompt: 0 cache reads")
 
-    monkeypatch.setattr(measure, "collect", captured)
-
-    def never(*a, **k):
-        raise AssertionError("no reviewer is started for a run with no model call")
-
-    monkeypatch.setattr(review_mod, "run", never)
-    monkeypatch.setattr(shape, "analyze", lambda conn, ids: {"traces": 4})   # it ran: 4 requests
-    monkeypatch.setattr(shape, "render", lambda facts: "")
-    assert cli._reviewed(project, out, "cmd", 1.0) == (None, False)
-    assert "no model calls in it" in capsys.readouterr().out
+    monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
+    try:
+        facts = asyncio.run(agent.run(project, tmp_path / "out", look_only=True))
+    finally:
+        tools.CTX.clear()
+    assert not seen["tools"] & {"Bash", "Edit", "Write", "mcp__fleetopt__save_change", "mcp__fleetopt__keep",
+                                "mcp__fleetopt__undo"}
+    assert facts["branch"] is None and facts["kept"] == 0
+    branches = subprocess.run(["git", "-C", str(project), "branch"], capture_output=True, text=True).stdout
+    assert "fleetopt" not in branches
+    reviews = list((tmp_path / "out" / "reviews").glob("*.md"))
+    assert len(reviews) == 1 and "cache the system prompt" in reviews[0].read_text(encoding="utf-8")
+    assert "Next     fleetopt apply" in "\n".join(agent.summary(facts))

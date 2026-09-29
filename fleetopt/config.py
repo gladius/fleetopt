@@ -16,8 +16,6 @@ Same format everywhere, first hit wins.
 import json
 import os
 import pathlib
-import shutil
-import subprocess
 
 GLOBAL_ENV = pathlib.Path.home() / ".config" / "fleetopt" / "env"
 
@@ -59,10 +57,9 @@ SETTING_SOURCES = []
 
 
 # The settings.json keys that carry or fetch a credential. Everything else in that
-# file (plugins, hooks, permissions, MCP servers, model choice) stays out of a run.
-# `claude auth status` cannot be run under these flags, so the auth line fleetopt
-# prints describes the machine, and a setup that depends on a key missing from this
-# list fails loudly at the first model call rather than silently.
+# file (plugins, hooks, permissions, MCP servers, model choice) stays out of a run. A
+# setup that depends on a key missing from this list fails loudly at the first model
+# call rather than silently.
 AUTH_KEYS = ("env", "apiKeyHelper", "awsAuthRefresh", "awsCredentialExport")
 
 
@@ -99,37 +96,3 @@ DENY_READS = [
         "**/*secret*", "**/*credential*", "**/.netrc", "**/.npmrc", "**/.pypirc",
     )
 ]
-
-
-def _bundled_cli():
-    try:
-        import claude_agent_sdk
-    except ImportError:
-        return None
-    exe = pathlib.Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude"
-    return str(exe) if exe.exists() else None
-
-
-def auth_summary():
-    """What the Claude Code binary says it will authenticate with. Informational:
-    the binary is the authority and fails clearly by itself if there is nothing."""
-    exe = _bundled_cli() or shutil.which("claude")
-    if not exe:
-        return None
-    try:
-        out = subprocess.run([exe, "auth", "status"], capture_output=True, text=True, timeout=20)
-        status = json.loads(out.stdout)
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
-        return None
-    provider = status.get("apiProvider")
-    via = f" via {provider}" if provider and provider != "firstParty" else ""
-    if status.get("apiKeySource"):
-        return f"{status['apiKeySource']}{via}"
-    if status.get("authMethod") == "oauth_token":
-        return f"bearer token (ANTHROPIC_AUTH_TOKEN){via}"
-    if status.get("loggedIn"):
-        plan = status.get("subscriptionType") or "org"
-        return f"claude.ai login ({plan}, {status.get('email', '?')}){via}"
-    return ("no credential found - log in to Claude Code, or set ANTHROPIC_API_KEY / "
-            "ANTHROPIC_AUTH_TOKEN (+ ANTHROPIC_BASE_URL) in the environment or in "
-            "~/.claude/settings.json")

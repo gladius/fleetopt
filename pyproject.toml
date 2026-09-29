@@ -31,8 +31,7 @@ include = ["fleetopt*"]
 
 [tool.setuptools.package-data]
 "fleetopt.probe" = ["hooks/*.py"]
-"fleetopt.drive" = ["*.md"]
-"fleetopt.optimizer" = ["*.md", "skills/*/SKILL.md", "skills/*/references/*.md"]
+"fleetopt.optimizer" = ["*.md", "skills/*/SKILL.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]  # targets/ holds other teams' agents, with tests of their own

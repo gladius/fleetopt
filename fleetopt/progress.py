@@ -14,7 +14,7 @@ async def ticking(what, every=60, said_at=None):
         while True:
             await asyncio.sleep(every)
             if not said_at or time.time() - said_at() >= every:
-                print(f"[fleetopt] still {what} ({int(time.time() - began) // 60} min)", flush=True)
+                print(f"  still {what} ({int(time.time() - began) // 60} min)", flush=True)
 
     task = asyncio.create_task(tick())
     try:
