@@ -11,8 +11,11 @@ Limits, each learned on a real agent:
 - measure: changed code runs once before three times, and a run that takes 3x the
   original's steps is stopped (a fix once removed the only exit from a loop: 170 rounds);
 - the team's key, the clock and fleetopt's own spend each end the run;
-- keep: better past the noise, the judge passes every request, the graph keeps its nodes
-  and edges, and no answer from the team's eval cases is written into the code.
+- run_evals: the team's own eval command, in its own environment, the same command before
+  and after; its model calls count toward the team's cap;
+- keep: better past the noise, the graph keeps its nodes and edges, the team's tests and
+  evals are untouched, and a separate reader finds nothing in the team's evals that passed
+  before and fails now.
 """
 
 import asyncio
@@ -30,15 +33,15 @@ import time
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from fleetopt.evidence import evals as evals_mod
 from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
 from fleetopt.probe import runner, store
 
 RUNS = 3           # runs of the agent per measurement
 TRIES = 4          # tries to start the agent, one input each
-MAX_CASES = 20     # the team's eval cases run on every measurement, up to this many; FLEETOPT_MAX_CASES overrides
-MIN_INPUTS = 3     # without cases: fewer, and the variation in a model's answers hides a real saving (observed: 1)
+MAX_INPUTS = 8     # requests a run
+MIN_INPUTS = 3     # fewer, and the variation in a model's answers hides a real saving (observed: 1)
+EVAL_MINUTES = 30  # one run of the team's evals; FLEETOPT_EVAL_MINUTES overrides
 STEP_FACTOR = 3    # a changed agent may take this many times the original's steps per run
 BROKEN_FACTOR = 6  # ... or this many, when the original finished nothing and so stopped early
 MIN_STEPS = 150
@@ -47,6 +50,9 @@ MAX_MINUTES = 120  # the whole run; FLEETOPT_MAX_MINUTES overrides
 DRIVER = pathlib.Path(runner.__file__).with_name("driver.py")
 SECRET = re.compile(r"key|token|secret|password|credential", re.I)
 KEYISH = re.compile(r"^[A-Z][A-Z0-9_]*(?:API_KEY|AUTH_TOKEN)$")
+# The team's tests, evals and eval data: how they know the agent works, never changed to pass.
+TESTS = re.compile(r"(^|/)(tests?|evals?|evaluations?|datasets?|eval_data|goldens?)(/|$)|(^|/)(test_[^/]*|[^/]*_test"
+                   r"|conftest)\.py$", re.I)
 
 CTX = {}  # set by begin() for one run
 
@@ -173,26 +179,6 @@ def spread(texts, n):
     return texts if len(texts) <= n else [texts[i * len(texts) // n] for i in range(n)]
 
 
-def team_inputs(project, supplied=None):
-    """(cases, inputs, where from): the team's eval cases, supplied or found in the project.
-    All their inputs are what the agent is run on, up to MAX_CASES, so every request is
-    judged on its expected answer."""
-    cases, _ = evals_mod.load(pathlib.Path(supplied).resolve() if supplied else project)
-    if not cases:
-        if supplied:
-            raise ValueError(f"no eval cases could be read from {supplied}: a case is an input and its expected answer")
-        return [], [], None
-    by_source = {}
-    for case in cases:
-        by_source.setdefault(case["source"], []).append(case["input"])
-    source, texts = max(by_source.items(), key=lambda kv: len(kv[1]))
-    texts = list(dict.fromkeys(texts))
-    cap = int(os.environ.get("FLEETOPT_MAX_CASES") or MAX_CASES)
-    where = pathlib.Path(source).name + (f" ({cap} of its {len(texts)} cases, spread across it)" if len(texts) > cap else
-                                         f" (all {len(texts)} cases)")
-    return cases, spread(texts, cap), where
-
-
 def key_names(project):
     """Names of the provider keys set in the environment or the project's .env. Names
     only: a value is never read into fleetopt."""
@@ -250,16 +236,16 @@ def _entry(plan):
             template = json.loads(template)
         except ValueError:
             pass
-    inputs = CTX["inputs"] or list(dict.fromkeys(t for t in plan.get("inputs") or [] if isinstance(t, str) and t.strip()))
+    inputs = list(dict.fromkeys(t for t in plan.get("inputs") or [] if isinstance(t, str) and t.strip()))
     if len(inputs) < MIN_INPUTS:
-        raise ValueError(f"{len(inputs)} input(s) given; give 4 that differ in kind (at least {MIN_INPUTS}), as the "
-                         "agent's users would send them")
+        raise ValueError(f"{len(inputs)} input(s) given; give 4 to {MAX_INPUTS} that differ in kind (at least "
+                         f"{MIN_INPUTS}), from the team's eval data where there is some")
     env = {k: str(v) for k, v in (plan.get("env") or {}).items() if not SECRET.search(k)}
     return {"project": str(project), "name": plan.get("agent") or "agent", "job": str(plan.get("job") or "")[:300],
             "graph": graph, "paths": [str(p) for p in plan.get("paths") or ["."]], "interpreter": python,
             "env_file": plan.get("env_file"), "env": env, "config": plan.get("config") or {},
             "context": plan.get("context") or {}, "store": plan.get("store"), "input_template": template,
-            "inputs": inputs if CTX["inputs"] else spread(inputs, 6), "inputs_from": CTX["inputs_from"] or plan.get("inputs_from") or "written by fleetopt"}
+            "inputs": spread(inputs, MAX_INPUTS), "inputs_from": plan.get("inputs_from") or "written by fleetopt"}
 
 
 def started(entry):
@@ -303,7 +289,7 @@ async def start(args):
         started(entry)
         say(f"  started: {entry['name']} ({entry['graph'].rsplit('/', 1)[-1]}), {len(entry['inputs'])} test inputs "
             f"from {entry['inputs_from']}, each run" + (f" (try {CTX['tries']})" if CTX["tries"] > 1 else ""))
-        verdict = "It started. Now measure it." + ("" if result["finished"] else
+        verdict = "It started." + ("" if result["finished"] else
                                                    " No request finished: it is measured and reviewed as broken.")
     elif result["requests"] and not result["model_calls"]:
         say(f"  try {CTX['tries']}: it ran, and no model call was seen")
@@ -316,12 +302,12 @@ async def start(args):
 
 # --- the run: git, measurement and the gate -----------------------------------------------
 
-def begin(project, out, *, entry_file, entry=None, cases=(), inputs=(), inputs_from=None, look_only=False,
-          team_usd=TEAM_USD, minutes=MAX_MINUTES, first_session=0):
+def begin(project, out, *, entry_file, entry=None, look_only=False, team_usd=TEAM_USD, minutes=MAX_MINUTES,
+          first_session=0, run_dir=None):
     """Everything the tools share for one run, from the code as it stands."""
     CTX.clear()
     CTX.update(project=pathlib.Path(project).resolve(), out=pathlib.Path(out).resolve(), events=[], entry_path=entry_file,
-               eval_cases=list(cases) or None, inputs=list(inputs), inputs_from=inputs_from, look_only=look_only,
+               run_dir=pathlib.Path(run_dir or out), look_only=look_only, evals_before=None, evals_after={}, n_evals=0,
                max_team_usd=team_usd, max_minutes=minutes, deadline=time.time() + 60 * minutes,
                first_session=first_session, said_at=time.time(), tries=0, run_cmd=None, job="answer the user's request",
                baseline=None, saved=[], measured=None, results={}, changes={}, n=0)
@@ -394,26 +380,30 @@ def _compare(before, after):
     return result
 
 
-async def _judge(label):
-    base, cand = _ids(CTX["base"]), _ids(label)
-    with _conn() as conn:
-        passed, results, correctness = await judge_mod.judge_sessions(conn, CTX["job"], base[0], cand[0],
-                                                                      CTX.get("eval_cases"))
-    _record("judge", baseline=CTX["base"], candidate=label, passed=passed, equivalence=results,
-            correctness=correctness, baseline_state=_state(base), candidate_state=_state(cand))
-    return passed, results
+def _read_evals(command, before, after):
+    return judge_mod.compare(command, before, after)  # separate and read-only: see evidence/judge.py
 
 
-def _answers_written():
-    """Expected answers from the team's cases written into the code since it was last kept.
-    A coding agent was caught hardcoding answers for its test inputs (arXiv 2607.18064)."""
-    added = " ".join(line[1:] for line in _git("diff", CTX["kept_sha"], "HEAD").splitlines()
-                     if line.startswith("+") and not line.startswith("+++"))
-    text = evals_mod._norm(added)
-    # ponytail: an answer pasted whole or by its opening; a paraphrase gets through, and a
-    # person reads the branch before anything is merged
-    needles = (evals_mod._norm(c["expected"])[:80] for c in CTX.get("eval_cases") or [])
-    return [n for n in needles if len(n) >= 20 and n in text]
+def _tests_touched():
+    return [f for f in _git("diff", "--name-only", CTX["kept_sha"], "HEAD").splitlines() if TESTS.search(f)]
+
+
+def _run_evals(command):
+    """The team's eval command, in the project's own environment, under the probe so its model
+    calls count toward the cap. The project's env file is loaded by the shell that runs it, so
+    its values never pass through fleetopt. Returns (exit code, seconds, full output)."""
+    entry, env_file = CTX.get("entry") or {}, (CTX.get("entry") or {}).get("env_file")
+    shell = (f"set -a; . ./{shlex.quote(env_file)}; set +a; " if env_file and (CTX["project"] / env_file).exists()
+             else "") + command  # ponytail: POSIX shells; a Windows project runs the command as given
+    python = pathlib.Path(entry.get("interpreter") or interpreter(CTX["project"]))
+    minutes = float(os.environ.get("FLEETOPT_EVAL_MINUTES") or EVAL_MINUTES)
+    began = time.time()
+    raw, traces, graphs, code = runner.execute(CTX["project"], shell if os.name != "nt" else command, CTX["out"],
+                                               timeout=60 * minutes, path_first=python.parent)
+    text = runner.output_tail(raw, lines=100_000)
+    CTX["n_evals"] += 1
+    runner.ingest(CTX["project"], command, CTX["out"], f"evals-{CTX['n_evals']}", raw, traces, graphs, code)
+    return code, time.time() - began, text
 
 
 def _requests():
@@ -462,6 +452,9 @@ async def measure(args):
     stop = over()
     if stop:
         return _ok(f"Refused: {stop}. Undo what is not kept, and report.")
+    if CTX["baseline"] is None and not CTX["look_only"] and not CTX["evals_before"]:
+        return _ok("Refused: run the team's evals on the code as it is first (run_evals). If the project has none, "
+                   "say 'No evals found: create them, then run this again' and stop.")
     if CTX["baseline"] is None:
         return await _baseline()
     if _dirty():
@@ -485,7 +478,7 @@ async def measure(args):
     line = moved(result)
     _mark("measured", line)
     say(f"  measured: {line}")
-    notes = ["Something got better past the noise: keep judges the answers and keeps it if they hold." if gain(result)
+    notes = ["Something got better past the noise: run the team's evals on this code, then keep." if gain(result)
              else "Nothing got better past the noise, so keep will refuse it."]
     if _shape(label) != _shape(CTX["base"]):
         notes.append("It changes the graph's nodes or edges, so keep will refuse it.")
@@ -524,8 +517,9 @@ def _refuse(why):
 
 
 @tool("keep", "Keep what was saved and measured since the code was last kept, if it has earned it: something got "
-      "better past the noise, the judge finds the answers still hold, the graph keeps its nodes and edges. "
-      "Otherwise it is refused, with the reason.", {})
+      "better past the noise, the graph keeps its nodes and edges, the team's tests and evals are untouched, and "
+      "the team's evals, run on this code, still pass everything they passed on the original. Otherwise it is "
+      "refused, with the reason.", {})
 async def keep(args):
     label = CTX["measured"]
     if not CTX["saved"] or not label:
@@ -537,24 +531,67 @@ async def keep(args):
         return _refuse("nothing got better past the noise")
     if _shape(label) != _shape(CTX["base"]):
         return _refuse("it changes the graph's nodes or edges, which is a design change")
-    written = _answers_written()
-    if written:
-        return _refuse(f"it writes an answer from the team's eval cases into the code ({written[0][:40]!r}...)")
+    touched = _tests_touched()
+    if touched:
+        return _refuse(f"it changes the team's tests or evals ({', '.join(touched[:3])})")
+    before, after = CTX["evals_before"], CTX["evals_after"].get(runner.code_state(CTX["project"]))
+    if not before or not after:
+        return _ok("Refused: run the team's evals on this code first (run_evals, the same command as on the original).")
     stop = over()
     if stop:
         return _ok(f"Refused: {stop}. Undo what is not kept, and report.")
-    passed, results = await _judge(label)
-    ok = sum(bool(r["kept_on"]) for r in results)
-    if not passed:
-        reasons = "; ".join(r["reason"][:150] for r in results if not r["kept_on"])[:600]
-        return _refuse(f"answers changed on {len(results) - ok} of {len(results)} requests: {reasons}")
-    detail = f"{moved(result)} · answers hold {ok}/{len(results)}"
+    say("  reading the team's evals: before and after")
+    held, why = await _read_evals(before["command"], before["text"], after["text"])
+    _record("evals_read", command=before["command"], held=held, why=why)
+    if not held:
+        return _refuse(f"the team's evals: {why}")
+    detail = f"{moved(result)} · the team's evals pass as before"
     names = list(CTX["saved"])
     _mark("kept", detail)
     CTX.update(kept_sha=_git("rev-parse", "HEAD"), kept_label=label, saved=[], measured=None)
     _record("keep", changes=names, label=label)
     say(f"  kept: {' + '.join(names)} ({detail})")
     return _ok(f"Kept: {detail}. What comes next is compared with the code as it is now.")
+
+
+@tool("run_evals", "Run the team's own eval suite with the command they use (e.g. 'pytest tests/evals', 'python "
+      "evals/run.py'), in the project's environment, under watch. On the code as it is, it records what passes "
+      "today; after your changes are saved, run the same command again before keep. Returns the exit code and "
+      "the end of the output; the whole output is kept.", {"command": str})
+async def run_evals(args):
+    from fleetopt.optimizer import agent  # the shell's rules apply to this command too
+
+    command = " ".join((args.get("command") or "").split())
+    if not command:
+        return _ok("Refused: give the command the team runs its evals with.")
+    for rule, why in ((agent.PUBLISH, "nothing is pushed"), (agent.GIT_WRITE, "git is fleetopt's"),
+                      (agent.ENV_MUTATION, "nothing is installed or downloaded")):
+        if rule.search(command):
+            return _ok(f"Refused: {why}. Give the command that only runs the evals.")
+    stop = over()
+    if stop:
+        return _ok(f"Refused: {stop}.")
+    if _dirty():
+        return _ok("Refused: save or undo your edits first; the evals run on saved code.")
+    before = CTX["evals_before"]
+    if before and command != before["command"]:
+        return _ok(f"Refused: run the same command as on the original, so the two can be compared: {before['command']}")
+    original = _git("rev-parse", "HEAD") == CTX["start_sha"]
+    say(f"  running the team's evals{' on the code as it is' if original else ''}: {command}")
+    code, seconds, text = await asyncio.to_thread(_run_evals, command)
+    CTX["untracked"] = _untracked()  # results files an eval run writes are not edits
+    kept = CTX["run_dir"] / f"evals-{CTX['n_evals']}.log"
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    kept.write_text(text, encoding="utf-8")
+    run = {"command": command, "exit": code, "text": text}
+    if original:
+        CTX["evals_before"] = run
+    else:
+        CTX["evals_after"][runner.code_state(CTX["project"])] = run
+    _record("evals", command=command, exit=code, original=original, log=str(kept))
+    say(f"    exit {code} in {seconds:.0f} s")
+    tail = "\n".join(text.splitlines()[-40:])
+    return _ok(f"Exit {code} in {seconds:.0f} s. Whole output: {kept}\n\nThe end of it:\n{tail}")
 
 
 @tool("undo", "Put the code back as it was last kept, dropping every change saved since. `why`: a few words.",
@@ -606,7 +643,7 @@ async def query(args):
 
 
 LOOK = [start, measure, query]
-CHANGE = LOOK + [save_change, keep, undo]
+CHANGE = LOOK + [run_evals, save_change, keep, undo]
 
 
 def server(look_only=False):

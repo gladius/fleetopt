@@ -1,8 +1,16 @@
 # fleetopt
 
-Makes a LangGraph agent cheaper, and proves its answers still hold. Point it at a
+Makes a LangGraph agent cheaper, and proves it on the team's own evals. Point it at a
 project: it works out how to run the agent, finds where it wastes tokens and money,
-changes it on a new branch, and keeps only what it can prove.
+changes it on a new branch, and keeps only what is cheaper and still passes the team's evals.
+
+## What the project needs
+
+Your normal development setup, ready: the project under git, the agent running in its own
+environment with its keys, and **an eval suite you run** (any tool: pytest, deepeval,
+LangSmith, Galileo, your own script). fleetopt checks first; if something is missing it
+says what, and stops before spending anything. Without evals: "No evals found: create
+them, then run this again."
 
 ```bash
 fleetopt review <project>     # look only: where it wastes tokens and money. Changes nothing
@@ -33,20 +41,22 @@ One Claude agent does the work, the way an expert would; code holds the numbers 
 
 1. **Start it.** The agent reads the project and works out how to run its agent, then
    tries it on one input. It is remembered per project.
-2. **Measure it** as it is: 3 runs, every model call, token and step recorded.
-3. **Find the waste**: prompts that grow, caching not used, a bigger model than a step
+2. **Run your evals** on the code as it is: that is what "still works" means.
+3. **Measure it** as it is: 3 runs, every model call, token and step recorded.
+4. **Find the waste**: prompts that grow, caching not used, a bigger model than a step
    needs, output with no limit, loops that do not stop early, repeated calls, oversized
    tool lists.
-4. **Change it** (apply only), each change its own commit, named in plain words. Changes
-   it is sure of are measured together; the rest one at a time.
-5. **Prove it**: a change is kept only if something got better past the noise and the
-   answers still hold on every request: correct by the team's eval case where one covers
-   it, the same as before where none does. Changes to the graph's structure are out of
-   scope and never kept. Nothing is merged or pushed.
+5. **Change it** (apply only): every change the evidence supports, each its own commit,
+   named in plain words, measured together.
+6. **Prove it**: kept only if it is cheaper past the noise and your evals, run again,
+   still pass everything they passed before. A separate model call reads the two eval
+   results; the agent that made the change never grades it. Your tests and evals are never
+   changed, and changes to the graph's structure are out of scope. Nothing is merged or
+   pushed.
 
 When it cannot help it says so and stops: something only the team can provide (a key, a
-service, a dependency), or an agent whose model calls it cannot see (they do not go
-through LangChain). Without eval cases, answers are compared with the original's.
+service, a dependency, evals), or an agent whose model calls it cannot see (they do not go
+through LangChain).
 
 ## What ends a run
 
@@ -58,6 +68,7 @@ through LangChain). Without eval cases, answers are compared with the original's
 | One run of the agent | 15 minutes (`FLEETOPT_RUN_MINUTES`), stopped with everything it started |
 | A changed agent's steps | 3 times the original's: stopped, and changed code runs once before three times |
 | Tries to start an agent | 4 |
+| One run of your evals | 30 minutes (`FLEETOPT_EVAL_MINUTES`) |
 
 ## What keeps it safe
 
@@ -73,7 +84,7 @@ Enforced, not asked; each is a test in `tests/test_invariants.py`.
 
 | Flag | Meaning |
 |---|---|
-| `--evals FILE` | Eval cases (input and expected answer). Their inputs are what the agent is run on |
+| `--evals COMMAND` | How you run your evals, e.g. `pytest tests/evals`. Found in the project otherwise |
 | `--graph NAME` | Which agent, when a project has several |
 | `--max-usd N` | Cap on fleetopt's own spend |
 | `--out DIR` | Where records go (default `./.fleetopt`) |

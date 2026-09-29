@@ -5,8 +5,8 @@ start the project's agent, measures it, finds the waste, changes the code, prove
 change, looks again and reports. `review` is the same agent without the tools that
 change anything. What it may not decide is enforced, not asked: the tools (tools.py)
 hold the numbers, the limits and git; the hooks here keep edits inside the project on
-fleetopt's branch, and nothing installed, pushed or run by hand. The verdict is computed
-from what the tools recorded, never taken from what the session wrote.
+fleetopt's branch, and nothing installed, pushed or run by hand. What is kept is decided by
+`keep`, on the measurements and on the team's own evals, never on what the session wrote.
 """
 
 import datetime
@@ -22,7 +22,7 @@ from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 from fleetopt import config
 from fleetopt.evidence import measure as measure_mod
 from fleetopt.optimizer import tools
-from fleetopt.probe import runner, store
+from fleetopt.probe import store
 
 _HERE = pathlib.Path(__file__).parent
 SKILLS = ("caching", "model-tier", "prompt-growth", "redundant-work", "tool-surface")
@@ -138,44 +138,12 @@ def build_options(project, model=None, max_usd=None, start_branch=None, look_onl
     )
 
 
-# --- the verdict: computed from what the tools recorded -----------------------------------
-
-def verdict(events, final=None, start=None):
-    """What the measurements support. Only a judged comparison of two different code states
-    counts, and every judgment of the code left on the branch counts: one failure is a
-    failure. A change that failed and was undone does not condemn the ones kept."""
-    real = [e for e in events if e["event"] == "judge" and e.get("baseline_state") != e.get("candidate_state")]
-    if not real:
-        return "NOTHING PROVEN: no change was judged against the code it started from."
-    if final and final == start:
-        return (f"NOTHING LEFT STANDING: {len({e['candidate_state'] for e in real})} changed version(s) were "
-                "judged and undone. The code is as it started.")
-    final = final or real[-1]["candidate_state"]
-    judged = [e for e in real if e["candidate_state"] == final]
-    if not judged:
-        return (f"NOT PROVEN: the code as it was left ({final}) was never judged. The last code judged was "
-                f"{real[-1]['candidate_state']}.")
-
-    def detail(e):
-        ok = sum(bool(r["equivalent"]) for r in e["equivalence"])
-        text = f"{e['candidate']}: answers unchanged {ok}/{len(e['equivalence'])}"
-        c = e.get("correctness")
-        if c:
-            return text + (f", correct on the team's cases {c['baseline_pass']}/{c['matched']} before and "
-                           f"{c['candidate_pass']}/{c['matched']} after")
-        return text + ", correctness not checked (no eval cases)"
-
-    details = "; ".join(detail(e) for e in judged)
-    if not all(e["passed"] for e in judged):
-        return f"NOT PROVEN SAFE: the judge failed ({details})."
-    return f"PROVEN ON THIS EVIDENCE: the judge passed ({details})."
-
-
 # --- one run ------------------------------------------------------------------------------
 
 MISSION = {
     True: "Review the LangGraph agent in this project: start it if needed, measure it once as it is, find where "
-          "it wastes tokens and money, and report what is worth changing. This run changes nothing.",
+          "it wastes tokens and money, and report what is worth changing. This run changes nothing and does not "
+          "run the team's evals; say whether the project has an eval suite and how it is run.",
     False: "Make the LangGraph agent in this project cost less without changing what it answers: start it if "
            "needed, measure it, find the waste, change it, prove each change, look again, and report.",
 }
@@ -228,7 +196,7 @@ def _newest(out):
         return conn.execute("SELECT COALESCE(MAX(id), 0) FROM sessions").fetchone()[0]
 
 
-def _prompt(look_only, entry, inputs, cases, graph, team, minutes, max_usd, branch, earlier):
+def _prompt(look_only, entry, evals, graph, team, minutes, max_usd, branch, earlier):
     ctx = tools.CTX
     lines = [MISSION[look_only], ""]
     if entry:
@@ -240,10 +208,8 @@ def _prompt(look_only, entry, inputs, cases, graph, team, minutes, max_usd, bran
                      f"interpreter: {tools.interpreter(ctx['project'])}.")
         if graph:
             lines.append(f"The person running fleetopt asked for this agent: {graph}.")
-        lines.append(f"Inputs: fleetopt runs it on the team's eval cases ({len(inputs)}); leave `inputs` out."
-                     if inputs else "Inputs: give 4 that differ in kind (at least 3).")
-    lines.append(f"Eval cases: {len(cases)}; the judge checks each answer against its case where one matches."
-                 if cases else "Eval cases: none; the judge compares each answer with the original's.")
+    if evals:
+        lines.append(f"The person running fleetopt says the team runs its evals with: {evals}")
     lines.append(f"Limits, held by the tools: ${team:.2f} on the team's key, {minutes:g} minutes, ${max_usd:.2f} "
                  "for you.")
     if branch:
@@ -255,7 +221,7 @@ def _prompt(look_only, entry, inputs, cases, graph, team, minutes, max_usd, bran
 
 async def run(project, out, *, look_only=False, evals=None, graph=None, model=None, max_usd=5.0):
     """One run of the agent. Returns the facts the summary is computed from. Raises
-    ValueError or RuntimeError when it cannot begin (no git, unreadable eval cases)."""
+    RuntimeError when it cannot begin (the project is not under git)."""
     from claude_agent_sdk import (AssistantMessage, ClaudeSDKError, ResultMessage, TextBlock, ToolResultBlock,
                                   ToolUseBlock, UserMessage, query)
 
@@ -265,18 +231,14 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     out.mkdir(parents=True, exist_ok=True)
     began = datetime.datetime.now()
     run_dir = out / "runs" / f"{began:%Y%m%d-%H%M%S}-{project.name}"
-    cases, inputs, inputs_from = tools.team_inputs(project, evals)
     path = tools.entry_path(out, project, graph or "agent")
     entry = _saved_entry(path)
-    if entry and not inputs and len(entry["inputs"]) < tools.MIN_INPUTS:
+    if entry and len(entry["inputs"]) < tools.MIN_INPUTS:
         entry = None  # observed: an entry from before the rule, 1 input: too few to see past the noise
-    if entry and inputs and entry["inputs"] != inputs:  # the same agent, asked the team's cases now
-        entry.update(inputs=inputs, inputs_from=inputs_from)
-        path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
     team = float(os.environ.get("FLEETOPT_TEAM_USD") or tools.TEAM_USD)
     minutes = float(os.environ.get("FLEETOPT_MAX_MINUTES") or tools.MAX_MINUTES)
     first = _newest(out)
-    tools.begin(project, out, entry_file=path, entry=entry, cases=cases, inputs=inputs, inputs_from=inputs_from,
+    tools.begin(project, out, entry_file=path, entry=entry, run_dir=run_dir,
                 look_only=look_only, team_usd=team, minutes=minutes, first_session=first)
     ctx = tools.CTX
     start_branch = _git(project, "rev-parse", "--abbrev-ref", "HEAD")
@@ -287,7 +249,7 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     if not look_only and _review_path(out, project, ctx["start_state"]).exists():
         earlier = _review_path(out, project, ctx["start_state"]).read_text(encoding="utf-8")
 
-    prompt = _prompt(look_only, entry, inputs, cases, graph, team, minutes, max_usd, branch, earlier)
+    prompt = _prompt(look_only, entry, evals, graph, team, minutes, max_usd, branch, earlier)
     options = build_options(project, model, max_usd, start_branch, look_only)
     run_dir.mkdir(parents=True, exist_ok=True)
     log_file = (run_dir / "log.txt").open("w", encoding="utf-8")
@@ -334,7 +296,6 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     tools.finish()
 
     kept = int(tools._git("rev-list", "--count", f"{ctx['start_sha']}..HEAD") or 0) if branch else 0
-    final_state = runner.code_state(project)
     whole = tools.moved(tools._compare(ctx["base"], ctx["kept_label"])) if kept else None
     diff = tools._git("diff", ctx["start_sha"], "HEAD") if kept else ""
     if branch:  # the team's working copy goes back where it was; the branch holds what was kept
@@ -349,10 +310,9 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     facts = {
         "mode": "review" if look_only else "apply", "project": str(project), "started": bool(ctx.get("run_cmd")),
         "agent": (ctx.get("entry") or {}).get("name"), "measured": bool(ctx.get("baseline")),
-        "baseline": ctx.get("baseline"), "cases": len(cases),
+        "baseline": ctx.get("baseline"), "evals": (ctx.get("evals_before") or {}).get("command"),
         "changes": [{"name": n, "outcome": o, "detail": d} for n, (o, d) in ctx["changes"].items()],
         "kept": kept, "whole": whole, "branch": branch if kept else None,
-        "verdict": verdict(ctx["events"], final_state, ctx["start_state"]) if branch else None,
         "team_runs": runs, "team_cost": team_cost, "own_cost": own, "account": account, "run_dir": str(run_dir),
     }
     (run_dir / "report.md").write_text("\n\n".join(filter(None, [account, "\n".join(summary(facts))])) + "\n",
@@ -377,10 +337,8 @@ def summary(facts):
         for i, c in enumerate(facts["changes"]):
             lines.append(f"  {'Changes' if not i else '':<8} {c['name']:<{width}}  {c['outcome']}"
                          + (f": {c['detail']}" if c["detail"] else ""))
-        lines.append("  Checked  " + (f"answers against {facts['cases']} eval cases" if facts["cases"] else
-                                      "answers against the agent's original answers (no eval cases in the project)"))
-        if facts["kept"] and facts["verdict"]:
-            lines.append(f"  Verdict  {facts['verdict'].split(':')[0].lower()}")
+        lines.append("  Checked  " + (f"the team's evals ({facts['evals']}), before and after" if facts["evals"] else
+                                      "no eval suite was run, so nothing could be kept"))
     elif not facts["measured"]:
         lines.append("  Result   " + ("could not start it" if not facts["started"] else "could not measure it")
                      + ": see why above")

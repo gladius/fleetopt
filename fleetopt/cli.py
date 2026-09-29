@@ -27,8 +27,8 @@ def _parser():
                             ("apply", 5.0, "look, change the agent on a new branch, and prove each change")):
         p = sub.add_parser(name, help=text)
         p.add_argument("project")
-        p.add_argument("--evals", help="eval cases (input and expected answer), JSONL/JSON or deepeval tests; their "
-                                       "inputs are what the agent is run on. Found in the project otherwise")
+        p.add_argument("--evals", metavar="COMMAND", help="how the team runs its evals, e.g. 'pytest tests/evals'. "
+                                                          "Found in the project otherwise")
         p.add_argument("--graph", help="which agent, when the project has several: a name from langgraph.json, "
                                        "or file.py:variable")
         p.add_argument("--max-usd", type=float, default=usd,

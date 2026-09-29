@@ -35,10 +35,10 @@ def project(tmp_path):
     return target.resolve()
 
 
-def _trying(project, tmp_path, inputs=()):
+def _trying(project, tmp_path):
     tools.CTX.clear()
     tools.CTX.update(project=project, out=(tmp_path / "out").resolve(), entry_path=tools.entry_path(tmp_path / "out", project),
-                     inputs=list(inputs), inputs_from=None, tries=0, run_cmd=None)
+                     tries=0, run_cmd=None)
     return lambda plan: asyncio.run(tools.start.handler({"entry": json.dumps(plan)}))["content"][0]["text"]
 
 
@@ -99,31 +99,6 @@ def test_start_proves_an_entry_by_running_it_and_says_what_it_saw(project, tmp_p
         assert "started already" in trying(ENTRY)
         tools.CTX.update(run_cmd=None, tries=tools.TRIES)
         assert "Refused" in trying(ENTRY)                                               # four tries on the team's key
-    finally:
-        tools.CTX.clear()
-
-
-def test_the_teams_eval_cases_are_the_inputs_whatever_the_session_wrote(project, tmp_path):
-    cases = tmp_path / "cases.jsonl"
-    cases.write_text('{"input": "what is 17% of 2,340?", "expected": "397.8"}\n'
-                     '{"input": "draft an outreach email", "expected": "a short email"}\n', encoding="utf-8")
-    found, inputs, source = tools.team_inputs(project, cases)
-    assert inputs == ["what is 17% of 2,340?", "draft an outreach email"] and len(found) == 2
-    assert source == "cases.jsonl (all 2 cases)"                 # every case the team wrote is run and judged
-    with pytest.raises(ValueError, match="no eval cases could be read"):
-        tools.team_inputs(project, tmp_path / "missing")
-    assert tools.team_inputs(project) == ([], [], None)  # the fixture keeps inputs but no expected answers
-
-    many = tmp_path / "many.jsonl"
-    many.write_text("".join(f'{{"input": "question {i}", "expected": "answer {i}"}}\n' for i in range(50)), encoding="utf-8")
-    _, capped, where = tools.team_inputs(project, many)
-    assert len(capped) == tools.MAX_CASES and capped[:2] == ["question 0", "question 2"]  # spread across the set
-    assert where == "many.jsonl (20 of its 50 cases, spread across it)"
-
-    trying = _trying(project, tmp_path, inputs=capped)
-    try:
-        trying({**ENTRY, "inputs": ["something the session made up"] * 3})
-        assert tools.CTX["entry"]["inputs"] == capped
     finally:
         tools.CTX.clear()
 

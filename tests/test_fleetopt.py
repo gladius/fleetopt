@@ -17,48 +17,11 @@ import sys
 import pytest
 
 from fleetopt import cli, config
-from fleetopt.evidence import evals, measure
+from fleetopt.evidence import measure
 from fleetopt.optimizer import agent, tools
 from fleetopt.probe import runner, store
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-
-
-# --- eval discovery: a team's expected answers, three formats ------------------
-
-def test_evals_load_three_formats_and_skip_venv(tmp_path):
-    (tmp_path / "cases.jsonl").write_text(
-        '{"input": "capital of France?", "expected": "Paris"}\n'
-        '{"query": "2+2", "answer": 4}\n'
-        '{"input": "no expected answer here"}\n', encoding="utf-8")
-    (tmp_path / "suite.json").write_text(json.dumps(
-        {"cases": [{"question": "largest planet", "reference": "Jupiter"}]}), encoding="utf-8")
-    (tmp_path / "test_agent.py").write_text(
-        "from deepeval.test_case import LLMTestCase\n"
-        'case = LLMTestCase(input="who wrote Hamlet", expected_output="Shakespeare")\n'
-        'dynamic = LLMTestCase(input=make_input(), expected_output="not a literal, skipped")\n',
-        encoding="utf-8")
-    venv = tmp_path / ".venv" / "lib"
-    venv.mkdir(parents=True)
-    (venv / "ignored.jsonl").write_text('{"input": "x", "expected": "y"}\n', encoding="utf-8")
-
-    (tmp_path / "langsmith_export.json").write_text(json.dumps([
-        {"inputs": {"question": "total spent on keyboards?"}, "outputs": {"answer": "$1,118.00"}, "metadata": {}},
-        {"inputs": {"text": "only key, odd name"}, "outputs": {"label": "still a case"}},
-    ]), encoding="utf-8")
-
-    cases, notes = evals.load(tmp_path)
-    assert sorted(c["expected"] for c in cases) == ["$1,118.00", "4", "Jupiter", "Paris", "Shakespeare", "still a case"]
-    assert all(".venv" not in c["source"] for c in cases)
-    assert len(notes) == 4
-
-
-def test_evals_match_ignores_case_and_whitespace():
-    cases = [{"input": "Capital of  France?", "expected": "Paris", "source": "x"}]
-    run_inputs = json.dumps({"messages": [{"role": "user", "content": "What is the capital of france?"}]})
-    assert evals.match(cases, run_inputs) is cases[0]
-    assert evals.match(cases, json.dumps({"messages": "capital of Spain?"})) is None
-    assert evals.match(cases, "") is None
 
 
 # --- labels: a 'baseline' is this project's, completed, at the newest code state --
@@ -131,83 +94,6 @@ def test_compare_refuses_to_pool_different_source_versions(tmp_path):
     ids = [_measured(conn, 1000, code_state="v1"), _measured(conn, 1000, code_state="v2")]
     with pytest.raises(RuntimeError, match="different versions"):
         measure.aggregate(conn, ids)
-
-
-# --- the judge's bookkeeping, with the LLM calls stubbed --------------------------
-
-def test_judge_sessions_pairs_by_position_and_counts_correctness(tmp_path, monkeypatch):
-    from fleetopt.evidence import judge as judge_mod
-
-    conn = store.connect(tmp_path / "j.db")
-
-    def captured(pairs):
-        sid = _session(conn, project="p", label="x", code_state="v1", exit_code=0)
-        for i, (inputs, outputs) in enumerate(pairs):
-            conn.execute(
-                "INSERT INTO runs (session_id, run_type, inputs, outputs, start_time)"
-                " VALUES (?, 'chain', ?, ?, ?)", (sid, inputs, outputs, f"2026-01-01T00:00:0{i}"))
-        return sid
-
-    base = captured([("capital of France?", "Paris"), ("2+2", "4")])
-    cand = captured([("capital of France?", "Paris."), ("2+2", "5")])
-
-    async def fake_judge(task, inputs, before, after, model=None):
-        return {"equivalent": before.rstrip(".") == after.rstrip("."), "reason": "stub"}
-
-    async def fake_expected(task, inputs, expected, output, model=None):
-        return {"pass": output.rstrip(".") == expected, "reason": "stub"}
-
-    monkeypatch.setattr(judge_mod, "judge", fake_judge)
-    monkeypatch.setattr(judge_mod, "judge_expected", fake_expected)
-    cases = [{"input": "capital of France?", "expected": "Paris", "source": "s"},
-             {"input": "2+2", "expected": "4", "source": "s"}]
-
-    passed, results, correctness = asyncio.run(judge_mod.judge_sessions(conn, "qa", base, cand, cases))
-    assert not passed
-    assert [r["equivalent"] for r in results] == [True, False]
-    assert (correctness["matched"], correctness["baseline_pass"], correctness["candidate_pass"]) == (2, 2, 1)
-
-    # What passes, request by request. Reworded and still right by the team's case: passes.
-    reworded = captured([("capital of France?", "It is Paris"), ("2+2", "4")])
-
-    async def expected_contains(task, inputs, expected, output, model=None):
-        return {"pass": expected in output, "reason": "stub"}
-
-    monkeypatch.setattr(judge_mod, "judge_expected", expected_contains)
-    passed, results, _ = asyncio.run(judge_mod.judge_sessions(conn, "qa", base, reworded, cases))
-    assert passed and [r["equivalent"] for r in results] == [False, True]
-    assert results[0]["kept_on"] == "correct on the team's case"
-    # The same rewording with no case to say it is right: nothing to go on but the old answer.
-    passed, results, _ = asyncio.run(judge_mod.judge_sessions(conn, "qa", base, reworded))
-    assert not passed and results[0]["kept_on"] is None
-    # Both wrong: unchanged is no worse, a different wrong answer is not evidence of anything.
-    wrong = captured([("capital of France?", "Lyon"), ("2+2", "4")])
-    assert asyncio.run(judge_mod.judge_sessions(conn, "qa", wrong, captured([("capital of France?", "Lyon"), ("2+2", "4")]), cases))[0]
-    assert not asyncio.run(judge_mod.judge_sessions(conn, "qa", wrong, captured([("capital of France?", "Nice"), ("2+2", "4")]), cases))[0]
-    # A request the original never finished: judged on the team's case, since there is no old answer.
-    def with_failure(pairs):
-        sid = captured(pairs)
-        conn.execute("UPDATE runs SET outputs = NULL, error = 'IndexError()' WHERE session_id = ? AND inputs = '2+2'", (sid,))
-        return sid
-
-    broken = with_failure([("capital of France?", "Paris"), ("2+2", "x")])
-    fixed = captured([("capital of France?", "Paris"), ("2+2", "4")])
-    passed, results, correctness = asyncio.run(judge_mod.judge_sessions(conn, "qa", broken, fixed, cases))
-    assert passed and results[1]["kept_on"] == "correct on the team's case" and "did not finish" in results[1]["reason"]
-    assert (correctness["baseline_pass"], correctness["candidate_pass"]) == (1, 2)
-    assert not asyncio.run(judge_mod.judge_sessions(conn, "qa", broken, fixed))[0]     # no case: finishing is not yet being right
-    assert not asyncio.run(judge_mod.judge_sessions(conn, "qa", fixed, broken, cases))[0]  # and breaking a request never passes
-    assert not asyncio.run(judge_mod.judge_sessions(conn, "qa", broken, broken, cases))[0]  # still broken is not proven
-
-    # It was right and now it is not: fails, however alike a judge finds the two.
-    monkeypatch.setattr(judge_mod, "judge", lambda *a, **k: _always_equivalent())
-    assert not asyncio.run(judge_mod.judge_sessions(conn, "qa", base, captured([("capital of France?", "Lyon"), ("2+2", "4")]), cases))[0]
-    with pytest.raises(RuntimeError, match="different number"):
-        asyncio.run(judge_mod.judge_sessions(conn, "qa", base, captured([("x", "y")])))
-
-
-async def _always_equivalent():
-    return {"equivalent": True, "reason": "stub"}
 
 
 # --- small things that each broke a real run once ---------------------------------
@@ -377,9 +263,10 @@ ENTRY = {"name": "agent", "graph": "agent.py:graph", "inputs": ["x"], "interpret
          "inputs_from": "the test"}
 
 
-def _fake_runs(monkeypatch, failing=(), flat=(), wrong=(), reshaped=()):
-    """Running, comparing, judging and the graph's structure, faked by the change saved last."""
-    seen = {"measured": [], "judged": []}
+def _fake_runs(monkeypatch, failing=(), flat=(), broke=(), reshaped=()):
+    """Running the agent, comparing, the team's evals and the graph's structure, faked by the
+    change saved last. Nothing runs and no model is called."""
+    seen = {"measured": [], "evals": [], "read": []}
     last = lambda: tools.CTX["saved"][-1] if tools.CTX["saved"] else ""
 
     def run(label, max_steps=None, probe=False):
@@ -388,15 +275,20 @@ def _fake_runs(monkeypatch, failing=(), flat=(), wrong=(), reshaped=()):
             return None, "run 1 took more than 150 steps, far more than the original, and was stopped."
         return {"steps": 40, "completed": 3, "cost_usd": 0.01, "llm_calls": 5}, None
 
-    async def judge(label):
-        seen["judged"].append(last())
-        ok = last() not in wrong
-        return ok, [{"kept_on": "unchanged answer" if ok else None, "reason": "an answer was cut off"}]
+    def evals(command):
+        seen["evals"].append(command)
+        tools.CTX["n_evals"] += 1
+        return 0, 1.0, f"4 passed ({last() or 'the original'})"
+
+    async def read(command, before, after):
+        seen["read"].append(last())
+        return (False, "test_summary[cold-chain]: the summary no longer names the topic") if last() in broke else (True, "")
 
     monkeypatch.setattr(tools, "_measure", run)
+    monkeypatch.setattr(tools, "_run_evals", evals)
+    monkeypatch.setattr(tools, "_read_evals", read)
     monkeypatch.setattr(tools, "_compare", lambda before, after: {"cost_usd": {
         "before": 0.0125, "after": 0.01, "delta_pct": -20.0, "verdict": "within noise" if last() in flat else "improved"}})
-    monkeypatch.setattr(tools, "_judge", judge)
     monkeypatch.setattr(tools, "_shape", lambda label: ["changed"] if not label.startswith("baseline") and last() in reshaped
                         else ["same"])
     return seen
@@ -406,18 +298,19 @@ def _call(tool_name, **args):
     return asyncio.run(getattr(tools, tool_name).handler(args))["content"][0]["text"]
 
 
-def test_the_tools_keep_what_earns_it_and_undo_the_rest(tmp_path, monkeypatch):
+def test_the_tools_keep_what_earns_it_on_the_teams_evals_and_undo_the_rest(tmp_path, monkeypatch):
     project = _repo(tmp_path)
-    seen = _fake_runs(monkeypatch, failing={"loop forever"}, flat={"trim notes"}, wrong={"smaller model"},
+    seen = _fake_runs(monkeypatch, failing={"loop forever"}, flat={"trim notes"}, broke={"smaller model"},
                       reshaped={"merge two steps"})
-    cases = [{"input": "when is my refund due?", "expected": "Refunds are issued within 14 days of the request.",
-              "source": "x"}]
     edit = lambda text, name="agent.py": (project / name).write_text(text, encoding="utf-8")
     git = lambda *a: subprocess.run(["git", "-C", str(project), *a], capture_output=True, text=True, check=True).stdout
     tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", entry={**ENTRY, "project": str(project)},
-                cases=cases)
+                run_dir=tmp_path / "run")
     git("checkout", "-q", "-b", "fleetopt/test")
     try:
+        assert "run the team's evals on the code as it is first" in _call("measure")   # nothing spent without evals
+        assert "nothing is installed" in _call("run_evals", command="pip install deepeval && pytest")
+        assert "Exit 0" in _call("run_evals", command="pytest evals")      # what passes today
         assert "measure the agent as it is first" in _call("save_change", name="too early")
         assert "Edits are allowed now" in _call("measure")                 # the agent as it is, once
         assert "Nothing saved" in _call("measure")
@@ -425,6 +318,9 @@ def test_the_tools_keep_what_earns_it_and_undo_the_rest(tmp_path, monkeypatch):
         edit("x = 1\n"), _call("save_change", name="cache the system prompt")   # a bundle of two, measured once
         edit("y = 1\n", "helper.py"), _call("save_change", name="bound the output")
         assert "got better past the noise" in _call("measure")
+        assert "run the team's evals on this code first" in _call("keep")  # never kept on the numbers alone
+        assert "the same command" in _call("run_evals", command="pytest")
+        _call("run_evals", command="pytest evals")
         assert "Kept" in _call("keep")
 
         edit("x = 2\n"), edit("z = 2\n", "scratch.py"), _call("save_change", name="loop forever")
@@ -435,29 +331,30 @@ def test_the_tools_keep_what_earns_it_and_undo_the_rest(tmp_path, monkeypatch):
         edit("x = 3\n"), _call("save_change", name="trim notes"), _call("measure")
         assert "nothing got better past the noise" in _call("keep")
         _call("undo", why="")
-        edit("x = 4\n"), _call("save_change", name="smaller model"), _call("measure")
-        assert "answers changed on 1 of 1 requests: an answer was cut off" in _call("keep")
+        edit("x = 4\n"), _call("save_change", name="smaller model"), _call("measure"), _call("run_evals", command="pytest evals")
+        assert "the team's evals: test_summary[cold-chain]" in _call("keep")
         _call("undo", why="")
         edit("x = 5\n"), _call("save_change", name="merge two steps"), _call("measure")
         assert "nodes or edges" in _call("keep")                            # design is not this run's to change
         _call("undo", why="")
         edit("x = 6\n")
         assert "unsaved edits" in _call("measure")
-        edit('ANSWER = "Refunds are issued within 14 days of the request."\n')
-        _call("save_change", name="hardcode the answer"), _call("measure")
-        assert "writes an answer from the team's eval cases" in _call("keep")
+        (project / "evals").mkdir(), edit("def test_x():\n    pass\n", "evals/test_summary.py")
+        _call("save_change", name="loosen a test"), _call("measure"), _call("run_evals", command="pytest evals")
+        assert "changes the team's tests or evals (evals/test_summary.py)" in _call("keep")
         tools.finish()                                                     # left unproven: undone for it
 
         changes = {k: v[0] for k, v in tools.CTX["changes"].items()}
         assert changes == {"cache the system prompt": "kept", "bound the output": "kept", "loop forever": "undone",
                            "trim notes": "undone", "smaller model": "undone", "merge two steps": "undone",
-                           "hardcode the answer": "undone"}
+                           "loosen a test": "undone"}
         assert "150 steps" in tools.CTX["changes"]["loop forever"][1]
-        assert seen["judged"] == ["bound the output", "smaller model"]     # nothing is judged that did not gain
+        assert seen["read"] == ["bound the output", "smaller model"]      # read only for what gained, on its own run
         assert seen["measured"][0][0].startswith("baseline-") and seen["measured"][0][1:] == (None, False)
         assert all(probe and steps == 150 for _, steps, probe in seen["measured"][1:])  # changed code is watched
         assert git("log", "--format=%s").split("\n")[:3] == ["bound the output", "cache the system prompt", "base"]
         assert (project / "agent.py").read_text(encoding="utf-8") == "x = 1\n" and (project / "helper.py").exists()
+        assert (tmp_path / "run" / "evals-1.log").read_text(encoding="utf-8").startswith("4 passed")  # every run kept
 
         tools.CTX["deadline"] = 1
         edit("x = 9\n"), _call("save_change", name="late")
@@ -471,7 +368,8 @@ def test_an_agent_whose_model_calls_cannot_be_seen_is_said_so_and_nothing_more_i
     runs = []
     monkeypatch.setattr(tools, "_measure", lambda label, max_steps=None, probe=False: runs.append(label) or (
         {"steps": 12, "completed": 2, "llm_calls": 0}, None))
-    tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", entry={**ENTRY, "project": str(project)})
+    tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", entry={**ENTRY, "project": str(project)},
+                look_only=True)
     try:
         assert "without LangChain" in _call("measure")
         assert "Refused" in _call("measure") and len(runs) == 1 and runs[0].startswith("baseline-")
@@ -499,10 +397,12 @@ def test_one_agent_starts_measures_changes_and_leaves_nothing_unproven(tmp_path,
         call = lambda tool_name, **a: getattr(tools, tool_name).handler(a)
         await call("start", entry=json.dumps({"graph": "agent.py:graph", "agent": "researcher", "job": "research",
                                               "inputs": ["battery degradation", "route optimization", "cold chain"]}))
+        await call("run_evals", command="pytest evals")
         await call("measure")
         (project / "agent.py").write_text("x = 1\n", encoding="utf-8")
         await call("save_change", name="cache the system prompt")
         await call("measure")
+        await call("run_evals", command="pytest evals")
         await call("keep")
         (project / "agent.py").write_text("x = 2\n", encoding="utf-8")
         await call("save_change", name="trim notes")
@@ -516,15 +416,15 @@ def test_one_agent_starts_measures_changes_and_leaves_nothing_unproven(tmp_path,
     finally:
         tools.CTX.clear()
     git = lambda *a: subprocess.run(["git", "-C", str(project), *a], capture_output=True, text=True).stdout.strip()
-    assert "How to start it is not known yet" in seen["prompt"] and "Eval cases: none" in seen["prompt"]
-    assert "mcp__fleetopt__keep" in seen["tools"]
+    assert "How to start it is not known yet" in seen["prompt"]
+    assert {"mcp__fleetopt__keep", "mcp__fleetopt__run_evals"} <= set(seen["tools"])
     assert facts["kept"] == 1 and facts["branch"].startswith("fleetopt/")
     assert [(c["name"], c["outcome"]) for c in facts["changes"]] == [("cache the system prompt", "kept"),
                                                                     ("trim notes", "undone")]
     assert git("rev-parse", "--abbrev-ref", "HEAD") == "main"                # the team's copy is where it was
     assert git("show", f"{facts['branch']}:agent.py") == "x = 1"             # the branch holds what was kept
     text = "\n".join(agent.summary(facts))
-    assert "1 change(s) kept on branch fleetopt/" in text and "no eval cases" in text
+    assert "1 change(s) kept on branch fleetopt/" in text and "the team's evals (pytest evals), before and after" in text
     entry = json.loads(tools.entry_path(tmp_path / "out", project).read_text(encoding="utf-8"))
     assert entry["proven"] and entry["name"] == "researcher"                 # the next run knows how to start it
 
@@ -551,7 +451,7 @@ def test_review_is_the_same_agent_without_anything_that_changes_code(tmp_path, m
     finally:
         tools.CTX.clear()
     assert not seen["tools"] & {"Bash", "Edit", "Write", "mcp__fleetopt__save_change", "mcp__fleetopt__keep",
-                                "mcp__fleetopt__undo"}
+                                "mcp__fleetopt__undo", "mcp__fleetopt__run_evals"}
     assert facts["branch"] is None and facts["kept"] == 0
     branches = subprocess.run(["git", "-C", str(project), "branch"], capture_output=True, text=True).stdout
     assert "fleetopt" not in branches
@@ -569,6 +469,7 @@ def test_a_stopped_run_puts_the_teams_copy_back(tmp_path, monkeypatch, capsys):
 
     async def stopped_midway(prompt, options):  # Ctrl-C after a change was saved, before it was proven
         await tools.start.handler({"entry": json.dumps({"graph": "agent.py:graph", "inputs": ["x", "y", "z"]})})
+        await tools.run_evals.handler({"command": "pytest evals"})
         await tools.measure.handler({})
         (project / "agent.py").write_text("x = 1\n", encoding="utf-8")
         await tools.save_change.handler({"name": "trim notes"})
@@ -622,5 +523,22 @@ def test_runs_of_the_same_code_on_other_inputs_are_never_pooled(tmp_path):
         assert tools.CTX["base"] != base                                   # nor another setting
         tools.started({**four, "proven": "later", "job": "reworded"})
         assert tools.CTX["base"] == base and tools.CTX["kept_label"] == base  # the same run: reused, not rerun
+    finally:
+        tools.CTX.clear()
+
+
+def test_the_teams_evals_run_in_their_own_setup_and_are_recorded(tmp_path):
+    project = _repo(tmp_path)
+    (project / ".env").write_text("EVAL_SECRET=from-their-env-file\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(project), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "x",
+                    "--allow-empty"], check=True, capture_output=True)
+    tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", run_dir=tmp_path / "run",
+                entry={**ENTRY, "project": str(project), "env_file": ".env"})
+    try:
+        text = _call("run_evals", command='python -c "import os; print(\'3 passed\', os.environ[\'EVAL_SECRET\'])"')
+        assert "Exit 0" in text and "3 passed from-their-env-file" in text   # loaded by their shell, not by fleetopt
+        assert tools.CTX["evals_before"]["exit"] == 0
+        with store.connect(tmp_path / "out" / "fleetopt.db") as conn:     # recorded, so it counts toward the cap
+            assert conn.execute("SELECT COUNT(*) FROM sessions WHERE label = 'evals-1'").fetchone()[0] == 1
     finally:
         tools.CTX.clear()

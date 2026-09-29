@@ -153,11 +153,20 @@ def test_the_agent_drives_and_the_limits_live_in_its_tools():
     assert (tools.RUNS, tools.TEAM_USD, tools.STEP_FACTOR, tools.MAX_MINUTES) == (3, 2.0, 3, 120)
     served = {n.removeprefix("mcp__fleetopt__") for n in options().allowed_tools if n.startswith("mcp__")}
     # it measures, saves, keeps and undoes through fleetopt; nothing judges on its word
-    assert served == {"start", "measure", "query", "save_change", "keep", "undo"}
+    assert served == {"start", "measure", "query", "run_evals", "save_change", "keep", "undo"}
     assert "never remove what ends a loop" in GUIDE.lower() and "when you cannot help" in GUIDE.lower()
     assert "Never look for another way to do what was refused" in GUIDE      # a refusal is an answer
     assert "never use anything about whoever runs this tool" in GUIDE          # nothing about the operator goes out
     assert "The graph keeps its nodes and edges" in GUIDE                      # design is out of scope for now
+
+
+def test_the_teams_own_evals_are_the_proof_and_without_them_it_stops():
+    assert "No evals found: create them, then run this again" in GUIDE
+    assert "Never touch the team's tests, evals or eval data" in GUIDE
+    assert "whatever vendor they use" in GUIDE                                 # no framework is written in
+    for path in ("tests/test_agent.py", "evals/cases.jsonl", "src/agent_test.py", "conftest.py", "datasets/golden.json"):
+        assert tools.TESTS.search(path), path                                   # changes to these are never kept
+    assert not tools.TESTS.search("src/agent.py")
 
 
 def test_a_saving_is_cost_first_and_a_clean_token_cut_counts_too():
@@ -181,7 +190,7 @@ def test_what_is_shown_is_for_a_person():
     assert tools.moved({"cost_usd": {"delta_pct": 1.0, "verdict": "within noise"}}) == "no real change"
     facts = {"mode": "apply", "measured": True, "kept": 1, "branch": "fleetopt/x", "whole": "cost -24%",
              "changes": [{"name": "cache the system prompt", "outcome": "kept", "detail": "cost -24%"}],
-             "cases": 0, "verdict": "PROVEN ON THIS EVIDENCE: ...", "team_cost": 0.31, "team_runs": 16,
+             "evals": "pytest evals", "team_cost": 0.31, "team_runs": 16,
              "own_cost": 0.77, "project": "/p", "run_dir": "/r"}
     text = "\n".join(agent.summary(facts))
     assert "1 change(s) kept on branch fleetopt/x: cost -24%" in text and "cache the system prompt  kept" in text
@@ -224,51 +233,24 @@ def test_versions_of_the_source_are_never_pooled(tmp_path):
         measure.aggregate(conn, [a, b])
 
 
-def test_the_judge_fails_closed(monkeypatch):
-    async def garbage(prompt, model=None):
-        return {"_unparseable": "well, maybe"}
+def test_the_eval_reader_fails_closed(monkeypatch):
+    async def answer(value):
+        return value
 
-    monkeypatch.setattr(judge, "_ask", garbage)
-    assert asyncio.run(judge.judge("task", "in", "before", "after"))["equivalent"] is False
-    assert asyncio.run(judge.judge_expected("task", "in", "expected", "out"))["pass"] is False
+    for reply, held in (({"_unparseable": "well, maybe"}, False), ({"broke": "no"}, False), ({"broke": False}, True),
+                        ({"broke": True, "what": ["test_refund"], "reason": "it now fails"}, False)):
+        monkeypatch.setattr(judge, "_ask", lambda prompt, model=None, r=reply: answer(r))
+        assert asyncio.run(judge.compare("pytest", "4 passed", "3 passed, 1 failed"))[0] is held, reply
 
+    async def never_answers(prompt, model=None):
+        await asyncio.sleep(10)
 
-# --- the verdict belongs to the measurements, not to the agent that wants it --------------
-
-def _judged(candidate, passed, base_state="v1", cand_state="v2", before=4, after=4):
-    return {"event": "judge", "baseline": "baseline", "candidate": candidate, "passed": passed,
-            "baseline_state": base_state, "candidate_state": cand_state,
-            "equivalence": [{"equivalent": True}, {"equivalent": passed}],
-            "correctness": {"cases": 12, "matched": 4, "baseline_pass": before, "candidate_pass": after}}
-
-
-def test_a_failed_gate_cannot_be_argued_away():
-    events = [_judged("patched", False, after=3),
-              _judged("patched-again", True),                                       # one pass does not erase a failure
-              _judged("baseline-retest", False, base_state="v2", cand_state="v2")]  # same code: not a before/after
-    text = agent.verdict(events)
-    assert text.startswith("NOT PROVEN SAFE") and "4/4 before and 3/4 after" in text
-    assert "patched-again" in text and "baseline-retest" not in text
+    monkeypatch.setattr(judge, "_ask", never_answers)
+    held, why = asyncio.run(judge.compare("pytest", "a", "b", timeout=0.1))
+    assert held is False and "no answer" in why                               # a silent wait is a failure
 
 
-def test_nothing_is_proven_without_a_judged_change():
-    assert agent.verdict([]).startswith("NOTHING PROVEN")
-    assert agent.verdict([_judged("again", True, cand_state="v1")]).startswith("NOTHING PROVEN")
-    assert agent.verdict([_judged("patched", True)]).startswith("PROVEN ON THIS EVIDENCE")
-
-
-def test_the_verdict_is_about_the_code_left_on_the_branch():
-    events = [_judged("C1", True, cand_state="v2"), _judged("C2", False, cand_state="v3", after=2)]
-    # C2 failed and was undone: the branch holds v2, and v2 passed
-    assert agent.verdict(events, final="v2", start="v1").startswith("PROVEN ON THIS EVIDENCE")
-    # the same events with the failed change still on the branch
-    assert agent.verdict(events, final="v3", start="v1").startswith("NOT PROVEN SAFE")
-    # code nobody judged is not proven by its neighbours
-    text = agent.verdict(events, final="v4", start="v1")
-    assert text.startswith("NOT PROVEN") and "never judged" in text and "v4" in text
-    # everything undone
-    assert agent.verdict(events, final="v1", start="v1").startswith("NOTHING LEFT STANDING")
-
+# --- what ends a run -------------------------------------------------------------------
 
 def test_a_run_of_the_agent_that_does_not_end_is_stopped_with_what_it_started(tmp_path):
     import time
