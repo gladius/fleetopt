@@ -558,3 +558,52 @@ def test_review_is_the_same_agent_without_anything_that_changes_code(tmp_path, m
     reviews = list((tmp_path / "out" / "reviews").glob("*.md"))
     assert len(reviews) == 1 and "cache the system prompt" in reviews[0].read_text(encoding="utf-8")
     assert "Next     fleetopt apply" in "\n".join(agent.summary(facts))
+
+
+def test_a_stopped_run_puts_the_teams_copy_back(tmp_path, monkeypatch, capsys):
+    import claude_agent_sdk
+
+    project = _repo(tmp_path)
+    _fake_runs(monkeypatch)
+    _tried(monkeypatch)
+
+    async def stopped_midway(prompt, options):  # Ctrl-C after a change was saved, before it was proven
+        await tools.start.handler({"entry": json.dumps({"graph": "agent.py:graph", "inputs": ["x", "y", "z"]})})
+        await tools.measure.handler({})
+        (project / "agent.py").write_text("x = 1\n", encoding="utf-8")
+        await tools.save_change.handler({"name": "trim notes"})
+        raise KeyboardInterrupt
+        yield
+
+    monkeypatch.setattr(claude_agent_sdk, "query", stopped_midway)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            asyncio.run(agent.run(project, tmp_path / "out"))
+    finally:
+        tools.CTX.clear()
+    git = lambda *a: subprocess.run(["git", "-C", str(project), *a], capture_output=True, text=True).stdout.strip()
+    assert git("rev-parse", "--abbrev-ref", "HEAD") == "main" and "fleetopt" not in git("branch")
+    assert (project / "agent.py").read_text(encoding="utf-8") == "x = 0\n"
+    assert "your copy is back on main" in capsys.readouterr().out
+
+
+def test_a_saved_start_with_too_few_inputs_is_worked_out_again(tmp_path, monkeypatch):
+    import claude_agent_sdk
+
+    project = _repo(tmp_path)
+    path = tools.entry_path(tmp_path / "out", project)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({**ENTRY, "project": str(project), "proven": "earlier"}), encoding="utf-8")  # 1 input
+    seen = {}
+
+    async def the_agent(prompt, options):
+        seen["prompt"] = prompt
+        return
+        yield
+
+    monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
+    try:
+        asyncio.run(agent.run(project, tmp_path / "out"))
+    finally:
+        tools.CTX.clear()
+    assert "How to start it is not known yet" in seen["prompt"]

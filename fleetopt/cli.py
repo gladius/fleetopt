@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import os
 import pathlib
+import signal
 import sys
 
 from fleetopt import config
@@ -46,10 +47,15 @@ def _console_never_crashes():
             pass
 
 
+def _stop(signum, frame):
+    raise KeyboardInterrupt  # a kill ends a run the way Ctrl-C does: the team's copy is put back first
+
+
 def main(argv=None):
     _console_never_crashes()
     config.load_env()
     args = _parser().parse_args(argv)
+    signal.signal(signal.SIGTERM, _stop)
     from fleetopt.optimizer import agent, tools
 
     project = pathlib.Path(args.project).resolve()
@@ -64,6 +70,8 @@ def main(argv=None):
     except (ValueError, RuntimeError) as exc:
         print(f"  can't run: {exc}")
         return 1
+    except KeyboardInterrupt:
+        return 130
     if facts["account"] and (facts["mode"] == "review" or not facts["kept"]):  # why nothing was kept, in its words
         print("\n" + facts["account"] + "\n")
     print("\n".join(agent.summary(facts)))

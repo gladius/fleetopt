@@ -196,6 +196,19 @@ def _activity(block, project, shown):
         shown[line] = shown["last"] = line
 
 
+def _put_back(start_branch, branch):
+    """After a stopped run: nothing unproven left, the team's copy back on its own branch,
+    and fleetopt's branch kept only if it holds something kept."""
+    tools.finish()
+    if branch:
+        kept = int(tools._git("rev-list", "--count", f"{tools.CTX['start_sha']}..HEAD") or 0)
+        tools._git("checkout", "-q", start_branch)
+        if not kept:
+            tools._git("branch", "-q", "-D", branch)
+        print(f"\n  stopped: your copy is back on {start_branch}" + (f"; what was kept is on {branch}" if kept else
+                                                                   ", nothing was changed"), flush=True)
+
+
 def _saved_entry(path):
     """How to start this agent, if a try proved it before and its interpreter is still there."""
     if not path.exists():
@@ -255,6 +268,8 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     cases, inputs, inputs_from = tools.team_inputs(project, evals)
     path = tools.entry_path(out, project, graph or "agent")
     entry, reuse = _saved_entry(path), False
+    if entry and not inputs and len(entry["inputs"]) < tools.MIN_INPUTS:
+        entry = None  # observed: an entry from before the rule, 1 input: too few to see past the noise
     if entry and inputs and entry["inputs"] != inputs:  # the same agent, asked the team's cases now
         entry.update(inputs=inputs, inputs_from=inputs_from)
         path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
@@ -284,7 +299,7 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         log_file.flush()
 
     tools.say(f"  full log, live: {_shown(run_dir / 'log.txt')}")
-    account, own, shown, said = "", 0.0, {}, None
+    account, own, shown, said, stopped = "", 0.0, {}, None, True
     try:
         async with ticking("working", said_at=lambda: ctx.get("said_at", 0)):
             async for message in query(prompt=prompt, options=options):
@@ -309,11 +324,15 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
                     own = getattr(message, "total_cost_usd", None) or 0.0
                     log(message.result or "")
                     account = _report_only(message.result or "")
+        stopped = False
     except ClaudeSDKError as exc:  # out of turns or budget: what the tools recorded still stands
         log(f"session ended: {str(exc).splitlines()[0][:200]}")
         tools.say(f"  the session ended early: {str(exc).splitlines()[0][:120]}")
+        stopped = False
     finally:
         log_file.close()
+        if stopped:  # Ctrl-C or a kill: observed, the team's copy left on fleetopt's branch
+            _put_back(start_branch, branch)
     tools.finish()
 
     kept = int(tools._git("rev-list", "--count", f"{ctx['start_sha']}..HEAD") or 0) if branch else 0
