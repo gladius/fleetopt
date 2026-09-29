@@ -208,13 +208,22 @@ def test_structural_patches_wait_for_eval_cases():
     assert "what must survive" in guide
 
 
+def test_starting_an_agent_is_read_not_guessed_and_only_checked_in_code():
+    from fleetopt.drive import entry, setup
+
+    for gone in ("scanned", "candidates", "choose", "inputs_for", "other_provider"):
+        assert not hasattr(entry, gone), gone        # the rules that each came from one agent
+    skill = " ".join(setup.SKILL.split())
+    assert "List each in `missing`" in skill and "never run anything yourself" in skill.lower()
+    assert "Never put a key, token or password anywhere in your answer" in skill
+
+
 def test_nothing_about_the_operator_goes_into_what_is_sent_to_the_agent():
     # Observed 2026-09-28: inputs written for an agent opened with the operator's first
     # name, and the same name was set as the agent's user id.
     from fleetopt.drive import setup
 
-    for prompt in (setup.INPUTS, setup.REPAIR):
-        assert "whoever is running this tool" in " ".join(prompt.split())
+    assert "never use anything about whoever runs this tool" in " ".join(setup.SKILL.split())
 
 
 def test_a_refusal_is_an_answer_not_an_obstacle():

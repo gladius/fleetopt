@@ -1,20 +1,20 @@
-"""How to start a project's agent: found once, proven once, remembered.
+"""How to start a project's agent: worked out once, proven once, remembered.
 
-Starting an agent is a fact about the project, not something a user should have to
-type. fleetopt reads what the project declares (langgraph.json), or finds the
-compiled graph in its source, picks the project's own interpreter and env file,
-takes inputs from the team's eval cases, and proves the result with one input. What
-it settles on is an entry: a small JSON file in fleetopt's own folder, never in the
-team's repo. The next run reads it and asks nothing.
+A read-only session reads the project the way a developer joining the team would, and
+answers with an entry (setup.py, guided by SETUP.md): which graph, how it is called,
+which settings, which inputs, or what only the team can provide. Code checks that
+answer the only way that counts, by loading the agent and starting it with one input,
+and gives the session one more try with what happened. What it settles on is a small
+JSON file in fleetopt's own folder, never in the team's repo. The next run reads it.
 
-fleetopt then runs its own driver against that entry (see driver.py) and nothing else.
-Another framework is another way of filling in the same entry.
+What stays code is what keeps a developer's machine safe and the answer honest: the
+project's own interpreter, nothing installed, no secret read, the trial run.
 """
 
-import ast
 import datetime
 import hashlib
 import json
+import os
 import pathlib
 import re
 import shlex
@@ -26,11 +26,9 @@ from fleetopt import config
 from fleetopt.evidence import evals
 
 DRIVER = pathlib.Path(__file__).with_name("driver.py")
-SKIP_DIRS = evals.SKIP_DIRS | {"tests", "test", "docs", "notebooks", "build", "dist"}
-CONSTRUCTORS = {"create_agent", "create_react_agent", "create_supervisor", "create_swarm"}
-FACTORY = re.compile(r"^_?(build|create|make|get|compile)\w*(graph|agent|workflow)\w*$")
-LIKELY_FILES = ("graph.py", "agent.py", "main.py", "app.py", "workflow.py")
 MAX_INPUTS = 4
+ATTEMPTS = 2
+KEYISH = re.compile(r"^[A-Z][A-Z0-9_]*(?:API_KEY|AUTH_TOKEN)$")
 
 
 class Unstartable(RuntimeError):
@@ -56,110 +54,6 @@ UNREACHABLE = re.compile(r"connection refused|could not connect|connecterror|nam
                          r"temporary failure in name resolution|max retries exceeded", re.I)
 
 
-def declared(project):
-    """What langgraph.json says: graphs by name, and the env file."""
-    try:
-        data = json.loads((project / "langgraph.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}, None
-    graphs = {}
-    for name, spec in (data.get("graphs") or {}).items():
-        spec = spec.get("path") if isinstance(spec, dict) else spec
-        if isinstance(spec, str) and ":" in spec:
-            graphs[name] = spec.removeprefix("./")
-    env = data.get("env")
-    return graphs, env.removeprefix("./") if isinstance(env, str) else None
-
-
-def _calls(node):
-    """Names called along a chain like builder.compile().with_config(...). A regular
-    expression being compiled is not a graph."""
-    while isinstance(node, ast.Call):
-        func = node.func
-        if isinstance(func, ast.Attribute):
-            if not (isinstance(func.value, ast.Name) and func.value.id in ("re", "regex")):
-                yield func.attr
-            node = func.value
-        else:
-            if isinstance(func, ast.Name):
-                yield func.id
-            return
-
-
-def scanned(project, limit=600):
-    """Compiled graphs and zero-argument graph factories found in the source, best first."""
-    found = []
-    files = sorted(f for f in project.rglob("*.py") if not set(f.relative_to(project).parts[:-1]) & SKIP_DIRS
-                   and not any(p.startswith(".") for p in f.relative_to(project).parts[:-1]))[:limit]
-    for f in files:
-        try:
-            text = f.read_text(encoding="utf-8")
-            if "langgraph" not in text and "langchain" not in text:
-                continue
-            tree = ast.parse(text, filename=str(f))
-        except (OSError, SyntaxError, ValueError):
-            continue
-        rel = f.relative_to(project).as_posix()
-        graphs, factories = [], []
-        for node in tree.body:
-            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                if len(targets) == 1 and isinstance(targets[0], ast.Name):
-                    names = set(_calls(node.value))
-                    if "compile" in names or names & CONSTRUCTORS:
-                        graphs.append(targets[0].id)
-            elif isinstance(node, ast.FunctionDef) and FACTORY.match(node.name):
-                required = len(node.args.args) - len(node.args.defaults) + sum(d is None for d in node.args.kw_defaults)
-                if required == 0:
-                    factories.append(f"{node.name}()")
-        for name in graphs or factories:
-            rank = (not graphs, f.name not in LIKELY_FILES, len(f.relative_to(project).parts), rel)
-            found.append((rank, f"{rel}:{name}"))
-    return [spec for _, spec in sorted(found)]
-
-
-def candidates(project):
-    """[(name, spec)]: what the project declares first, then what the source shows."""
-    graphs, _ = declared(project)
-    if graphs:  # the project has said which agents it has; its helpers and factories are not more of them
-        return list(graphs.items())
-    return [(spec, spec) for spec in scanned(project)]
-
-
-def built_in(project, limit=600):
-    """Files where a graph is put together, wherever in the file that happens."""
-    files = sorted(f for f in project.rglob("*.py") if not set(f.relative_to(project).parts[:-1]) & SKIP_DIRS
-                   and not any(p.startswith(".") for p in f.relative_to(project).parts[:-1]))[:limit]
-    out = []
-    for f in files:
-        try:
-            if "StateGraph(" in f.read_text(encoding="utf-8"):
-                out.append(f.relative_to(project).as_posix())
-        except OSError:
-            continue
-    return out
-
-
-def choose(found, wanted=None, project=None):
-    if not found:
-        where = built_in(project) if project else []
-        if where:
-            raise NotReady([
-                f"fleetopt found graphs being built in {', '.join(where[:3])}, but only inside functions that need "
-                "arguments, so it cannot tell which agent to start or with what. Declare the agent in a "
-                "langgraph.json at the project's root, the way LangGraph itself finds it: "
-                '{"graphs": {"agent": "./path/to/file.py:compiled_graph"}}'])
-        raise Unstartable("no graph found: the project has no langgraph.json, and no LangGraph graph anywhere in its source")
-    if wanted is None:
-        return found[0]
-    for name, spec in found:
-        if wanted in (name, spec) or spec.endswith(wanted):
-            return name, spec
-    if project and ":" in wanted and (project / wanted.split(":")[0]).exists():
-        return wanted, wanted  # named by file: the user knows something the project does not declare
-    raise Unstartable(f"no graph called {wanted!r} here. Found: " + ", ".join(name for name, _ in found))
-
-
 def interpreter(project):
     """The project's own environment; the one fleetopt runs in only when it has none."""
     for rel in (".venv/bin/python", "venv/bin/python", ".venv/Scripts/python.exe", "venv/Scripts/python.exe"):
@@ -168,67 +62,28 @@ def interpreter(project):
     return sys.executable, "fleetopt's interpreter, because the project has no .venv of its own"
 
 
-def inputs_for(project, supplied=None):
-    """(inputs, where they came from). Eval cases that were supplied first, then the
-    team's own; then any file of inputs the project keeps; nothing if it has neither.
-
-    Cases are the inputs, not only the answers. Observed: cases supplied with --evals
-    while the inputs came from a file in the project. No request matched a case, a
-    redesign that took the agent from 0 of 6 finished requests to 4 of 6 had nothing to
-    be judged on, and it was undone."""
+def team_inputs(project, supplied=None):
+    """(inputs, where they came from) from eval cases: those supplied, else the team's
+    own. Cases are the inputs, not only the answers: a request that matches no case
+    cannot be judged on one. ([], None) when there are none."""
     cases, _ = evals.load(pathlib.Path(supplied).resolve() if supplied else project)
-    if cases:
-        by_source = {}
-        for case in cases:
-            by_source.setdefault(case["source"], []).append(case["input"])
-        source, texts = max(by_source.items(), key=lambda kv: len(kv[1]))
+    if not cases:
         if supplied:
-            return _spread(texts), f"the eval cases you supplied, {pathlib.Path(source).name}"
-        return _spread(texts), f"the team's eval cases, {pathlib.Path(source).relative_to(project)}"
-    if supplied:
-        raise Unstartable(f"no eval cases could be read from {supplied}. A case is an input and the answer expected for it")
-    for f in sorted(project.rglob("*")):
-        rel = f.relative_to(project)
-        if f.suffix in (".jsonl", ".json") and re.search(r"input|question|prompt|quer", f.stem, re.I) \
-                and not set(rel.parts[:-1]) & SKIP_DIRS and len(rel.parts) <= 4:
-            texts = _texts(f)
-            if texts:
-                return _spread(texts), f"the project's {rel}"
-    return [], None
-
-
-def _texts(f):
-    try:
-        raw = f.read_text(encoding="utf-8")
-        rows = [json.loads(line) for line in raw.splitlines() if line.strip()] if f.suffix == ".jsonl" else json.loads(raw)
-    except (OSError, ValueError):
-        return []
-    out = []
-    for row in rows if isinstance(rows, list) else []:
-        if isinstance(row, str):
-            out.append(row)
-        elif isinstance(row, dict):
-            lower = {str(k).lower(): v for k, v in row.items()}
-            value = next((lower[k] for k in evals.INPUT_KEYS if k in lower), None)
-            if isinstance(value, str):
-                out.append(value)
-    return out
+            raise Unstartable(f"no eval cases could be read from {supplied}. A case is an input and the answer "
+                              "expected for it")
+        return [], None
+    by_source = {}
+    for case in cases:
+        by_source.setdefault(case["source"], []).append(case["input"])
+    source, texts = max(by_source.items(), key=lambda kv: len(kv[1]))
+    where = pathlib.Path(source).name if supplied else pathlib.Path(source).relative_to(project)
+    return _spread(texts), (f"the eval cases you supplied, {where}" if supplied else f"the team's eval cases, {where}")
 
 
 def _spread(texts, n=MAX_INPUTS):
     """n of them, taken evenly across the list, so they differ in kind."""
     texts = list(dict.fromkeys(texts))
     return texts if len(texts) <= n else [texts[i * len(texts) // n] for i in range(n)]
-
-
-def settled(out, project, found):
-    """The agent picked for this project before, if it is still one of its agents."""
-    path = path_for(out, project, "which-agent")
-    if path.exists():
-        saved = json.loads(path.read_text(encoding="utf-8"))
-        if saved.get("name") in {name for name, _ in found}:
-            return saved["name"], saved.get("why") or "it was picked for this project before"
-    return None
 
 
 def path_for(out, project, name):
@@ -272,11 +127,6 @@ def prove(entry_path, entry, timeout=600):
     worked = code == 0 and bool(done) and int(done.group(1)) + int(done.group(2)) > 0
     tail = "\n".join(text.splitlines()[-30:])
     return worked, tail + ("\n" + ANSWERED.format(n=answered) if answered and not worked else "")
-
-
-CHANGED = {"graph": "a different entry point", "input_template": "the input in the shape the agent expects",
-           "config": "run settings", "context": "a run context", "store": "a memory store", "env": "settings",
-           "paths": "import paths", "inputs": "new inputs"}
 
 
 def failure_line(tail):
@@ -347,26 +197,6 @@ def preflight(entry_path, entry):
     return problems, report
 
 
-KEY_NAME = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_API_KEY\b")
-SWITCH = """
-
-The provider the agent called has no key. Keys that ARE set in the project's environment
-(names only): {keys}. If the project supports one of those providers and a plain setting
-selects it, set that in "env", together with a model of that provider that exists today
-if the project's default for it may be retired. If no setting can switch it, reply
-{{"cannot": "..."}}."""
-
-
-def other_provider(tail, report):
-    """The keys that are set, when the call was refused for want of a different one.
-    Observed: a project that supports two providers, defaults to the one it has no key
-    for, and needs one setting to use the other. Which setting is fleetopt's to work
-    out; a key that is wrong or absent altogether is the team's."""
-    present = list((report or {}).get("keys_present") or [])
-    wanted = set(KEY_NAME.findall(tail))
-    return present if present and wanted and not wanted & set(present) else []
-
-
 def refused(tail):
     """A failed trial that no change to the entry can fix, as a line for the team."""
     lines = [l.strip() for l in tail.splitlines() if l.strip()]
@@ -383,37 +213,48 @@ def save(path, entry):
     path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
 
 
+def _entry(plan, project, python, inputs, source):
+    return {"adapter": "langgraph", "project": str(project), "name": plan.get("agent") or "agent",
+            "graph": plan["graph"], "paths": plan["paths"], "interpreter": python, "env_file": plan.get("env_file"),
+            "env": plan["env"], "config": plan.get("config") or {}, "context": plan.get("context") or {},
+            "store": plan.get("store"), "input_template": plan.get("input_template"),
+            "inputs": inputs or _spread(plan["inputs"]),
+            "inputs_source": source or plan.get("inputs_from") or "fleetopt, as the agent's users would write them",
+            "proven": None}
+
+
+def _mine(problems, report):
+    """Problems a better answer could fix, as opposed to what the team must set up: the
+    graph did not load for a reason in how it was named, or the input did not fit."""
+    fixable = [p for p in problems if p.startswith("The agent failed while loading")]
+    if report and not report.get("loaded") and not report.get("missing_module") and not fixable:
+        fixable.append(f"The graph could not be loaded as named: {report.get('error')}")
+    if report and report.get("loaded") and report.get("input") not in (None, "ok"):
+        fixable.append(f"The input does not fit the graph: {report['input']}")
+    return fixable
+
+
 def ensure(project, out, wanted=None, say=print, supplied=None):
     """The proven entry for this project, settled now if it was not already.
-    Returns (path to the entry, the entry). Raises Unstartable. `supplied` is a file or
-    folder of eval cases: its inputs are then the ones the agent is run on."""
-    from fleetopt.drive import setup  # the two steps that need a model; imported late so tests can replace them
+    Returns (path to the entry, the entry). Raises Unstartable, or NotReady for what the
+    team must set up. `supplied` is a file or folder of eval cases: its inputs are then
+    the ones the agent is run on."""
+    from fleetopt.drive import setup  # the step that needs a model; imported late so tests can replace it
 
     project = pathlib.Path(project).resolve()
     out = pathlib.Path(out).resolve()  # the driver runs from inside the project: a relative path would point nowhere
-    found = candidates(project)
-    chosen_because = None
-    if wanted is None and len(found) > 1:
-        wanted_now, chosen_because = settled(out, project, found) or (None, None)
-        if wanted_now is None:
-            picked = setup.choose_agent(project, found)
-            wanted_now, chosen_because = picked or (found[0][0], "it is the first one the project declares; "
-                                                                "nothing told them apart")
-            save(path_for(out, project, "which-agent"), {"name": wanted_now, "why": chosen_because})
-        name, spec = choose(found, wanted_now, project)
-    else:
-        name, spec = choose(found, wanted, project)
-    path = path_for(out, project, name)
-    others = [n for n, _ in found if n != name]
+    path = path_for(out, project, wanted or "agent")
+    inputs, source = team_inputs(project, supplied)
 
     if path.exists():
         entry = json.loads(path.read_text(encoding="utf-8"))
         if entry.get("proven") and pathlib.Path(entry["interpreter"]).exists():
             asked = list(entry["inputs"])
             if supplied:  # how it is started does not change; what it is asked does
-                entry["inputs"], entry["inputs_source"] = inputs_for(project, supplied)
+                entry["inputs"], entry["inputs_source"] = inputs, source
                 save(path, entry)
-            say(f"[fleetopt] agent: {name} ({entry['graph']}), {len(entry['inputs'])} inputs from {entry['inputs_source']}")
+            say(f"[fleetopt] agent: {entry['name']} ({entry['graph']}), {len(entry['inputs'])} inputs from "
+                f"{entry['inputs_source']}")
             if entry["inputs"] != asked:
                 # a review of other requests is not a review of these. Not saved: true of this call only
                 entry = {**entry, "asked_anew": True}
@@ -421,79 +262,74 @@ def ensure(project, out, wanted=None, say=print, supplied=None):
                 say(f"[fleetopt] when it was last started no request finished. Its own failure: {entry['broken']}")
             return path, entry
 
-    python, why = interpreter(project)
-    _, env_file = declared(project)
-    inputs, source = inputs_for(project, supplied)
-    entry = {
-        "adapter": "langgraph", "project": str(project), "name": name, "graph": spec,
-        "paths": [".", "src"] if (project / "src").is_dir() else ["."],
-        "interpreter": python, "env_file": env_file or (".env" if (project / ".env").exists() else None),
-        "env": {}, "config": {}, "input_template": None,
-        "inputs": inputs, "inputs_source": source, "proven": None,
-    }
-    say(f"[fleetopt] agent: {name} ({spec})")
-    if others:
-        reason = "you named it" if wanted else chosen_because
-        say(f"[fleetopt] this project has {len(others) + 1} agents. Using this one because {reason}")
-        say(f"[fleetopt] the others: {', '.join(others[:8])}" + ("" if wanted else " (--graph picks another)"))
-    say(f"[fleetopt] runs on {why}")
-
-    save(path, entry)
-    problems, report = preflight(path, entry)
-    if problems:
-        raise NotReady(problems)
-    if not inputs:  # only now: nothing is spent on a project that cannot start
-        say("[fleetopt] the project keeps no test inputs, so fleetopt is writing 4, as the agent's users would "
-            "(a minute or two)")
-        entry["inputs"] = setup.propose_inputs(project, spec)
-        entry["inputs_source"] = "fleetopt, as the agent's users would write them"
-    say(f"[fleetopt] {len(entry['inputs'])} test inputs, from {entry['inputs_source']}:")
-    for text in entry["inputs"]:
-        say("    - " + " ".join(text.split())[:90] + ("..." if len(text) > 90 else ""))
+    python, where = interpreter(project)
+    keys = sorted(k for k in os.environ if KEYISH.match(k))
     details = path.with_suffix(".log")
-
-    tail, switched = "", False
-    for attempt in range(3):
+    details.parent.mkdir(parents=True, exist_ok=True)
+    say("[fleetopt] reading the project to work out how to run its agent (a few minutes, once per project)")
+    plan, failure, tail, entry, unloaded = None, None, "", None, []
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            plan = setup.settle(project, keys=keys, have_inputs=bool(inputs), wanted=wanted, earlier=plan,
+                                failure=failure)
+        except ValueError as exc:
+            failure = f"Your answer could not be used: {exc}"
+            say(f"[fleetopt] {failure}")
+            continue
+        if plan["missing"]:
+            raise NotReady(plan["missing"])
+        if plan.get("agent_fault") and starts_but_fails(tail):
+            break  # the session agrees the failure is the agent's own
+        entry = _entry(plan, project, python, inputs, source)
+        if not entry["inputs"]:
+            failure = "Your answer gave no inputs, and fleetopt has none."
+            continue
+        say(f"[fleetopt] agent: {entry['name']} ({entry['graph']})" + (f", because {plan['why']}" if plan.get("why") else ""))
+        if plan.get("others"):
+            say(f"[fleetopt] the others: {', '.join(map(str, plan['others']))[:200]} (--graph picks another)")
+        say(f"[fleetopt] runs on {where}")
+        say(f"[fleetopt] {len(entry['inputs'])} test inputs, from {entry['inputs_source']}:")
+        for text in entry["inputs"]:
+            say("    - " + " ".join(text.split())[:90] + ("..." if len(text) > 90 else ""))
         save(path, entry)
-        say("[fleetopt] trying the agent on one input" + (" again" if attempt else ""))
+
+        problems, report = preflight(path, entry)
+        fixable = _mine(problems, report)
+        team = [p for p in problems if p not in fixable]
+        if team:
+            raise NotReady(team)
+        keys = sorted(set(keys) | set((report or {}).get("keys_present") or []))
+        unloaded = fixable
+        if fixable:
+            failure = "\n".join(fixable)
+            say(f"[fleetopt] it did not load: {fixable[0][:200]}")
+            continue
+
+        say("[fleetopt] trying the agent on one input")
         ok, tail = prove(path, entry)
         with details.open("a", encoding="utf-8") as log:
-            log.write(f"--- trial {attempt + 1}, {datetime.datetime.now():%H:%M:%S}, "
+            log.write(f"--- trial {attempt}, {datetime.datetime.now():%H:%M:%S}, "
                       f"{'answered' if ok else 'did not answer'}\n{tail}\n")
-        if not ok and refused(tail):
-            keys = [] if switched else other_provider(tail, report)
-            fix = keys and setup.repair(project, entry, tail + SWITCH.format(keys=", ".join(keys)))
-            if not fix or not fix.get("env"):
-                raise NotReady([refused(tail)])
-            say(f"[fleetopt] it called a provider it has no key for; using the one it has: "
-                f"{', '.join(f'{k}={v}' for k, v in fix['env'].items())}")
-            entry.update(fix)
-            switched = True
-            continue
         if ok:
             entry["proven"] = datetime.datetime.now().isoformat(timespec="seconds")
             save(path, entry)
             say("[fleetopt] it answered. How to start it is saved, and not worked out again next time")
             return path, entry
-        fix = None
         say(f"[fleetopt] it did not answer: {failure_line(tail)}")
-        if attempt < 2:
-            say("[fleetopt] reading the agent's code to work out how it expects to be called (a few minutes)")
-            fix = setup.repair(project, entry, tail)
-            if fix:
-                say("[fleetopt] found it; trying with " + ", ".join(CHANGED.get(k, k) for k in fix))
-        if not fix:
-            # Nothing about how it is started can be changed to help. If the model had
-            # answered, it does start: the failure is the agent's own, and the agent that
-            # does not finish is the one that most needs a review.
-            broken = starts_but_fails(tail)
-            if broken:
-                entry.update(proven=datetime.datetime.now().isoformat(timespec="seconds"), broken=broken)
-                save(path, entry)
-                say(f"[fleetopt] it starts, and no request finishes. Its own failure: {broken}")
-                say("[fleetopt] carrying on: this is reviewed as a broken agent, and fixing it comes first")
-                return path, entry
-            break
-        entry.update(fix)
-    raise Unstartable(f"fleetopt could not start {name} ({entry['graph']}). The last thing it printed:\n{tail}\n"
-                      f"Every attempt is in {details}")
+        failure = tail
+
+    broken = starts_but_fails(tail)
+    if entry and broken:
+        # It starts and the model answers; the request fails on the agent's own code.
+        # The agent that does not finish is the one that most needs a review.
+        entry.update(proven=datetime.datetime.now().isoformat(timespec="seconds"), broken=broken)
+        save(path, entry)
+        say(f"[fleetopt] it starts, and no request finishes. Its own failure: {broken}")
+        say("[fleetopt] carrying on: this is reviewed as a broken agent")
+        return path, entry
+    if unloaded:  # two answers, and it still does not load: the cause is in the project
+        raise NotReady(unloaded)
+    if refused(tail):
+        raise NotReady([refused(tail)])
+    raise Unstartable(f"fleetopt could not start the agent after {ATTEMPTS} tries. The last thing it printed:\n"
+                      f"{tail or failure}\nEvery attempt is in {details}")

@@ -31,6 +31,7 @@ include = ["fleetopt*"]
 
 [tool.setuptools.package-data]
 "fleetopt.probe" = ["hooks/*.py"]
+"fleetopt.drive" = ["*.md"]
 "fleetopt.optimizer" = ["*.md", "plugin/.claude-plugin/*.json", "plugin/skills/*/SKILL.md",
                        "plugin/skills/*/references/*.md"]
 

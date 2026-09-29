@@ -47,29 +47,23 @@ every finding, so time and cost follow from the number of findings and are said 
 
 ## How an agent is started
 
-How an agent is started is a fact about the project, so fleetopt works it out once per
-project and saves it as a small JSON file under `.fleetopt/entries/`, never in the
-team's repository. From then on it runs its own driver against that entry: never a
-command somebody guessed. Another framework is another way of filling in the same entry.
+A read-only session reads the project the way a developer joining the team would,
+guided by `drive/SETUP.md`: `langgraph.json`, the README, the entry point the team's
+app or API uses, their tests. It answers with an entry: which graph, how it is called,
+which settings, which inputs, or what only the team can provide (a key, a database, an
+installed dependency), and then fleetopt stops and lists that.
 
-| What it needs | Where it looks |
-|---|---|
-| The agent | the project's `langgraph.json`; otherwise a compiled graph, or a graph factory that takes no arguments, in its source. With several, the one the team ships and tests |
-| The interpreter | the project's own `.venv` / `venv`. fleetopt never installs anything |
-| Keys and settings | the env file the project names, loaded inside the agent's own process. fleetopt never reads it |
-| Inputs | eval cases passed with `--evals`; otherwise the team's eval cases; otherwise a file of inputs the project keeps; otherwise four written from its README |
+Code checks the answer the only way that counts: it loads the agent in the project's
+own interpreter, checks a key for its provider is set, and starts it with one input. If
+that fails, the session sees what happened and answers once more. The settled entry is a
+small JSON file under `.fleetopt/entries/`, never in the team's repository, and the next
+run reads it.
 
-Before anything is spent it checks, in a few seconds and without calling a model, that
-the agent loads and that a key for one of its providers is set. Then it starts the
-agent once with one input.
-
-| The first request | fleetopt |
-|---|---|
-| is refused by the provider (a wrong key, no credit), or a service cannot be reached | stops and says so: the team's to fix |
-| is refused for want of a key the project does not have, while it has one for another provider it supports | finds the setting that selects that provider and uses it. Key names only, never values |
-| fails on how the agent was called (which graph, a tenant id, the shape of the input) | changes the entry and tries again, twice at most |
-| fails because the agent expects a hosting platform to hand it a store or a run context | attaches an empty in-memory store and passes the context, as `langgraph dev` does |
-| fails on the agent's own bug, after the model had answered | carries on. That agent starts; it does not finish. It is reviewed as broken (level 4) |
+Until 2026-09-29 this was rules: scan the source for compiled graphs, guess the input's
+shape, switch providers, hand hosted agents a store. Each rule came from one agent, and
+the next agent broke a different one. What stays code is what keeps a developer's machine
+safe and the answer honest: the project's own interpreter, nothing installed, no secret
+read, the trial run, two answers at most.
 
 ## Observing without editing
 

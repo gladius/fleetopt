@@ -289,13 +289,23 @@ def test_capture_fixture_end_to_end(tmp_path):
 # --- the second fixture ------------------------------------------------------------------
 
 def _capture_fixture(tmp_path, script, *extra):
-    """Capture one of the fixture's two agents, named by its file: agent.py or supervisor.py."""
+    """Capture one of the fixture's two agents, named by its file: agent.py or supervisor.py.
+
+    It runs as a separate program, where no stand-in reaches, so it is handed a start-up
+    already settled, as fleetopt keeps one after the first run. Nothing asks a model."""
+    from fleetopt.drive import entry
+
     target = tmp_path / "fixture"
     if not target.exists():
         shutil.copytree(ROOT / "fixture", target)
         for args in (["init", "-q"], ["add", "-A"],
                      ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"]):
             subprocess.run(["git", "-C", str(target), *args], check=True, capture_output=True)
+    spec, project = f"{script}:graph", target.resolve()
+    entry.save(entry.path_for((tmp_path / "out").resolve(), project, spec), {
+        "adapter": "langgraph", "project": str(project), "name": script, "graph": spec, "paths": ["."],
+        "interpreter": sys.executable, "env_file": None, "env": {}, "config": {}, "input_template": None,
+        "inputs": ["battery degradation", "route optimization"], "inputs_source": "the fixture", "proven": "test"})
     return subprocess.run(
         [sys.executable, "-c", "from fleetopt.cli import main; main()", "capture", str(target),
          "--graph", f"{script}:graph", "--out", str(tmp_path / "out"), *extra],
@@ -475,8 +485,11 @@ def test_review_stops_when_there_is_no_agent_to_start(tmp_path, capsys, monkeypa
 
     from fleetopt.optimizer import review as review_mod
     monkeypatch.setattr(review_mod, "run", never)
+    from fleetopt.drive import setup
+    monkeypatch.setattr(setup, "settle", lambda project, **kw: setup.checked(
+        {"missing": ["There is no LangGraph agent in this project: no graph is built anywhere"]}, project))
     code = cli.main(["review", str(target), "--out", str(tmp_path / "out")])
-    assert code == 1 and "no graph found" in capsys.readouterr().out
+    assert code == 1 and "no LangGraph agent in this project" in capsys.readouterr().out
 
 
 # --- a review is a list of numbered findings, kept against the code it saw -----------------
