@@ -286,3 +286,19 @@ def test_the_teams_money_and_the_clock_both_end_a_run(tmp_path, monkeypatch, cap
     assert "time limit for a run is reached: 120 minutes" in tools.over()
 
     tools.CTX.clear()
+
+
+def test_uncommitted_work_is_never_touched(tmp_path):
+    import subprocess
+
+    project = tmp_path / "repo"
+    project.mkdir()
+    (project / "agent.py").write_text("x = 1\n", encoding="utf-8")
+    git = lambda *a: subprocess.run(["git", "-C", str(project), "-c", "user.email=t@t", "-c", "user.name=t", *a],
+                                    check=True, capture_output=True)
+    git("init", "-q", "-b", "main"); git("add", "-A"); git("commit", "-qm", "base")
+    (project / "agent.py").write_text("x = 2  # someone's work in progress\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="uncommitted changes. Commit or stash them first"):
+        tools.begin(project, tmp_path / "out", entry_file=tmp_path / "e.json")
+    assert "work in progress" in (project / "agent.py").read_text(encoding="utf-8")  # a reset would have lost it
+    tools.CTX.clear()

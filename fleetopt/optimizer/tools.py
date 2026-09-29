@@ -311,6 +311,9 @@ def begin(project, out, *, entry_file, entry=None, look_only=False, team_usd=TEA
                max_team_usd=team_usd, max_minutes=minutes, deadline=time.time() + 60 * minutes,
                first_session=first_session, said_at=time.time(), tries=0, run_cmd=None, job="answer the user's request",
                baseline=None, saved=[], measured=None, results={}, changes={}, n=0)
+    if _git("status", "--porcelain", "--untracked-files=no"):  # undo and the final clean-up reset to the last commit
+        raise RuntimeError("the project has uncommitted changes. Commit or stash them first: fleetopt works from your "
+                           "last commit, and would lose them when it undoes a change")
     CTX.update(start_sha=_git("rev-parse", "HEAD"), start_state=runner.code_state(CTX["project"]))
     CTX.update(kept_sha=CTX["start_sha"], start_untracked=_untracked())
     CTX["untracked"] = set(CTX["start_untracked"])
