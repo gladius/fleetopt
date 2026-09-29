@@ -14,8 +14,8 @@ Limits, each learned on a real agent:
 - run_evals: the team's own eval command, in its own environment, the same command before
   and after; its model calls count toward the team's cap;
 - keep: better past the noise, the graph keeps its nodes and edges, the team's tests and
-  evals are untouched, and a separate reader finds nothing in the team's evals that passed
-  before and fails now.
+  evals are untouched, and a separate reader finds nothing broken, on the strongest proof
+  the project has: its eval suite, else its golden dataset, else its test inputs.
 """
 
 import asyncio
@@ -236,16 +236,43 @@ def _entry(plan):
             template = json.loads(template)
         except ValueError:
             pass
-    inputs = list(dict.fromkeys(t for t in plan.get("inputs") or [] if isinstance(t, str) and t.strip()))
-    if len(inputs) < MIN_INPUTS:
-        raise ValueError(f"{len(inputs)} input(s) given; give 4 to {MAX_INPUTS} that differ in kind (at least "
+    texts, expected = plan.get("inputs") or [], plan.get("expected")
+    expected = expected if isinstance(expected, list) and len(expected) == len(texts) else [None] * len(texts)
+    cases = list(dict.fromkeys((t, str(e) if e else None) for t, e in zip(texts, expected) if isinstance(t, str) and t.strip()))
+    if len(cases) < MIN_INPUTS:
+        raise ValueError(f"{len(cases)} input(s) given; give 4 to {MAX_INPUTS} that differ in kind (at least "
                          f"{MIN_INPUTS}), from the team's eval data where there is some")
+    source = plan.get("expected_from")
+    if any(e for _, e in cases):
+        _copied(source, [e for _, e in cases if e])
+    cases = spread(cases, MAX_INPUTS)
     env = {k: str(v) for k, v in (plan.get("env") or {}).items() if not SECRET.search(k)}
     return {"project": str(project), "name": plan.get("agent") or "agent", "job": str(plan.get("job") or "")[:300],
             "graph": graph, "paths": [str(p) for p in plan.get("paths") or ["."]], "interpreter": python,
             "env_file": plan.get("env_file"), "env": env, "config": plan.get("config") or {},
             "context": plan.get("context") or {}, "store": plan.get("store"), "input_template": template,
-            "inputs": spread(inputs, MAX_INPUTS), "inputs_from": plan.get("inputs_from") or "written by fleetopt"}
+            "inputs": [t for t, _ in cases], "inputs_from": plan.get("inputs_from") or "written by fleetopt",
+            "expected": [e for _, e in cases] if any(e for _, e in cases) else None,
+            "expected_from": source if any(e for _, e in cases) else None}
+
+
+def _norm(text):
+    return re.sub(r"[\s\"']+", " ", str(text)).strip().lower()
+
+
+def _copied(source, answers):
+    """Expected answers must be the team's own, copied from the file named: never written by
+    the session, which would then be grading against its own idea of right."""
+    path = (CTX["project"] / str(source or "")).resolve()
+    if not source or not path.is_relative_to(CTX["project"]) or not path.is_file():
+        raise ValueError("expected answers need `expected_from`: the team's file they are copied from")
+    text = _norm(path.read_text(encoding="utf-8", errors="replace"))
+    # ponytail: the opening of each answer, whitespace and quotes ignored (CSV quoting); a
+    # paraphrase fails, which is the point
+    missing = [a for a in answers if _norm(a)[:60] not in text]
+    if missing:
+        raise ValueError(f"{len(missing)} expected answer(s) are not in {source}: copy them exactly "
+                         f"(e.g. {missing[0][:60]!r})")
 
 
 def started(entry):
@@ -387,6 +414,42 @@ def _read_evals(command, before, after):
     return judge_mod.compare(command, before, after)  # separate and read-only: see evidence/judge.py
 
 
+def _read_answers(pairs):
+    return judge_mod.compare_answers(CTX["job"], pairs)
+
+
+def _answers(label):
+    """[(input, answer or None, error)] per request of the first run under a label, in order."""
+    ids = _ids(label)
+    with _conn() as conn:
+        return [(r["inputs"], None if r["error"] else r["outputs"], r["error"]) for r in conn.execute(
+            "SELECT inputs, outputs, error FROM runs WHERE session_id = ? AND parent_run_id IS NULL"
+            " ORDER BY start_time", (ids[0],))] if ids else []
+
+
+def _pairs(label):
+    """The same requests before and after, with the team's expected answer where it gave one;
+    None when the two sides did not run the same number of requests."""
+    before, after = _answers(CTX["base"]), _answers(label)
+    if not before or len(before) != len(after):
+        return None
+    expected = (CTX.get("entry") or {}).get("expected") or [None] * len(before)
+    return [{"input": b[0], "expected": expected[i] if i < len(expected) else None,
+             "before": b[1] if b[1] is not None else f"(did not finish: {b[2]})",
+             "after": a[1] if a[1] is not None else f"(did not finish: {a[2]})"} for i, (b, a) in enumerate(zip(before, after))]
+
+
+def proof():
+    """How a change is checked in this run, in words, strongest first."""
+    entry = CTX.get("entry") or {}
+    if CTX.get("evals_before"):
+        return f"the team's evals ({CTX['evals_before']['command']}), before and after"
+    n = len(entry.get("inputs") or [])
+    if entry.get("expected"):
+        return f"{n} cases from {entry.get('expected_from')} with expected answers, before and after"
+    return f"{n} test inputs from {entry.get('inputs_from')}, answers compared with the original's (no expected answers)"
+
+
 def _tests_touched():
     return [f for f in _git("diff", "--name-only", CTX["kept_sha"], "HEAD").splitlines() if TESTS.search(f)]
 
@@ -455,9 +518,6 @@ async def measure(args):
     stop = over()
     if stop:
         return _ok(f"Refused: {stop}. Undo what is not kept, and report.")
-    if CTX["baseline"] is None and not CTX["look_only"] and not CTX["evals_before"]:
-        return _ok("Refused: run the team's evals on the code as it is first (run_evals). If the project has none, "
-                   "say 'No evals found: create them, then run this again' and stop.")
     if CTX["baseline"] is None:
         return await _baseline()
     if _dirty():
@@ -521,8 +581,8 @@ def _refuse(why):
 
 @tool("keep", "Keep what was saved and measured since the code was last kept, if it has earned it: something got "
       "better past the noise, the graph keeps its nodes and edges, the team's tests and evals are untouched, and "
-      "the team's evals, run on this code, still pass everything they passed on the original. Otherwise it is "
-      "refused, with the reason.", {})
+      "nothing is broken on the strongest proof the project has (its eval suite run again on this code, else "
+      "its golden dataset, else its test inputs, answer by answer). Otherwise it is refused, with the reason.", {})
 async def keep(args):
     label = CTX["measured"]
     if not CTX["saved"] or not label:
@@ -537,18 +597,32 @@ async def keep(args):
     touched = _tests_touched()
     if touched:
         return _refuse(f"it changes the team's tests or evals ({', '.join(touched[:3])})")
-    before, after = CTX["evals_before"], CTX["evals_after"].get(runner.code_state(CTX["project"]))
-    if not before or not after:
-        return _ok("Refused: run the team's evals on this code first (run_evals, the same command as on the original).")
     stop = over()
     if stop:
         return _ok(f"Refused: {stop}. Undo what is not kept, and report.")
-    say("  reading the team's evals: before and after")
-    held, why = await _read_evals(before["command"], before["text"], after["text"])
-    _record("evals_read", command=before["command"], held=held, why=why)
+    before = CTX["evals_before"]
+    if before:  # the team's suite: the strongest proof, so when it was run it is the one that counts
+        after = CTX["evals_after"].get(runner.code_state(CTX["project"]))
+        if not after:
+            return _ok("Refused: run the team's evals on this code first (run_evals, the same command as on the original).")
+        say("  reading the team's evals: before and after")
+        held, why = await _read_evals(before["command"], before["text"], after["text"])
+        checked = "the team's evals pass as before"
+    else:  # a golden dataset, or the team's test inputs: the recorded answers, request by request
+        pairs = _pairs(label)
+        if not pairs:
+            return _refuse("the two sides did not run the same requests, so their answers cannot be compared")
+        say(f"  reading the answers: {len(pairs)} requests, before and after")
+        held, why = await _read_answers(pairs)
+        checked = "answers correct as expected" if (CTX.get("entry") or {}).get("expected") else "answers as good as before"
+    _record("checked", proof=proof(), held=held, why=why, reader=judge_mod.USED.get("model"))
+    if judge_mod.USED.get("model") and not CTX.get("reader_named"):
+        CTX["reader_named"] = True
+        say(f"    read by: {judge_mod.USED['model']}")
     if not held:
-        return _refuse(f"the team's evals: {why}")
-    detail = f"{moved(result)} · the team's evals pass as before"
+        what = "the team's evals" if before else "the answers"
+        return _refuse(f"{what}: {why}")
+    detail = f"{moved(result)} · {checked}"
     names = list(CTX["saved"])
     _mark("kept", detail)
     CTX.update(kept_sha=_git("rev-parse", "HEAD"), kept_label=label, saved=[], measured=None)

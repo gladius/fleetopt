@@ -26,6 +26,7 @@ from fleetopt.probe import store
 
 _HERE = pathlib.Path(__file__).parent
 SKILLS = ("caching", "model-tier", "prompt-growth", "redundant-work", "tool-surface")
+MODEL, FALLBACK = "sonnet", "opus"  # aliases: whatever this Claude Code setup provides; FLEETOPT_MODEL overrides
 
 
 def _body(path):
@@ -124,7 +125,8 @@ def build_options(project, model=None, max_usd=None, start_branch=None, look_onl
             project, start_branch or _git(project, "rev-parse", "--abbrev-ref", "HEAD"))]),
     ]}
     return ClaudeAgentOptions(
-        cwd=str(project), model=model, system_prompt=SYSTEM,
+        cwd=str(project), model=model or MODEL, fallback_model=FALLBACK if (model or MODEL) != FALLBACK else MODEL,
+        system_prompt=SYSTEM,
         mcp_servers={"fleetopt": tools.server(look_only)},
         # Built-ins by allowlist: no web, no scheduler, no subagents. Nothing is asked;
         # what keeps each tool safe is enforced by the hooks and inside fleetopt's tools.
@@ -143,7 +145,8 @@ def build_options(project, model=None, max_usd=None, start_branch=None, look_onl
 MISSION = {
     True: "Review the LangGraph agent in this project: start it if needed, measure it once as it is, find where "
           "it wastes tokens and money, and report what is worth changing. This run changes nothing and does not "
-          "run the team's evals; say whether the project has an eval suite and how it is run.",
+          "run the team's evals; say what the project has to check the agent against (an eval suite and how it "
+          "is run, a golden dataset, test inputs) or that it has nothing.",
     False: "Make the LangGraph agent in this project cost less without changing what it answers: start it if "
            "needed, measure it, find the waste, change it, prove each change, look again, and report.",
 }
@@ -222,8 +225,8 @@ def _prompt(look_only, entry, evals, graph, team, minutes, max_usd, branch, earl
 async def run(project, out, *, look_only=False, evals=None, graph=None, model=None, max_usd=5.0):
     """One run of the agent. Returns the facts the summary is computed from. Raises
     RuntimeError when it cannot begin (the project is not under git)."""
-    from claude_agent_sdk import (AssistantMessage, ClaudeSDKError, ResultMessage, TextBlock, ToolResultBlock,
-                                  ToolUseBlock, UserMessage, query)
+    from claude_agent_sdk import (AssistantMessage, ClaudeSDKError, ResultMessage, SystemMessage, TextBlock,
+                                  ToolResultBlock, ToolUseBlock, UserMessage, query)
 
     from fleetopt.progress import ticking
 
@@ -263,7 +266,9 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     try:
         async with ticking("working", said_at=lambda: ctx.get("said_at", 0)):
             async for message in query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
+                if isinstance(message, SystemMessage) and message.subtype == "init":
+                    tools.say(f"  model: {(message.data or {}).get('model') or options.model}")  # what this setup gave
+                elif isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock) and block.text.strip():
                             log(block.text.strip())
@@ -310,7 +315,7 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     facts = {
         "mode": "review" if look_only else "apply", "project": str(project), "started": bool(ctx.get("run_cmd")),
         "agent": (ctx.get("entry") or {}).get("name"), "measured": bool(ctx.get("baseline")),
-        "baseline": ctx.get("baseline"), "evals": (ctx.get("evals_before") or {}).get("command"),
+        "baseline": ctx.get("baseline"), "proof": tools.proof() if ctx.get("entry") else None,
         "changes": [{"name": n, "outcome": o, "detail": d} for n, (o, d) in ctx["changes"].items()],
         "kept": kept, "whole": whole, "branch": branch if kept else None,
         "team_runs": runs, "team_cost": team_cost, "own_cost": own, "account": account, "run_dir": str(run_dir),
@@ -337,8 +342,7 @@ def summary(facts):
         for i, c in enumerate(facts["changes"]):
             lines.append(f"  {'Changes' if not i else '':<8} {c['name']:<{width}}  {c['outcome']}"
                          + (f": {c['detail']}" if c["detail"] else ""))
-        lines.append("  Checked  " + (f"the team's evals ({facts['evals']}), before and after" if facts["evals"] else
-                                      "no eval suite was run, so nothing could be kept"))
+        lines.append(f"  Checked  {facts['proof']}")
     elif not facts["measured"]:
         lines.append("  Result   " + ("could not start it" if not facts["started"] else "could not measure it")
                      + ": see why above")

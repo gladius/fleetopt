@@ -65,7 +65,7 @@ def main(argv=None):
           f"${args.max_usd:.2f} by fleetopt", flush=True)
     try:
         facts = asyncio.run(agent.run(project, args.out, look_only=args.cmd == "review", evals=args.evals,
-                                      graph=args.graph, model=os.environ.get("FLEETOPT_MODEL") or "claude-sonnet-5",
+                                      graph=args.graph, model=os.environ.get("FLEETOPT_MODEL") or None,
                                       max_usd=args.max_usd))
     except (ValueError, RuntimeError) as exc:
         print(f"  can't run: {exc}")

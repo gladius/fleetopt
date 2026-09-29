@@ -108,3 +108,21 @@ def test_only_key_names_are_read_never_values(project, monkeypatch):
     (project / ".env").write_text("ANTHROPIC_API_KEY=sk-secret\nOPENAI_API_KEY=\nMODEL=x\n", encoding="utf-8")
     names = tools.key_names(project)
     assert "ANTHROPIC_API_KEY" in names and "OPENAI_API_KEY" not in names and "sk-secret" not in " ".join(names)
+
+
+def test_expected_answers_are_the_teams_own_never_written_by_the_session(project, tmp_path):
+    (project / "golden.csv").write_text('input,expected\n"battery degradation","Capacity fades with, heat and cycles"\n'
+                                        '"route optimization","Shorter routes cut fuel"\n"cold-chain","Keep 2-8C"\n',
+                                        encoding="utf-8")
+    trying = _trying(project, tmp_path)
+    try:
+        made_up = {**ENTRY, "expected": ["Anything plausible", "Shorter routes cut fuel", "Keep 2-8C"],
+                   "expected_from": "golden.csv"}
+        assert "not in golden.csv" in trying(made_up)
+        assert "expected_from" in trying({**made_up, "expected_from": None})
+        copied = {**ENTRY, "expected": ["Capacity fades with, heat and cycles", "Shorter routes cut fuel", "Keep 2-8C"],
+                  "expected_from": "golden.csv"}
+        assert tools._entry(copied)["expected"][0] == "Capacity fades with, heat and cycles"   # CSV quoting is no bar
+        assert tools._entry(ENTRY)["expected"] is None                                        # none given: none kept
+    finally:
+        tools.CTX.clear()

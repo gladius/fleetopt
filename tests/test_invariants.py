@@ -161,9 +161,10 @@ def test_the_agent_drives_and_the_limits_live_in_its_tools():
 
 
 def test_the_teams_own_evals_are_the_proof_and_without_them_it_stops():
-    assert "No evals found: create them, then run this again" in GUIDE
+    assert "Nothing to check the agent against: add evals, a golden dataset or test inputs" in GUIDE
     assert "Never touch the team's tests, evals or eval data" in GUIDE
-    assert "whatever vendor they use" in GUIDE                                 # no framework is written in
+    assert "any vendor" in GUIDE and "any format" in GUIDE                     # no framework is written in
+    assert "Never invent an expected answer" in GUIDE
     for path in ("tests/test_agent.py", "evals/cases.jsonl", "src/agent_test.py", "conftest.py", "datasets/golden.json"):
         assert tools.TESTS.search(path), path                                   # changes to these are never kept
     assert not tools.TESTS.search("src/agent.py")
@@ -190,7 +191,7 @@ def test_what_is_shown_is_for_a_person():
     assert tools.moved({"cost_usd": {"delta_pct": 1.0, "verdict": "within noise"}}) == "no real change"
     facts = {"mode": "apply", "measured": True, "kept": 1, "branch": "fleetopt/x", "whole": "cost -24%",
              "changes": [{"name": "cache the system prompt", "outcome": "kept", "detail": "cost -24%"}],
-             "evals": "pytest evals", "team_cost": 0.31, "team_runs": 16,
+             "proof": "the team's evals (pytest evals), before and after", "team_cost": 0.31, "team_runs": 16,
              "own_cost": 0.77, "project": "/p", "run_dir": "/r"}
     text = "\n".join(agent.summary(facts))
     assert "1 change(s) kept on branch fleetopt/x: cost -24%" in text and "cache the system prompt  kept" in text
@@ -248,6 +249,9 @@ def test_the_eval_reader_fails_closed(monkeypatch):
     monkeypatch.setattr(judge, "_ask", never_answers)
     held, why = asyncio.run(judge.compare("pytest", "a", "b", timeout=0.1))
     assert held is False and "no answer" in why                               # a silent wait is a failure
+    held, why = asyncio.run(judge.compare_answers("triage incidents", [{"input": "q", "expected": None, "before": "a",
+                                                                        "after": "b"}], timeout=0.1))
+    assert held is False and "no answer" in why                               # the same for answers
 
 
 # --- what ends a run -------------------------------------------------------------------

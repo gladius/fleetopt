@@ -308,7 +308,6 @@ def test_the_tools_keep_what_earns_it_on_the_teams_evals_and_undo_the_rest(tmp_p
                 run_dir=tmp_path / "run")
     git("checkout", "-q", "-b", "fleetopt/test")
     try:
-        assert "run the team's evals on the code as it is first" in _call("measure")   # nothing spent without evals
         assert "nothing is installed" in _call("run_evals", command="pip install deepeval && pytest")
         assert "Exit 0" in _call("run_evals", command="pytest evals")      # what passes today
         assert "measure the agent as it is first" in _call("save_change", name="too early")
@@ -542,3 +541,72 @@ def test_the_teams_evals_run_in_their_own_setup_and_are_recorded(tmp_path):
             assert conn.execute("SELECT COUNT(*) FROM sessions WHERE label = 'evals-1'").fetchone()[0] == 1
     finally:
         tools.CTX.clear()
+
+
+def test_without_a_suite_the_answers_are_the_proof(tmp_path, monkeypatch):
+    project = _repo(tmp_path)
+    _fake_runs(monkeypatch)
+    verdicts = iter([(True, ""), (False, "INC017302340: the root cause is gone from the answer")])
+    seen = []
+
+    async def read(pairs):
+        seen.append(pairs)
+        return next(verdicts)
+
+    monkeypatch.setattr(tools, "_read_answers", read)
+    monkeypatch.setattr(tools, "_pairs", lambda label: [{"input": "INC017302340", "expected": None, "before": "a",
+                                                        "after": "b"}])
+    entry = {**ENTRY, "project": str(project), "inputs": ["INC017302340", "INC017303854", "INC017302993"],
+             "inputs_from": "the team's test incidents"}
+    tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", entry=entry, run_dir=tmp_path / "r")
+    subprocess.run(["git", "-C", str(project), "checkout", "-q", "-b", "fleetopt/test"], check=True)
+    try:
+        assert "Edits are allowed now" in _call("measure")               # no suite: nothing blocks the baseline
+        (project / "agent.py").write_text("x = 1\n", encoding="utf-8")
+        _call("save_change", name="trim the context"), _call("measure")
+        assert "Kept" in _call("keep") and "answers as good as before" in tools.CTX["changes"]["trim the context"][1]
+        (project / "agent.py").write_text("x = 2\n", encoding="utf-8")
+        _call("save_change", name="smaller model"), _call("measure")
+        assert "the answers: INC017302340: the root cause is gone" in _call("keep")
+        assert tools.proof() == ("3 test inputs from the team's test incidents, answers compared with the original's "
+                                 "(no expected answers)")
+    finally:
+        tools.CTX.clear()
+
+
+def test_answers_are_paired_request_by_request_with_what_the_team_expects(tmp_path):
+    tools.CTX.clear()
+    tools.CTX.update(out=tmp_path, project=tmp_path / "a", base="baseline-x",
+                     entry={"expected": ["refund in 14 days", None]})
+    with store.connect(tmp_path / "fleetopt.db") as conn:
+        for label, answers in (("baseline-x", ["14 days", "ok"]), ("change-1-x", ["two weeks", None])):
+            sid = _session(conn, project=str(tmp_path / "a"), label=label, code_state="v1", exit_code=0)
+            for i, answer in enumerate(answers):
+                conn.execute("INSERT INTO runs (session_id, inputs, outputs, error, start_time) VALUES (?, ?, ?, ?, ?)",
+                             (sid, f"q{i}", answer, None if answer else "TimeoutError()", f"t{i}"))
+    try:
+        pairs = tools._pairs("change-1-x")
+        assert [(p["input"], p["expected"], p["before"]) for p in pairs] == [("q0", "refund in 14 days", "14 days"),
+                                                                             ("q1", None, "ok")]
+        assert pairs[1]["after"].startswith("(did not finish")               # an unfinished answer is shown as one
+    finally:
+        tools.CTX.clear()
+
+
+def test_the_agent_runs_on_whatever_model_this_setup_has(tmp_path, monkeypatch, capsys):
+    import claude_agent_sdk
+
+    o = agent.build_options(ROOT / "fixture")
+    assert (o.model, o.fallback_model) == ("sonnet", "opus")              # aliases, not version numbers
+    assert agent.build_options(ROOT / "fixture", model="opus").fallback_model == "sonnet"
+    project = _repo(tmp_path)
+
+    async def the_agent(prompt, options):
+        yield claude_agent_sdk.SystemMessage(subtype="init", data={"model": "claude-sonnet-9-20270101"})
+
+    monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
+    try:
+        asyncio.run(agent.run(project, tmp_path / "out"))
+    finally:
+        tools.CTX.clear()
+    assert "model: claude-sonnet-9-20270101" in capsys.readouterr().out   # what it picked is shown
