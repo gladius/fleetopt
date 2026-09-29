@@ -212,22 +212,26 @@ def test_structural_patches_wait_for_eval_cases():
     assert "what must survive" in guide
 
 
-def test_starting_an_agent_is_read_not_guessed_and_only_checked_in_code():
-    from fleetopt.drive import entry, setup
+def test_starting_an_agent_is_read_and_tried_and_only_a_trial_proves_it():
+    from fleetopt.drive import entry, start
 
-    for gone in ("scanned", "candidates", "choose", "inputs_for", "other_provider"):
+    for gone in ("preflight", "refused", "starts_but_fails", "prove", "scanned", "choose", "other_provider"):
         assert not hasattr(entry, gone), gone        # the rules that each came from one agent
-    skill = " ".join(setup.SKILL.split())
-    assert "List each in `missing`" in skill and "never run anything yourself" in skill.lower()
-    assert "Never put a key, token or password anywhere in your answer" in skill
+    o = start.options(ROOT / "fixture")
+    assert set(o.tools) == {"Read", "Grep", "Glob"}  # no shell, no writing: it runs the agent only by trying it
+    assert set(o.allowed_tools) == {"Read", "Grep", "Glob", "mcp__fleetopt__try_start"}
+    assert start.TRIALS == 4
+    skill = " ".join(start.SKILL.split())
+    assert "List each missing thing in `missing`" in skill and "`started` counts only if a trial said so" in skill
+    assert "Never put a key, token or password anywhere" in skill
 
 
 def test_nothing_about_the_operator_goes_into_what_is_sent_to_the_agent():
     # Observed 2026-09-28: inputs written for an agent opened with the operator's first
     # name, and the same name was set as the agent's user id.
-    from fleetopt.drive import setup
+    from fleetopt.drive import start
 
-    assert "never use anything about whoever runs this tool" in " ".join(setup.SKILL.split())
+    assert "never use anything about whoever runs this tool" in " ".join(start.SKILL.split())
 
 
 def test_a_refusal_is_an_answer_not_an_obstacle():

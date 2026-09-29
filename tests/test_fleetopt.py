@@ -485,9 +485,10 @@ def test_review_stops_when_there_is_no_agent_to_start(tmp_path, capsys, monkeypa
 
     from fleetopt.optimizer import review as review_mod
     monkeypatch.setattr(review_mod, "run", never)
-    from fleetopt.drive import setup
-    monkeypatch.setattr(setup, "settle", lambda project, **kw: setup.checked(
-        {"missing": ["There is no LangGraph agent in this project: no graph is built anywhere"]}, project))
+    from fleetopt.drive import start
+    monkeypatch.setattr(start, "settle", lambda project, path, **kw: (
+        {"status": "missing", "missing": ["There is no LangGraph agent in this project: no graph is built anywhere"]},
+        None))
     code = cli.main(["review", str(target), "--out", str(tmp_path / "out")])
     assert code == 1 and "no LangGraph agent in this project" in capsys.readouterr().out
 

@@ -1,9 +1,11 @@
-"""Starting an agent: what fleetopt is told, what it checks, what it remembers.
+"""Starting an agent: what fleetopt tries, what it checks, what it remembers.
 
-The session that reads the project (setup.settle) is replaced by a stand-in answer, so
-no model is called. Everything code does with that answer runs for real on the fixture.
+Trials run for real on the fixture, whose model is a fake: no network, no cost. The
+session that reads the project (start.settle) is replaced by a stand-in answer, so no
+model is called.
 """
 
+import asyncio
 import json
 import pathlib
 import shutil
@@ -11,32 +13,52 @@ import sys
 
 import pytest
 
-from fleetopt.drive import driver, entry, setup
+from fleetopt.drive import driver, entry, start
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-ANSWER = {"graph": "agent.py:graph", "agent": "agent", "why": "", "others": [], "paths": ["."], "env_file": None,
-          "env": {}, "config": {}, "context": {}, "store": None, "input_template": None,
-          "inputs": ["battery degradation", "route optimization"], "inputs_from": "the project's inputs.jsonl",
-          "missing": [], "agent_fault": None}
+ENTRY = {"adapter": "langgraph", "name": "agent", "graph": "agent.py:graph", "paths": ["."], "env_file": None,
+         "env": {}, "config": {}, "context": {}, "store": None, "input_template": None,
+         "inputs": ["battery degradation", "route optimization"], "inputs_source": "the project's inputs.jsonl",
+         "proven": None, "broken": None}
+PLAIN = """from typing import TypedDict
+from langgraph.graph import END, START, StateGraph
+class State(TypedDict):
+    text: str
+builder = StateGraph(State)
+builder.add_node("shout", lambda state: {"text": state["text"].upper()})
+builder.add_edge(START, "shout")
+builder.add_edge("shout", END)
+graph = builder.compile()
+"""
 
 
 @pytest.fixture
 def project(tmp_path):
     target = tmp_path / "fixture"
     shutil.copytree(ROOT / "fixture", target)
-    return target
+    return target.resolve()
 
 
-def _answers(monkeypatch, *answers):
-    """The session's answers, in order, checked the way real ones are. Records what it was asked."""
-    asked, queue = [], list(answers)
+def _settles(monkeypatch, answer, proven=True, **extra):
+    """The session's answer and the entry its trials proved, standing in for the session."""
+    asked = []
 
-    def settle(project, **kw):
+    def settle(project, path, **kw):
         asked.append(kw)
-        return setup.checked(queue.pop(0) if len(queue) > 1 else queue[0], project)
+        found = {**ENTRY, "project": str(project), "interpreter": kw["python"], **extra}
+        if kw["inputs"]:
+            found.update(inputs=kw["inputs"], inputs_source=kw["source"])
+        return answer, (found if proven else None)
 
-    monkeypatch.setattr(setup, "settle", settle)
+    monkeypatch.setattr(start, "settle", settle)
     return asked
+
+
+def _trying(project, tmp_path, inputs=()):
+    start.RUN.clear()
+    start.RUN.update(project=project, path=entry.path_for(tmp_path / "out", project, "agent"), python=sys.executable,
+                     inputs=list(inputs), source=None, trials=0, proven=None)
+    return lambda plan: asyncio.run(start.try_start.handler({"entry": json.dumps(plan)}))["content"][0]["text"]
 
 
 class _Graph:
@@ -60,139 +82,90 @@ def test_the_driver_puts_the_text_where_the_graph_takes_it():
     assert driver.build_input(state, "hi", template) == {"jd_text": "hi", "profile": {"name": "demo"}, "targets": ["resume"]}
 
 
-def test_an_entry_is_worked_out_once_proven_by_running_it_and_remembered(project, tmp_path, monkeypatch):
-    asked = _answers(monkeypatch, ANSWER)
+def test_a_trial_says_what_the_agent_did_and_leaves_nothing_behind(project, tmp_path):
+    path = entry.path_for(tmp_path / "out", project, "agent")
+    found = {**ENTRY, "project": str(project), "interpreter": sys.executable, "inputs": ["battery degradation"]}
+    entry.save(path, found)
+    result = start.trial(path, found)
+    assert (result["exit"], result["requests"], result["finished"]) == (0, 1, 1)
+    assert result["model_calls"] >= 1 and result["answered"] == result["model_calls"] and result["error"] is None
+    assert not list((tmp_path / "out").glob("fleetopt-*"))
+
+
+def test_try_start_proves_an_entry_by_running_it_and_says_what_it_saw(project, tmp_path):
+    (project / "plain.py").write_text(PLAIN, encoding="utf-8")
+    trying = _trying(project, tmp_path)
+    assert "not in the project" in trying({**ENTRY, "graph": "made_up.py:graph"})   # checked before anything runs
+    assert "no inputs" in trying({**ENTRY, "inputs": []})
+    assert start.RUN["trials"] == 0
+
+    assert "It did not start" in trying({**ENTRY, "graph": "agent.py:no_such_graph"})
+    assert start.RUN["proven"] is None
+    assert "saw no model call" in trying({**ENTRY, "graph": "plain.py:graph"})      # it ran, and nothing to see
+    assert start.RUN["proven"] is None
+
+    text = trying({**ENTRY, "env": {"MODEL_PROVIDER": "fake", "ANTHROPIC_API_KEY": "sk-x", "db_password": "x"}})
+    assert "It started" in text and "ANTHROPIC_API_KEY, db_password" in text
+    assert start.RUN["proven"]["env"] == {"MODEL_PROVIDER": "fake"}                  # a credential never travels
+    assert "sk-x" not in start.RUN["path"].read_text(encoding="utf-8")
+    start.RUN["trials"] = start.TRIALS
+    assert "Refused" in trying(ENTRY)                                                # four trials on the team's key
+
+
+def test_the_teams_eval_cases_are_the_inputs_whatever_the_session_wrote(project, tmp_path):
+    trying = _trying(project, tmp_path, inputs=["what is 17% of 2,340?"])
+    trying({**ENTRY, "inputs": ["something the session made up"]})
+    assert start.RUN["proven"]["inputs"] == ["what is 17% of 2,340?"]
+
+
+def test_an_entry_is_worked_out_once_and_remembered(project, tmp_path, monkeypatch):
+    asked = _settles(monkeypatch, {"status": "started", "agent": "researcher", "why": "the one the tests build"})
     said = []
     path, first = entry.ensure(project, tmp_path / "out", say=said.append)
-    assert first["proven"] and first["graph"] == "agent.py:graph" and first["inputs"] == ANSWER["inputs"]
+    assert first["proven"] and first["name"] == "researcher" and first["inputs"] == ENTRY["inputs"]
     assert path.is_relative_to(tmp_path / "out") and not (project / "entries").exists()  # fleetopt's folder, not the repo
-    assert any("it answered" in line for line in said) and any(line.startswith("    - battery") for line in said)
-    assert asked[0]["have_inputs"] is False  # the fixture keeps inputs but no expected answers: not eval cases
+    assert any("because the one the tests build" in line for line in said)
+    assert any(line.startswith("    - battery") for line in said)
+    assert asked[0]["inputs"] == []  # the fixture keeps inputs but no expected answers: not eval cases
 
     def never(*a, **k):
-        raise AssertionError("a proven entry is neither worked out nor proven again")
+        raise AssertionError("a proven entry is not worked out again")
 
-    monkeypatch.setattr(entry, "prove", never)
-    monkeypatch.setattr(setup, "settle", never)
+    monkeypatch.setattr(start, "settle", never)
     _, again = entry.ensure(project, tmp_path / "out", say=said.append)
     assert again == first
 
 
-def test_what_only_the_team_can_provide_is_listed_and_nothing_runs(project, tmp_path, monkeypatch):
-    _answers(monkeypatch, {**ANSWER, "missing": ["A Postgres database at DATABASE_URL; start it with docker compose up db"]})
-
-    def never(*a, **k):
-        raise AssertionError("nothing is run for a project that is not ready")
-
-    monkeypatch.setattr(entry, "prove", never)
-    with pytest.raises(entry.NotReady, match="(?s)1 thing to set up.*Postgres database"):
+def test_what_only_the_team_can_provide_is_listed(project, tmp_path, monkeypatch):
+    _settles(monkeypatch, {"status": "missing", "missing": ["A Postgres database at DATABASE_URL; start it with "
+                                                            "docker compose up db", "ANTHROPIC_API_KEY in .env"]},
+             proven=False)
+    with pytest.raises(entry.NotReady, match="(?s)2 things to set up.*Postgres database.*ANTHROPIC_API_KEY"):
         entry.ensure(project, tmp_path / "out", say=lambda line: None)
 
 
-def test_a_project_that_is_not_ready_gets_the_whole_list_at_once(project, tmp_path, monkeypatch):
-    _answers(monkeypatch, {**ANSWER, "env_file": ".env"})
-    (project / ".env.example").write_text("ANTHROPIC_API_KEY=\n", encoding="utf-8")
-    (project / "uv.lock").write_text("", encoding="utf-8")
-    (project / "agent.py").write_text("import a_package_nobody_installed\n" + (project / "agent.py").read_text(encoding="utf-8"), encoding="utf-8")
-    with pytest.raises(entry.NotReady) as caught:
+def test_an_agent_fleetopt_cannot_see_is_said_so_plainly(project, tmp_path, monkeypatch):
+    _settles(monkeypatch, {"status": "cannot_see", "explanation": "it calls the claude program in llm.py:42"},
+             proven=False)
+    with pytest.raises(entry.Unstartable, match="cannot see its model calls.*llm.py:42"):
         entry.ensure(project, tmp_path / "out", say=lambda line: None)
-    text = str(caught.value)
-    assert "2 things to set up, then run the same command again" in text
-    assert ".env does not exist" in text and "Copy .env.example to it" in text
-    assert "`a_package_nobody_installed`" in text and "uv sync" in text
-
-
-def test_a_missing_provider_key_is_named_and_a_present_one_is_enough(project, tmp_path, monkeypatch):
-    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "AZURE_OPENAI_API_KEY"):
-        monkeypatch.delenv(name, raising=False)
-    for package in ("langchain_anthropic", "langchain_openai"):  # stand-ins: the agent pulls in two providers
-        (project / package).mkdir()
-        (project / package / "__init__.py").write_text("", encoding="utf-8")
-    (project / "agent.py").write_text("import langchain_anthropic, langchain_openai\n" + (project / "agent.py").read_text(encoding="utf-8"),
-                                      encoding="utf-8")
-    _answers(monkeypatch, ANSWER)
-    with pytest.raises(entry.NotReady, match="(?s)No key for a model provider.*ANTHROPIC_API_KEY.*OPENAI_API_KEY"):
+    _settles(monkeypatch, {"status": "started"}, proven=False)          # a claim no trial backs is not a start
+    with pytest.raises(entry.Unstartable, match="could not start the agent"):
         entry.ensure(project, tmp_path / "out", say=lambda line: None)
-
-    (project / ".env").write_text("OPENAI_API_KEY=placeholder\n", encoding="utf-8")  # one of them is enough to try
-    _answers(monkeypatch, {**ANSWER, "env_file": ".env"})
-    _, found = entry.ensure(project, tmp_path / "out", say=lambda line: None)
-    assert found["proven"] and found["env_file"] == ".env"
-    assert "placeholder" not in json.dumps(found)  # the entry names the file, never what is in it
-
-
-def test_a_wrong_answer_gets_one_more_try_with_what_happened(project, tmp_path, monkeypatch):
-    asked = _answers(monkeypatch, {**ANSWER, "graph": "agent.py:no_such_graph"}, ANSWER)
-    _, found = entry.ensure(project, tmp_path / "out", say=lambda line: None)
-    assert found["proven"] and len(asked) == 2
-    assert "could not be loaded" in asked[1]["failure"] and asked[1]["earlier"]["graph"] == "agent.py:no_such_graph"
-
-
-def test_an_answer_that_names_a_file_not_there_is_not_used(project):
-    with pytest.raises(ValueError, match="not in the project"):
-        setup.checked({**ANSWER, "graph": "made_up.py:graph"}, project)
-    with pytest.raises(ValueError, match="no graph named"):
-        setup.checked({**ANSWER, "graph": "graph"}, project)
-    with pytest.raises(ValueError, match="not the JSON object"):
-        setup.checked(["a list"], project)
-
-
-def test_a_credential_never_travels_through_an_entry(project):
-    plan = setup.checked({**ANSWER, "env": {"MODEL_PROVIDER": "anthropic", "ANTHROPIC_API_KEY": "sk-x",
-                                            "db_password": "x", "AUTH_TOKEN": "x"}}, project)
-    assert plan["env"] == {"MODEL_PROVIDER": "anthropic"}
-
-
-def test_an_agent_that_still_does_not_load_is_the_teams_to_fix(project, tmp_path, monkeypatch):
-    _answers(monkeypatch, ANSWER)
-    (project / "agent.py").write_text("raise RuntimeError('the vector store is not built')\n" + (project / "agent.py").read_text(encoding="utf-8"),
-                                      encoding="utf-8")
-    with pytest.raises(entry.NotReady, match="failed while loading: RuntimeError: the vector store is not built"):
-        entry.ensure(project, tmp_path / "out", say=lambda line: None)
-
-
-def test_a_call_the_provider_refuses_is_the_teams_to_fix(project, tmp_path, monkeypatch):
-    asked = _answers(monkeypatch, ANSWER)
-    monkeypatch.setattr(entry, "prove", lambda path, found: (False, "[driver] FAILED 'x'\n   AuthenticationError: invalid x-api-key"))
-    with pytest.raises(entry.NotReady, match="The model provider refused the call: AuthenticationError: invalid x-api-key"):
-        entry.ensure(project, tmp_path / "out", say=lambda line: None)
-    assert "AuthenticationError" in asked[1]["failure"]  # the session saw it too: another provider may be the answer
-    assert entry.refused("ValueError: boom") is None
-    assert entry.refused("httpx.ConnectError: [Errno 111] Connection refused").startswith("A service the agent depends on")
 
 
 def test_an_agent_that_starts_and_never_finishes_is_carried_on_with_as_broken(project, tmp_path, monkeypatch):
-    own_bug = ("[driver] FAILED 'Build a briefing'\n         BadRequestError: tool_result without a tool_use before it\n"
-               "[driver] 0 finished, 0 paused, 1 failed, of 1 inputs\n" + entry.ANSWERED.format(n=5))
-    assert entry.starts_but_fails(own_bug) == "BadRequestError: tool_result without a tool_use before it"
-    _answers(monkeypatch, ANSWER, {**ANSWER, "agent_fault": "act builds a prompt that orphans a tool result"})
-    monkeypatch.setattr(entry, "prove", lambda path, found: (False, own_bug))
+    _settles(monkeypatch, {"status": "started"}, broken="BadRequestError: tool_result without a tool_use before it")
     said = []
     _, found = entry.ensure(project, tmp_path / "out", say=said.append)
     assert found["proven"] and "tool_result" in found["broken"] and any("no request finishes" in line for line in said)
 
-    _answers(monkeypatch, ANSWER)  # no model call behind the failure: it never started
-    monkeypatch.setattr(entry, "prove", lambda path, found: (False, "[driver] FAILED 'x'\n   KeyError: 'tenant'"))
-    with pytest.raises(entry.Unstartable, match="after 2 tries"):
-        entry.ensure(project, tmp_path / "out2", say=lambda line: None)
-
 
 def test_a_relative_output_folder_still_finds_its_entry(project, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    _answers(monkeypatch, ANSWER)
+    _settles(monkeypatch, {"status": "started"})
     path, found = entry.ensure(project, "out", say=lambda line: None)
     assert path.is_absolute() and found["proven"]
-
-
-def test_a_trial_counts_the_calls_the_model_answered(project, tmp_path):
-    out = tmp_path / "out"
-    path = entry.path_for(out, project, "agent")
-    found = {"project": str(project), "interpreter": sys.executable, "graph": "agent.py:graph", "paths": ["."],
-             "env_file": None, "env": {}, "config": {}, "input_template": None, "inputs": ["battery degradation"]}
-    entry.save(path, found)
-    worked, tail = entry.prove(path, found)
-    assert worked and "1 finished" in tail and "the model answered" not in tail  # said only when the request failed
-    assert not list(out.glob("fleetopt-*"))  # a trial leaves nothing behind
 
 
 def test_an_agent_built_to_be_hosted_gets_a_store_and_its_context():
@@ -218,19 +191,15 @@ def test_eval_cases_are_the_inputs_and_the_session_is_told_so(project, tmp_path,
     with pytest.raises(entry.Unstartable, match="no eval cases could be read"):
         entry.team_inputs(project, tmp_path / "empty-folder-or-missing")
 
-    asked = _answers(monkeypatch, ANSWER)
-    monkeypatch.setattr(entry, "preflight", lambda path, found: ([], {"loaded": True, "input": "ok"}))
-    monkeypatch.setattr(entry, "prove", lambda path, found: (True, ""))
+    asked = _settles(monkeypatch, {"status": "started"})
     out = tmp_path / "out"
     _, first = entry.ensure(project, out, say=lambda line: None)                       # settled on the session's inputs
-    assert not first.get("asked_anew") and asked[0]["have_inputs"] is False
+    assert not first.get("asked_anew") and asked[0]["inputs"] == []
     _, found = entry.ensure(project, out, say=lambda line: None, supplied=cases)       # then cases arrive
     assert found["inputs"] == inputs and found["asked_anew"] and found["proven"] == first["proven"]
     _, again = entry.ensure(project, out, say=lambda line: None, supplied=cases)
     assert again["inputs"] == inputs and not again.get("asked_anew")                   # the same cases: nothing is new
     assert "asked_anew" not in json.loads(entry.path_for(out, project, "agent").read_text(encoding="utf-8"))
-    _answers(monkeypatch, ANSWER)
-    fresh = []
-    monkeypatch.setattr(setup, "settle", lambda project, **kw: fresh.append(kw) or setup.checked(ANSWER, project))
+    fresh = _settles(monkeypatch, {"status": "started"})
     entry.ensure(project, tmp_path / "out2", say=lambda line: None, supplied=cases)
-    assert fresh[0]["have_inputs"] is True                                              # it is not asked to write any
+    assert fresh[0]["inputs"] == inputs                                                # it is not asked to write any
