@@ -70,8 +70,9 @@ The entry:
   failed. A change that could alter the answers (a smaller model, an early exit, a
   trimmed context) goes alone.
 - **The smallest change that does it.** No refactoring on the way, no new dependency.
-  `python -m py_compile` on what you changed; never run the agent, its tests or its
-  evals yourself: `measure` runs it, under watch.
+  `python -m py_compile` on what you changed; never run the agent, its tests, its evals
+  or any of its code yourself, not even a snippet: `measure` runs it, under watch, and
+  `query` has every prompt and its size.
 - **Keep what must survive**: the entry point and what it returns, the cap on rounds or
   spend, what happens when a tool fails, anything written or sent, points where a human
   approves. **Never remove what ends a loop**; if only a crash ended it, add a limit on

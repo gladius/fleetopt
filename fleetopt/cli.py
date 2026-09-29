@@ -64,7 +64,7 @@ def main(argv=None):
     except (ValueError, RuntimeError) as exc:
         print(f"  can't run: {exc}")
         return 1
-    if facts["account"] and (facts["mode"] == "review" or not facts["measured"]):
+    if facts["account"] and (facts["mode"] == "review" or not facts["kept"]):  # why nothing was kept, in its words
         print("\n" + facts["account"] + "\n")
     print("\n".join(agent.summary(facts)))
     return 0 if facts["measured"] else 1

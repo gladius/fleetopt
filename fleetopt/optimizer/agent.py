@@ -39,10 +39,12 @@ SYSTEM = ((_HERE / "GUIDE.md").read_text(encoding="utf-8") + "\n\n## The mechani
           + "\n\n".join(f"<!-- fleetopt:{n} -->\n" + _body(_HERE / "skills" / n / "SKILL.md") for n in SKILLS))
 
 # Running the agent by hand spends the team's tokens twice and records nothing; eval
-# runners count too, since they run the agent on every case and bill its graders.
+# runners count too, since they run the agent on every case and bill its graders. Python
+# runs only as a compile check: observed, `python -c "from agents... import ..."` to size
+# a prompt, which is project code outside the cap (the recorded prompts have the sizes).
 RUNS_TARGET = re.compile(
     r"\bpytest\b|\blanggraph\s+dev\b|\bdeepeval\s+test\b|\bpromptfoo\s+eval\b|\bbraintrust\s+eval\b"
-    r"|\bpython[\d.]*\s+(?!-c\b|-m\s+(?:pip|venv|py_compile)\b)(?:-m\s+)?[\w./-]+|driver\.py")
+    r"|\b(?:uv|poetry|pdm)\s+run\b|\bpython[\d.]*\b(?!\s+-m\s+py_compile\b)|driver\.py")
 # Installs and downloads: right for a sandbox, wrong on someone else's machine (observed:
 # a session pulled langgraph from the internet with `uv run --with`).
 ENV_MUTATION = re.compile(
@@ -105,7 +107,8 @@ def guard_bash():
             return _deny("fleetopt never installs or downloads anything on this machine. If something is "
                          "missing, that is the team's to provide: report it.")
         if RUNS_TARGET.search(cmd):
-            return _deny("The agent runs only through start and measure. If one fails, read its error.")
+            return _deny("The project's code runs only through start and measure; Python here only as "
+                         "`python -m py_compile <file>`. Prompt sizes and contents are in what was recorded: query it.")
         return {}
     return hook
 
@@ -176,6 +179,21 @@ MISSION = {
     False: "Make the LangGraph agent in this project cost less without changing what it answers: start it if "
            "needed, measure it, find the waste, change it, prove each change, look again, and report.",
 }
+
+
+def _activity(block, project, shown):
+    """What the agent is doing, in words, once per thing: observed, five minutes of nothing but
+    'still working' while it read the code and the recorded calls."""
+    name, args = block.name.removeprefix("mcp__fleetopt__"), block.input or {}
+    where = lambda p: str(pathlib.Path(p).resolve().relative_to(project)) if pathlib.Path(p).resolve().is_relative_to(
+        project) else pathlib.Path(p).name
+    line = {"query": "looking at the recorded calls", "Grep": "searching the code", "Glob": "searching the code",
+            "Read": args.get("file_path") and f"reading {where(args['file_path'])}",
+            "Edit": args.get("file_path") and f"editing {where(args['file_path'])}",
+            "Write": args.get("file_path") and f"editing {where(args['file_path'])}"}.get(name)
+    if line and line != shown.get("last") and (line not in shown or not line.startswith("reading")):
+        tools.say(f"  {line}")
+        shown[line] = shown["last"] = line
 
 
 def _saved_entry(path):
@@ -257,7 +275,7 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
 
     prompt = _prompt(look_only, entry, inputs, cases, graph, team, minutes, max_usd, branch, earlier)
     options = build_options(project, model, max_usd, start_branch, look_only)
-    log, account, own = [], "", 0.0
+    log, account, own, shown = [], "", 0.0, {}
     try:
         async with ticking("working", said_at=lambda: ctx.get("said_at", 0)):
             async for message in query(prompt=prompt, options=options):
@@ -267,6 +285,7 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
                             log.append(block.text.strip())
                         elif isinstance(block, ToolUseBlock):
                             log.append(f"> {block.name.removeprefix('mcp__fleetopt__')} {json.dumps(block.input)[:300]}")
+                            _activity(block, project, shown)
                 elif isinstance(message, ResultMessage):
                     own = getattr(message, "total_cost_usd", None) or 0.0
                     account = (message.result or "").strip()
@@ -323,7 +342,7 @@ def summary(facts):
                          + (f": {c['detail']}" if c["detail"] else ""))
         lines.append("  Checked  " + (f"answers against {facts['cases']} eval cases" if facts["cases"] else
                                       "answers against the agent's original answers (no eval cases in the project)"))
-        if facts["verdict"]:
+        if facts["kept"] and facts["verdict"]:
             lines.append(f"  Verdict  {facts['verdict'].split(':')[0].lower()}")
     elif not facts["measured"]:
         lines.append("  Result   " + ("could not start it" if not facts["started"] else "could not measure it")
@@ -332,5 +351,6 @@ def summary(facts):
                  f"{money(facts['own_cost'])} by fleetopt")
     if facts["mode"] == "review" and facts["measured"]:
         lines.append(f"  Next     fleetopt apply {facts['project']}")
-    lines.append(f"  Details  {facts['run_dir']}/report.md")
+    report = pathlib.Path(facts["run_dir"]) / "report.md"
+    lines.append(f"  Details  {os.path.relpath(report) if report.is_relative_to(pathlib.Path.cwd()) else report}")
     return lines

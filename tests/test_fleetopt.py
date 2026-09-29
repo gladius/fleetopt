@@ -89,6 +89,8 @@ def _guard(cmd):
     "poetry add rich", "npm install", "npx something", "curl https://example.com -o f", "brew install jq",
     "python agent.py", "pytest tests/", "langgraph dev", "deepeval test run tests/", "promptfoo eval",
     "/proj/.venv/bin/python /x/fleetopt/probe/driver.py e.json --limit 1",
+    '.venv/bin/python -c "from agents.sql_agent import build; print(len(build()))"',  # project code, outside the cap
+    "uv run python -m agents.main", "poetry run agent",
 ])
 def test_guard_denies_installs_and_running_the_target(cmd):
     assert _guard(cmd)["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -321,6 +323,19 @@ def test_the_agent_reads_one_guide_and_every_cost_skill():
     assert on_disk == set(agent.SKILLS)
     assert all(f"fleetopt:{name}" in agent.SYSTEM for name in agent.SKILLS)
     assert "minimum prefix" in agent.SYSTEM and "## The flow" in agent.SYSTEM
+
+
+def test_while_it_investigates_a_person_sees_what_it_is_looking_at(tmp_path, capsys):
+    from claude_agent_sdk import ToolUseBlock
+
+    shown = {}
+    for name, args in (("Read", {"file_path": str(tmp_path / "agent.py")}), ("Read", {"file_path": str(tmp_path / "agent.py")}),
+                       ("mcp__fleetopt__query", {"sql": "SELECT 1"}), ("mcp__fleetopt__query", {"sql": "SELECT 2"}),
+                       ("Grep", {"pattern": "x"}), ("mcp__fleetopt__measure", {}),
+                       ("Edit", {"file_path": str(tmp_path / "agent.py")})):
+        agent._activity(ToolUseBlock(id="t", name=name, input=args), tmp_path, shown)
+    assert capsys.readouterr().out.split("\n")[:-1] == [
+        "  reading agent.py", "  looking at the recorded calls", "  searching the code", "  editing agent.py"]
 
 
 def test_the_command_line_is_two_commands_and_a_few_flags():
