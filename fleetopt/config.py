@@ -35,7 +35,9 @@ def load_env():
                 continue
             key, _, value = line.partition("=")
             key = key.strip()
-            if key not in os.environ:
+            # Only fleetopt's own knobs: run from inside a team's project, ./.env is theirs, and
+            # its keys would otherwise be kept from their agent, or bill fleetopt's AI.
+            if key.startswith("FLEETOPT_") and key not in os.environ:
                 os.environ[key] = value.strip()
                 _injected.add(key)
 

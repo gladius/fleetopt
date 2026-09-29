@@ -125,11 +125,47 @@ def test_the_projects_python_is_used_as_named_wherever_it_lives(project, tmp_pat
         tools.CTX.clear()
 
 
-def test_only_key_names_are_read_never_values(project, monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    (project / ".env").write_text("ANTHROPIC_API_KEY=sk-secret\nOPENAI_API_KEY=\nMODEL=x\n", encoding="utf-8")
-    names = tools.key_names(project)
-    assert "ANTHROPIC_API_KEY" in names and "OPENAI_API_KEY" not in names and "sk-secret" not in " ".join(names)
+def test_every_env_file_is_shown_by_its_names_never_its_values(project, monkeypatch):
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "from-a-login")
+    (project / ".env").write_text("export AZURE_OPENAI_KEY=sk-secret\n# OLD=1\nMODEL=x\n", encoding="utf-8")
+    (project / "app").mkdir()
+    (project / "app" / ".env.local").write_text("GOOGLE_APPLICATION_CREDENTIALS=./sa.json\n", encoding="utf-8")
+    (project / ".venv").mkdir()
+    (project / ".venv" / ".env").write_text("NOT_THE_PROJECTS=1\n", encoding="utf-8")
+    files, shell = tools.env_names(project)
+    assert files == {".env": ["AZURE_OPENAI_KEY", "MODEL"], "app/.env.local": ["GOOGLE_APPLICATION_CREDENTIALS"]}
+    assert "AWS_SECRET_ACCESS_KEY" in shell
+    assert "sk-secret" not in str(files) and "from-a-login" not in str(shell)
+
+
+def test_the_driver_runs_it_from_its_folder_with_its_env_files(tmp_path):
+    import subprocess
+
+    project = tmp_path / "p"
+    (project / "app").mkdir(parents=True)
+    (project / "app" / "graph.py").write_text(PLAIN.replace(
+        'lambda state: {"text": state["text"].upper()}',
+        'lambda state: print("SEEN", __import__("os").getenv("A"), __import__("os").getenv("B"), '
+        '__import__("pathlib").Path.cwd().name) or {"text": "x"}'), encoding="utf-8")
+    (project / "app" / ".env").write_text("A=from-app\nB=from-app\n", encoding="utf-8")
+    (project / ".env").write_text("B=from-root\n", encoding="utf-8")
+    entry = {"project": str(project), "graph": "app/graph.py:graph", "cwd": "app", "env_file": [".env", "app/.env"],
+             "inputs": ["hi"]}
+    (tmp_path / "e.json").write_text(json.dumps(entry), encoding="utf-8")
+    out = subprocess.run([sys.executable, driver.__file__, str(tmp_path / "e.json")], capture_output=True, text=True).stdout
+    assert "SEEN from-app from-root app" in out          # in order, a name already set is kept; started in its folder
+
+
+def test_an_entry_says_where_it_starts_and_which_env_files(project, tmp_path):
+    _trying(project, tmp_path)
+    try:
+        (project / "app").mkdir()
+        entry = tools._entry({**ENTRY, "cwd": "app", "env_file": ".env"})
+        assert (entry["cwd"], entry["env_file"]) == ("app", [".env"])
+        with pytest.raises(ValueError, match="cwd must be a folder in the project"):
+            tools._entry({**ENTRY, "cwd": ".."})
+    finally:
+        tools.CTX.clear()
 
 
 def test_expected_answers_are_the_teams_own_never_written_by_the_session(project, tmp_path):

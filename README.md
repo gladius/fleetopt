@@ -47,8 +47,10 @@ fleetopt review "$T"
 
 One Claude agent does the work, the way an expert would; code holds the numbers and the limits.
 
-1. **Start it.** The agent reads the project and works out how to run its agent, then
-   tries it on one input. It is remembered per project.
+1. **Start it.** The agent reads the project and works out how its agent runs here: which
+   graph, which env files, which folder. Then it tries it on one input. It is remembered per
+   project. Run fleetopt from the terminal where your agent works for you: that terminal's
+   environment and cloud logins are what the agent runs with.
 2. **Check it as it is** (apply): your eval suite, or its answers to your golden dataset or examples.
 3. **Measure it** as it is: 3 runs, every model call, token and step recorded.
 4. **Find the waste**: prompts that grow, caching not used, a bigger model than a step
@@ -84,9 +86,10 @@ see (they do not go through LangChain).
 Enforced, not asked; each is a test in `tests/test_invariants.py`.
 
 - The team's code is edited only inside the project, on fleetopt's branch. No push.
-- Nothing installed, nothing downloaded. fleetopt's AI cannot read `.env`, keys or
-  certificates; it is told only the names of provider keys. The values in `.env` go only to
-  your agent's and your evals' own processes, and are never logged.
+- Nothing installed, nothing downloaded. fleetopt's AI is shown the names your env files set,
+  never their values: its file reader is blocked from `.env`, keys and certificates (its
+  shell is not blocked from them). The values are loaded into your agent's and your evals'
+  own processes, and fleetopt never logs them.
 - The agent runs only through fleetopt's tools, never by hand.
 - No web access, and nothing loaded from your Claude Code or the project's `.claude/`.
 - Nothing about you goes into what is sent to the agent.

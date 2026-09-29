@@ -109,10 +109,12 @@ def test_output_tail_survives_undecodable_bytes(tmp_path):
 def test_child_env_never_carries_fleetopts_own_env(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("FLEETOPT_TEST_KEY", raising=False)
-    (tmp_path / ".env").write_text("# comment\nFLEETOPT_TEST_KEY=abc\n", encoding="utf-8")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    (tmp_path / ".env").write_text("# comment\nFLEETOPT_TEST_KEY=abc\nOPENAI_API_KEY=theirs\n", encoding="utf-8")
     config.load_env()
     try:
         assert os.environ["FLEETOPT_TEST_KEY"] == "abc"
+        assert "OPENAI_API_KEY" not in os.environ      # run from inside a team's project, its .env stays theirs
         assert "FLEETOPT_TEST_KEY" not in config.child_env()
     finally:
         config._injected.discard("FLEETOPT_TEST_KEY")

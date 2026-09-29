@@ -36,7 +36,7 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
-from fleetopt.probe import runner, store
+from fleetopt.probe import driver, runner, store
 
 RUNS = 3           # runs of the agent per measurement
 TRIES = 4          # tries to start the agent, one input each
@@ -49,7 +49,6 @@ TEAM_USD = 2.0     # cap on the team's key; FLEETOPT_TEAM_USD overrides
 MAX_MINUTES = 120  # the whole run; FLEETOPT_MAX_MINUTES overrides
 DRIVER = pathlib.Path(runner.__file__).with_name("driver.py")
 SECRET = re.compile(r"key|token|secret|password|credential", re.I)
-KEYISH = re.compile(r"^[A-Z][A-Z0-9_]*(?:API_KEY|AUTH_TOKEN)$")
 # The team's tests, evals and eval data: how they know the agent works, never changed to pass.
 TESTS = re.compile(r"(^|/)(tests?|evals?|evaluations?|datasets?|eval_data|goldens?)(/|$)|(^|/)(test_[^/]*|[^/]*_test"
                    r"|conftest)\.py$", re.I)
@@ -179,17 +178,18 @@ def spread(items, n):
     return items if len(items) <= n else [items[i * len(items) // n] for i in range(n)]
 
 
-def key_names(project):
-    """Names of the provider keys set in the environment or the project's .env. Names
-    only: a value is never kept or shown."""
-    names = {k for k in os.environ if KEYISH.match(k)}
-    env = project / ".env"
-    if env.exists():
-        for line in env.read_text(encoding="utf-8", errors="replace").splitlines():
-            name, _, value = line.strip().removeprefix("export ").partition("=")
-            if KEYISH.match(name.strip()) and value.strip():
-                names.add(name.strip())
-    return sorted(names)
+def env_names(project):
+    """({env file: the names it sets}, credential names set in this terminal), for every env
+    file in the project. Names only: a value is never kept or shown."""
+    files = {}
+    for folder, dirs, found in os.walk(project):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in ("node_modules", "venv", "__pycache__"))
+        for name in sorted(n for n in found if n == ".env" or n.startswith(".env.") or n.endswith(".env")):
+            lines = (pathlib.Path(folder) / name).read_text(encoding="utf-8", errors="replace").splitlines()
+            files[(pathlib.Path(folder) / name).relative_to(project).as_posix()] = [
+                key for line in lines if "=" in line and not line.strip().startswith("#")
+                if (key := line.strip().removeprefix("export ").partition("=")[0].strip())]
+    return files, sorted(k for k in os.environ if SECRET.search(k) and not k.startswith("FLEETOPT_"))
 
 
 def trial(path, entry, timeout=600):
@@ -225,6 +225,11 @@ def _entry(plan):
     file = graph.rpartition(":")[0]  # the last colon: a Windows path has one of its own
     if file.endswith(".py") and not (project / file).exists():
         raise ValueError(f"the graph names {file}, which is not in the project")
+    cwd = str(plan.get("cwd") or ".")
+    if not (project / cwd).is_dir() or not (project / cwd).resolve().is_relative_to(project):
+        raise ValueError(f"cwd must be a folder in the project; {cwd} is not")
+    env_file = plan.get("env_file") or None
+    env_file = [env_file] if isinstance(env_file, str) else env_file and [str(f) for f in env_file]
     python = interpreter(project)
     if plan.get("interpreter"):
         # Not resolved: a venv's python is a symlink, and following it leaves the venv behind.
@@ -256,7 +261,7 @@ def _entry(plan):
     env = {k: str(v) for k, v in (plan.get("env") or {}).items() if not SECRET.search(k)}
     return {"project": str(project), "name": plan.get("agent") or "agent", "job": str(plan.get("job") or "")[:300],
             "graph": graph, "paths": [str(p) for p in plan.get("paths") or ["."]], "interpreter": python,
-            "env_file": plan.get("env_file"), "env": env, "config": plan.get("config") or {},
+            "cwd": cwd, "env_file": env_file, "env": env, "config": plan.get("config") or {},
             "context": plan.get("context") or {}, "store": plan.get("store"), "input_template": template,
             "inputs": [t for t, _ in cases], "inputs_from": plan.get("inputs_from"),
             "expected": [e for _, e in cases] if any(e for _, e in cases) else None,
@@ -292,7 +297,7 @@ def started(entry):
     measurements go under. The name carries a fingerprint of how it is run, inputs included:
     observed, a 1-input and a 4-input baseline of the same code pooled into one median (12.5
     model calls). With it, a baseline is reused only when both the code and the run match."""
-    how = {k: entry.get(k) for k in ("graph", "paths", "interpreter", "env_file", "env", "config", "context", "store",
+    how = {k: entry.get(k) for k in ("graph", "paths", "interpreter", "cwd", "env_file", "env", "config", "context", "store",
                                      "input_template", "inputs")}
     tag = hashlib.sha1(json.dumps(how, sort_keys=True, default=str).encode()).hexdigest()[:8]
     CTX.update(entry=entry, run_cmd=command(CTX["entry_path"], entry), job=entry.get("job") or "answer the user's request",
@@ -475,13 +480,11 @@ def _run_evals(command):
     calls count toward the cap, with the env file the agent runs with. Returns (exit code,
     seconds, full output)."""
     entry = CTX.get("entry") or {}
-    env_file = CTX["project"] / entry["env_file"] if entry.get("env_file") else None
     python = pathlib.Path(entry.get("interpreter") or interpreter(CTX["project"]))
     minutes = float(os.environ.get("FLEETOPT_EVAL_MINUTES") or EVAL_MINUTES)
     began = time.time()
     raw, traces, graphs, code = runner.execute(CTX["project"], command, CTX["out"], timeout=60 * minutes,
-                                               path_first=python.parent,
-                                               env_file=env_file if env_file and env_file.is_file() else None)
+                                               path_first=python.parent, env_files=driver.env_files(entry, CTX["project"]))
     text = runner.output_tail(raw, lines=100_000)
     CTX["n_evals"] += 1
     runner.ingest(CTX["project"], command, CTX["out"], f"evals-{CTX['n_evals']}", raw, traces, graphs, code)

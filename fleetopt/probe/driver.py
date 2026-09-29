@@ -35,6 +35,12 @@ def load_env(path, env=os.environ):
         env.setdefault(key.strip(), value.strip().strip("'\""))
 
 
+def env_files(entry, root):
+    """The entry's env files that exist, in the order it names them."""
+    named = entry.get("env_file") or []
+    return [root / f for f in ([named] if isinstance(named, str) else named) if (root / f).is_file()]
+
+
 def resolve(spec, root, paths):
     """'pkg/module.py:name', 'pkg.module:name', or either ending in '()' for a factory."""
     target, _, attr = spec.rpartition(":")  # the last colon: a Windows path has one of its own
@@ -124,11 +130,11 @@ def main(argv):
     entry = json.loads(pathlib.Path(argv[0]).read_text(encoding="utf-8"))
     limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else None
     root = pathlib.Path(entry["project"])
-    os.chdir(root)
+    os.chdir(root / (entry.get("cwd") or "."))  # the folder the team starts it from
     paths = [str((root / p).resolve()) for p in entry.get("paths", ["."])]
     sys.path[:0] = [p for p in paths if p not in sys.path]
-    if entry.get("env_file") and (root / entry["env_file"]).exists():
-        load_env(root / entry["env_file"])
+    for path in env_files(entry, root):
+        load_env(path)
     os.environ.update(entry.get("env") or {})
 
     try:

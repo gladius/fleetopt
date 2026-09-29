@@ -56,9 +56,14 @@ probe that records every model call. You say how, as an entry, and try it with `
 it runs the agent on one input and tells you what happened. Four tries; each runs the
 agent on the team's key, so read enough first that the first one has a fair chance.
 
-What the driver does with an entry: for each input it puts the project directory and
-`paths` on `sys.path`, loads `env_file` inside the agent's process, sets `env`, imports
-`graph`, and calls
+You are in the team's own development setup: the driver runs in this terminal, with its
+environment, cloud logins and the project's own interpreter. What it does not get is what
+their launcher adds (`langgraph dev` loading the env file `langgraph.json` names, a
+Makefile or compose file loading one, a start from a subfolder), so the entry says that.
+
+What the driver does with an entry: it starts in `cwd`, and for each input it puts the
+project directory and `paths` on `sys.path`, loads each `env_file` in order inside the
+agent's process (a name already set is kept), sets `env`, imports `graph`, and calls
 
     graph.ainvoke(input, config={"configurable": {"thread_id": ..., **config}}, context=context)
 
@@ -71,8 +76,12 @@ without a store an empty in-memory one, as a hosting platform would.
   their app or tests use. With several, take the one the team ships, not a building block.
 - **How it is called**: the state class and the first node. Copy what the project's own
   entry point passes.
-- **Settings**: its env file; plain settings that are not secrets. If it supports several
-  providers, choose one whose key is set. Never put a key, token or password in an entry.
+- **Run it as it runs here**: find how the team starts it (`langgraph.json`, the README, a
+  Makefile, a compose file, `.envrc`, the code's own `load_dotenv` or settings class) and
+  name the env files it loads and the folder it starts from. You never see an env file's
+  values; its names are listed for you, with the credential names set in this terminal.
+  Plain settings that are not secrets go in `env`. If it supports several providers,
+  choose one whose key is set. Never put a key, token or password in an entry.
 - **Inputs**: what you found to check it against, as the agent is sent it: all of it up
   to eight, picking ones that differ in kind; one is enough when that is all there is.
   Several average out the variation in a model's answers, so a smaller saving clears the
@@ -80,8 +89,10 @@ without a store an empty in-memory one, as a hosting platform would.
   request (the object is then the graph's input as it is). Name where they came from in
   `inputs_from`. A request that needs a person gets an invented one; never use anything
   about whoever runs this tool.
-- **Reading a failed try**: a missing module, a refused key, a service that cannot be
-  reached, a file the agent needs: that is the team's to provide. Stop and list it. An
+- **Reading a failed try**: a key or file reported missing is first a question of
+  `env_file` and `cwd`: check them against how the team starts it and try again. A
+  missing module, a refused key, a service that cannot be reached, a file the project
+  does not have: that is the team's to provide. Stop and list it. An
   input that did not fit: fix the entry. The model answered and the agent's own code then
   failed: it started, and a broken agent is still worth a review.
 
@@ -91,7 +102,7 @@ The entry:
 {"graph": "path/to/file.py:name  or  package.module:name  (end with () for a factory)",
  "agent": "a short name", "job": "what it is for, one sentence", "paths": ["."],
  "interpreter": "only if its environment is not .venv or venv in the project: the path to its python",
- "env_file": ".env or null", "env": {}, "config": {}, "context": {}, "store": null,
+ "cwd": "the folder it starts from, or .", "env_file": [".env"], "env": {}, "config": {}, "context": {}, "store": null,
  "input_template": null, "inputs": ["text, or a JSON object"], "inputs_from": "the file or place",
  "expected": null, "expected_from": null}
 ```

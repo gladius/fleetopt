@@ -208,9 +208,11 @@ def _prompt(look_only, entry, evals, graph, team, minutes, max_usd, branch, earl
         lines.append(f"How to start it is known, from an earlier try: {entry['name']} ({entry['graph']}), "
                      f"{len(entry['inputs'])} input(s) {tools.source(entry)}. It is started: measure it.")
     else:
-        python = tools.interpreter(ctx["project"])
-        lines.append(f"How to start it is not known yet: start it (see the guide). Provider keys that are set "
-                     f"(names only): {', '.join(tools.key_names(ctx['project'])) or 'none found'}. "
+        python, (files, shell) = tools.interpreter(ctx["project"]), tools.env_names(ctx["project"])
+        listed = "; ".join(f"{f}: {', '.join(n[:40]) or 'nothing'}" for f, n in list(files.items())[:20]) or "none"
+        lines.append(f"How to start it is not known yet: start it (see the guide). Env files in the project and the "
+                     f"names each sets (never the values): {listed}. Credential names set in this terminal: "
+                     f"{', '.join(shell[:40]) or 'none'}. "
                      + (f"The project's interpreter: {python}." if python != sys.executable else
                         "No .venv or venv in the project: if its environment is elsewhere (poetry, conda, a path in "
                         "its README), name that python as `interpreter`."))

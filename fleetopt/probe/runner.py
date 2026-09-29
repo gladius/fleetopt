@@ -65,7 +65,7 @@ def code_state(project):
     return f"{head[:12]}+{hashlib.sha1(diff.encode()).hexdigest()[:8]}"
 
 
-def execute(project, run_cmd, out_dir, with_io=False, timeout=None, max_steps=None, path_first=None, env_file=None):
+def execute(project, run_cmd, out_dir, with_io=False, timeout=None, max_steps=None, path_first=None, env_files=()):
     """Run run_cmd under instrumentation. Touches no database, so several can run
     at once. Returns (raw_dir, traces_path, graphs_path, returncode). A run that has
     not ended after `timeout` seconds is stopped and returns TIMED_OUT: an agent
@@ -82,8 +82,8 @@ def execute(project, run_cmd, out_dir, with_io=False, timeout=None, max_steps=No
     env = config.child_env()
     if path_first:  # the project's own environment first, so `pytest` or `python` in a command are its own
         env["PATH"] = os.pathsep.join([str(path_first), env.get("PATH", "")])
-    if env_file:  # the project's env file, into its process only, as the driver loads it for the agent
-        driver.load_env(env_file, env)
+    for path in env_files:  # the project's env files, into its process only, as the driver loads them
+        driver.load_env(path, env)
     env["PYTHONPATH"] = os.pathsep.join(
         [str(HOOKS_DIR)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
     )
