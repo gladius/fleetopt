@@ -14,7 +14,7 @@ them, then run this again."
 
 ```bash
 fleetopt review <project>     # look only: where it wastes tokens and money. Changes nothing
-fleetopt apply <project>      # look, change it on a new branch, and prove each change
+fleetopt apply <project>      # look, change it on a new branch, prove the changes on your evals
 ```
 
 ## Install
@@ -28,11 +28,12 @@ python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\a
 pip install -e ".[dev]"
 ```
 
-Try it on a copy of the bundled fixture (a fake model, nothing spent on any key):
+Try `review` on a copy of the bundled fixture (a fake model, nothing spent on any key). The
+fixture has no eval suite, so `apply` on it stops at "No evals found", as it should:
 
 ```bash
 T=$(mktemp -d) && cp -r fixture/. "$T" && git -C "$T" init -q && git -C "$T" add -A && git -C "$T" commit -qm base
-fleetopt apply "$T"
+fleetopt review "$T"
 ```
 
 ## How it works
@@ -41,7 +42,7 @@ One Claude agent does the work, the way an expert would; code holds the numbers 
 
 1. **Start it.** The agent reads the project and works out how to run its agent, then
    tries it on one input. It is remembered per project.
-2. **Run your evals** on the code as it is: that is what "still works" means.
+2. **Run your evals** on the code as it is (apply): that is what "still works" means.
 3. **Measure it** as it is: 3 runs, every model call, token and step recorded.
 4. **Find the waste**: prompts that grow, caching not used, a bigger model than a step
    needs, output with no limit, loops that do not stop early, repeated calls, oversized
@@ -69,13 +70,15 @@ through LangChain).
 | A changed agent's steps | 3 times the original's: stopped, and changed code runs once before three times |
 | Tries to start an agent | 4 |
 | One run of your evals | 30 minutes (`FLEETOPT_EVAL_MINUTES`) |
+| Reading your eval results | 5 minutes; no answer means the change is not kept |
 
 ## What keeps it safe
 
 Enforced, not asked; each is a test in `tests/test_invariants.py`.
 
 - The team's code is edited only inside the project, on fleetopt's branch. No push.
-- Nothing installed, nothing downloaded. `.env`, keys and certificates are never read.
+- Nothing installed, nothing downloaded. The values in `.env`, keys and certificates are never
+  read; only the names of provider keys are checked. Your evals get `.env` from your own shell.
 - The agent runs only through fleetopt's tools, never by hand.
 - No web access, and nothing loaded from your Claude Code or the project's `.claude/`.
 - Nothing about you goes into what is sent to the agent.
@@ -89,14 +92,17 @@ Enforced, not asked; each is a test in `tests/test_invariants.py`.
 | `--max-usd N` | Cap on fleetopt's own spend |
 | `--out DIR` | Where records go (default `./.fleetopt`) |
 
-Each run leaves `.fleetopt/runs/<time>-<project>/`: `report.md`, `run.json`, `log.txt`,
-and `patch.diff` when something was kept. No prompts or outputs of the agent are stored.
+Each run leaves `.fleetopt/runs/<time>-<project>/`: `report.md`, `run.json`, `log.txt` (the
+whole session, live), `evals-N.log` (each eval run's output), and `patch.diff` when something
+was kept. The log, the eval output and `.fleetopt/fleetopt.db` contain the agent's prompts and
+answers: treat them like the project's own logs.
 
 ## Known limits
 
 - LangGraph in Python only; model calls must go through LangChain to be seen.
 - Only Anthropic has been run; OpenAI and Gemini are priced, untested.
-- The judge reads one run per side of the three measured.
+- Reading eval results has been tried on pytest output only.
+- Your `.env` is loaded for evals through a POSIX shell (Linux, macOS), not on Windows.
 
 ## More
 
