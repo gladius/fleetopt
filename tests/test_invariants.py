@@ -94,13 +94,17 @@ def test_an_edit_lands_inside_the_project_on_a_new_branch_or_not_at_all(tmp_path
     git = lambda *a: subprocess.run(["git", "-C", str(project), "-c", "user.email=t@t", "-c", "user.name=t", *a],
                                     check=True, capture_output=True)
     git("init", "-q", "-b", "main"); git("add", "-A"); git("commit", "-qm", "base")
+    tools.CTX.clear()
     guard = session.guard_edit(project, "main")
     ask = lambda path: asyncio.run(guard({"tool_input": {"file_path": str(path)}}, "id", None))
     denied = lambda v: v.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
 
     assert denied(ask(project / "agent.py"))            # still on the branch the run started from
     git("checkout", "-q", "-b", "fleetopt/change")
-    assert ask(project / "agent.py") == {}              # a new branch: go ahead
+    tools.CTX["baseline"] = None
+    assert denied(ask(project / "agent.py"))            # the agent as it is is measured before anything changes
+    tools.CTX.clear()
+    assert ask(project / "agent.py") == {}              # fleetopt's branch: go ahead
     assert ask("agent.py") == {}                        # relative paths are the project's
     assert denied(ask(tmp_path / "elsewhere.py"))       # outside the project
     assert denied(ask(project / ".." / "elsewhere.py"))
@@ -242,14 +246,13 @@ def test_design_is_reviewed_only_when_asked_for():
     assert args.design is False and cli._parser().parse_args(["review", "repo", "--design"]).design is True
 
 
-def test_the_loop_is_code_and_the_session_only_edits():
-    from fleetopt.optimizer import loop
-
-    assert (loop.RUNS, loop.ATTEMPTS, loop.TEAM_USD) == (3, 2, 2.0)
-    o = options()
-    served = {n.removeprefix("mcp__fleetopt__") for n in o.allowed_tools if n.startswith("mcp__")}
-    assert served == {"query_traces", "graph_topology", "graph_shape"}  # it looks; it never measures or judges
-    assert "never remove what ends a loop" in " ".join(session.SKILL.split()).lower()
+def test_the_agent_drives_and_the_limits_live_in_its_tools():
+    assert (tools.RUNS, tools.ATTEMPTS, tools.TEAM_USD, tools.STEP_FACTOR) == (3, 2, 2.0, 3)
+    served = {n.removeprefix("mcp__fleetopt__") for n in options().allowed_tools if n.startswith("mcp__")}
+    # it measures, keeps and undoes through fleetopt; there is no tool that judges on its say-so
+    assert served == {"measure", "keep", "undo", "query_traces", "graph_topology", "graph_shape"}
+    guide = " ".join(session.SKILL.split()).lower()
+    assert "never remove what ends a loop" in guide and "when you cannot help" in guide
     assert "review_architecture" not in {t.name for t in tools._TOOLS}  # whoever patches does not also review
 
 

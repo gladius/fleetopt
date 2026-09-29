@@ -579,8 +579,7 @@ def _nothing_may_run(monkeypatch, state):
     monkeypatch.setattr(config, "auth_summary", lambda: "test")
     monkeypatch.setattr(review, "run", never)
     monkeypatch.setattr(measure, "collect", never)
-    from fleetopt.optimizer import loop
-    monkeypatch.setattr(loop, "run", never)
+    monkeypatch.setattr(session, "run", never)
 
 
 def test_a_review_is_reused_while_the_code_has_not_changed(tmp_path, capsys, monkeypatch):
@@ -652,58 +651,138 @@ def test_the_summary_is_computed_and_claims_a_gain_only_under_a_proven_verdict(t
     assert runs == 2 and cost == pytest.approx(2 * measure.session_stats(store.connect(out / "fleetopt.db"), 1)["cost_usd"])
 
 
-def test_the_loop_keeps_what_passes_undoes_the_rest_and_tries_twice_at_most(tmp_path, monkeypatch):
-    from fleetopt.optimizer import loop
-
+def _repo(tmp_path):
     project = tmp_path / "agent"
     project.mkdir()
     (project / "agent.py").write_text("x = 0\n", encoding="utf-8")
-    for args in (["init", "-q"], ["add", "-A"], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"]):
+    for args in (["init", "-q", "-b", "main"], ["add", "-A"],
+                 ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"]):
         subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True)
+    (tmp_path / "out").mkdir()
+    return project
 
-    edits, judged = [], []
 
-    async def edit(project_, finding, review, feedback, model, max_usd, start_branch):
-        edits.append((finding["id"], feedback))
-        if finding["id"] == "C3":
-            return "CANNOT: the finding is wrong about the code", 0.1
-        (project_ / "agent.py").write_text(f"x = {len(edits)}\n", encoding="utf-8")
-        return f"DONE: change {len(edits)}", 0.1
+def _fake_runs(monkeypatch, failing=(), flat=(), wrong=(), reshaped=()):
+    """Running, comparing, judging and the graph's structure, faked by finding: nothing runs."""
+    seen = {"measured": [], "judged": []}
+    finding = lambda label: label.split("-")[0]
 
-    def measure(label, max_steps=None, probe=False):
-        if label == "C2-2":
+    def run(label, max_steps=None, probe=False):
+        seen["measured"].append((label, max_steps, probe))
+        if finding(label) in failing:
             return None, "run 1 took more than 150 steps, far more than the original, and was stopped."
-        return {"steps": 40, "completed": 3}, None
+        return {"steps": 40, "completed": 3, "cost_usd": 0.01}, None
 
-    def compare(before, after):
-        return {"cost_usd": {"verdict": "within noise" if after.startswith("D1") else "improved", "delta_pct": -20.0}}
+    async def judge(label):
+        seen["judged"].append(label)
+        ok = finding(label) not in wrong
+        return ok, [{"kept_on": "unchanged answer" if ok else None, "reason": "an answer was cut off"}], None
 
-    async def judge(task, label):
-        judged.append(label)
-        ok = label != "C2"
-        return ok, [{"kept_on": "unchanged answer" if ok else None, "reason": "an answer was cut off"}]
+    monkeypatch.setattr(tools, "_measure", run)
+    monkeypatch.setattr(tools, "_compare", lambda before, after: {"cost_usd": {
+        "before": 0.0125, "after": 0.01, "delta_pct": -20.0,
+        "verdict": "within noise" if finding(after) in flat else "improved"}})
+    monkeypatch.setattr(tools, "_judge", judge)
+    monkeypatch.setattr(tools, "_shape", lambda label: ["changed"] if finding(label) in reshaped else ["same"])
+    return seen
 
-    monkeypatch.setattr(loop, "_shape", lambda label: ["changed"] if label.startswith("C4") else ["same"])
-    for name, fake in (("_edit", edit), ("_measure", measure), ("_compare", compare), ("_judge", judge)):
-        monkeypatch.setattr(loop, name, fake)
-    monkeypatch.setattr(tools, "say", lambda line: None)
-    findings = [{"id": i, "title": i, "kind": "cost"} for i in ("C1", "C2", "C3", "C4")] + [{"id": "D1", "title": "D1", "kind": "design"}]
-    facts = asyncio.run(loop.run(project, tmp_path / "out", "cmd", "review", findings, task="t"))
 
-    rows = {r["id"]: (r["outcome"], r["detail"]) for r in json.loads(
-        (pathlib.Path(facts["run_dir"]) / "run.json").read_text(encoding="utf-8"))["rows"]}
-    assert rows["C1"][0] == "kept"
-    assert rows["C2"] == ("undone", "run 1 took more than 150 steps, far more than the original, and was stopped.")
-    assert rows["C3"] == ("not changed", "the finding is wrong about the code")
-    assert rows["D1"] == ("undone", "no real gain")
-    assert rows["C4"][0] == "undone" and "changed the agent's structure" in rows["C4"][1]  # a cost change keeps the graph
-    assert [e for e in edits if e[0] == "C2"] == [("C2", None), ("C2", "the judge failed 1 of 1 requests: an answer was cut off")]
-    assert len([e for e in edits if e[0] == "D1"]) == 2                       # two attempts, never a third
-    assert judged == ["C1", "C2"]                                             # nothing is judged that did not gain
-    log = subprocess.run(["git", "-C", str(project), "log", "--format=%s"], capture_output=True, text=True).stdout.split("\n")
-    assert log[0] == "C1: change 1" and facts["kept"] == 1                    # one commit per kept finding, nothing else
-    assert facts["branch"].startswith("fleetopt/")
-    assert (project / "agent.py").read_text(encoding="utf-8") == "x = 1\n"   # what was undone is gone
+def test_the_tools_keep_what_earns_it_and_undo_the_rest(tmp_path, monkeypatch):
+    project = _repo(tmp_path)
+    seen = _fake_runs(monkeypatch, failing={"C2"}, flat={"C3"}, wrong={"C4"}, reshaped={"C5"})
+    cases = [{"input": "when is my refund due?", "expected": "Refunds are issued within 14 days of the request.",
+              "source": "x"}]
+    findings = [{"id": f"C{i}", "title": f"t{i}", "kind": "cost"} for i in range(1, 6)]
+    call = lambda name, **a: asyncio.run(getattr(tools, name).handler(a))["content"][0]["text"]
+    edit = lambda text, name="agent.py": (project / name).write_text(text, encoding="utf-8")
+    git = lambda *a: subprocess.run(["git", "-C", str(project), *a], capture_output=True, text=True, check=True).stdout
+    tools.start(project, tmp_path / "out", "cmd", findings=findings, task="t", cases=cases)
+    git("checkout", "-q", "-b", "fleetopt/test")
+    try:
+        assert "Edits are allowed now" in call("measure")                  # the agent as it is, once
+        assert "measured already" in call("measure")
+        assert "Nothing changed" in call("measure", finding="C1")
+
+        edit("x = 1\n"), edit("y = 1\n", "helper.py")
+        assert "got better past the noise" in call("measure", finding="C1")
+        assert "Kept" in call("keep", finding="C1", summary="cap the prompt")
+
+        edit("x = 2\n"), edit("z = 2\n", "scratch.py")
+        assert "could not be measured" in call("measure", finding="C2")   # it ran away and was stopped
+        assert "C2 is neither kept nor undone" in call("measure", finding="C3")
+        assert "Undone" in call("undo", finding="C2", why="it looped")
+        assert not (project / "scratch.py").exists()                      # nothing half-made is left
+
+        for text in ("x = 3\n", "x = 4\n"):
+            edit(text)
+            call("measure", finding="C3")
+            assert "nothing got better past the noise" in call("keep", finding="C3")
+        edit("x = 5\n")
+        assert "measured 2 times" in call("measure", finding="C3")        # two attempts, never a third
+        call("undo", finding="C3", why="no gain")
+
+        edit("x = 6\n"), call("measure", finding="C4")
+        assert "the judge failed 1 of 1 requests: an answer was cut off" in call("keep", finding="C4")
+        call("undo", finding="C4", why="")
+
+        edit("x = 7\n"), call("measure", finding="C5")
+        assert "structure" in call("keep", finding="C5")                  # cost only: the graph stays as it is
+        call("undo", finding="C5", why="")
+
+        edit('ANSWER = "Refunds are issued within 14 days of the request."\n'), call("measure", finding="N1")
+        assert "writes an answer from the team's cases" in call("keep", finding="N1")
+        tools.finish()                                                    # left pending: undone for the agent
+
+        rows = tools.CTX["rows"]
+        assert {k: v[0] for k, v in rows.items()} == {"C1": "kept", "C2": "undone", "C3": "undone", "C4": "undone",
+                                                      "C5": "undone", "N1": "undone"}
+        assert "150 steps" in rows["C2"][1] and "left unproven" in rows["N1"][1]
+        assert seen["judged"] == ["C1", "C4"]                            # nothing is judged that did not gain
+        assert seen["measured"][0] == ("baseline", None, False)
+        assert all(probe and steps == 150 for _, steps, probe in seen["measured"][1:])  # changed code is watched
+        assert git("log", "--format=%s").split("\n")[:2] == ["C1: cap the prompt", "base"]  # one commit per kept finding
+        assert (project / "agent.py").read_text(encoding="utf-8") == "x = 1\n" and (project / "helper.py").exists()
+
+        tools.CTX["deadline"] = 1
+        edit("x = 8\n")
+        assert "time limit" in call("measure", finding="C6")
+    finally:
+        tools.CTX.clear()
+
+
+def test_apply_is_one_session_that_drives_and_leaves_nothing_unproven(tmp_path, monkeypatch, capsys):
+    import claude_agent_sdk
+
+    project = _repo(tmp_path)
+    _fake_runs(monkeypatch)
+    seen = {}
+
+    async def the_agent(prompt, options):  # a session that keeps C1 and walks away from C2
+        seen["prompt"] = prompt
+        call = lambda name, **a: getattr(tools, name).handler(a)
+        await call("measure")
+        (project / "agent.py").write_text("x = 1\n", encoding="utf-8")
+        await call("measure", finding="C1")
+        await call("keep", finding="C1", summary="cap the prompt")
+        (project / "agent.py").write_text("x = 2\n", encoding="utf-8")
+        await call("measure", finding="C2")
+        return
+        yield
+
+    monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
+    findings = [{"id": "C1", "title": "cache the prompt", "kind": "cost"}, {"id": "C2", "title": "trim", "kind": "cost"}]
+    try:
+        facts = asyncio.run(session.run(project, tmp_path / "out", "cmd", "Job: answers", findings, task="t"))
+    finally:
+        tools.CTX.clear()
+
+    assert "C1, C2" in seen["prompt"] and "Cost only" in seen["prompt"] and "$2.00 on the team's key" in seen["prompt"]
+    assert "look again" in seen["prompt"]
+    assert facts["kept"] == 1 and facts["branch"].startswith("fleetopt/")
+    assert (project / "agent.py").read_text(encoding="utf-8") == "x = 1\n"  # C2 was never kept: undone at the end
+    record = json.loads((pathlib.Path(facts["run_dir"]) / "run.json").read_text(encoding="utf-8"))
+    assert {r["id"]: r["outcome"] for r in record["rows"]} == {"C1": "kept", "C2": "undone"}
+    assert "| C2 trim | undone |" in capsys.readouterr().out
 
 
 def test_review_stops_when_it_saw_no_model_call(tmp_path, capsys, monkeypatch):

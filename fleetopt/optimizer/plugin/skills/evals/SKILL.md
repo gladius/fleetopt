@@ -1,6 +1,6 @@
 ---
 name: evals
-description: Find and load the project's existing eval cases (inputs with expected answers) before the baseline is measured. Use at the start of every run - when the repo has a tests/, evals/, deepeval, promptfoo, datasets or goldens folder, when a LangSmith or Galileo dataset name appears in the code, or when --evals was supplied. With cases loaded, judge grades correctness against the expected answers, not just "unchanged since the last run".
+description: The project's eval cases (inputs with expected answers) - what fleetopt loaded, and what it could not. Use when the run says how many cases were loaded and you need to know what that means for the judge, or when the repo has tests/, evals/, deepeval, promptfoo, datasets or goldens, or a LangSmith or Galileo dataset name in the code. With cases, the judge grades correctness against the expected answers, not just "unchanged since the last run".
 ---
 
 # Eval cases: turn "unchanged" into "correct"
@@ -26,12 +26,12 @@ Grep for these before reading files: `expected_output`, `LLMTestCase`, `Golden(`
 
 ## What to do
 
-1. Found JSONL, JSON or deepeval files: call `load_eval_cases` with the file or
-   folder. It reports how many cases loaded and from where.
+1. JSONL, JSON and deepeval files are loaded by fleetopt before the run starts, from
+   the repo or from `--evals`; the run tells you how many. You do not load them.
 2. fleetopt starts the agent itself and takes its inputs from the team's cases where
-   it can, so the captured runs match them. `judge` only grades runs whose input
-   matches a case; the rest are reported as unmatched, and that means those cases
-   were not among the inputs used.
+   it can, so the captured runs match them. The judge grades against a case only
+   the requests whose input matches one; the rest are compared with the original's
+   answers.
 3. Found only a dataset name (LangSmith, Galileo, promptfoo): do not try to fetch
    it. Put the name in the report so a human can export it.
 4. Found nothing: say so in the report in one line - "correctness not checked: no
@@ -44,7 +44,7 @@ Grep for these before reading files: `expected_output`, `LLMTestCase`, `Golden(`
   It invokes the agent on every case and bills the team for its own graders. The
   target runs only through `measure`.
 - Never invent expected answers. A case without an expected output is not a case.
-- Never write eval files into the team's repo. Loaded cases are kept in fleetopt's
-  own output folder.
+- Never write eval files into the team's repo, and never write an expected answer
+  into the agent's code: `keep` refuses a change that does.
 - A candidate must not pass fewer cases than the baseline. Equal is fine; the
   baseline may already fail some, and that is worth a line in the report.

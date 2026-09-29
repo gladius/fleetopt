@@ -47,11 +47,13 @@ def code_state(project):
 
     A label names a state of the code. Without this, measuring twice under one
     label after an edit silently medians the before and the after together - a
-    contaminated number that looks exactly like a real one.
+    contaminated number that looks exactly like a real one. It is the content (the
+    tree), not the commit: `keep` folds a finding's attempts into one commit, and the
+    code judged must still be the code kept.
     """
     try:
         head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=project, capture_output=True, text=True
+            ["git", "rev-parse", "HEAD^{tree}"], cwd=project, capture_output=True, text=True
         ).stdout.strip()
         diff = subprocess.run(
             ["git", "diff", "HEAD"], cwd=project, capture_output=True, text=True

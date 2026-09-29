@@ -1,6 +1,6 @@
 ---
 name: patterns
-description: Architecture review of a LangGraph agent - name the design patterns it uses, check each against the numbers from graph_shape, and say whether a simpler design would do the same job. Use when reviewing an agent, when asked whether its design fits its use case, or before applying a design finding from a review. Findings are recommendations with evidence; a tier-one change may be applied only when eval cases are loaded, a redesign only when a person names it.
+description: Architecture review of a LangGraph agent - name the design patterns it uses, check each against the numbers from graph_shape, and say whether a simpler design would do the same job. Use when reviewing an agent, when asked whether its design fits its use case, or before applying a design finding from a review. Findings are recommendations with evidence; a change to the structure, either tier, is tried only under --design and kept only when the team's eval cases cover every request and it passes them.
 ---
 
 # Does the design fit the job?

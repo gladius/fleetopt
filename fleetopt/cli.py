@@ -272,32 +272,21 @@ def review(args):
     return 0
 
 
-def expect(out, project, label, findings):
-    """What a run will take, from one run of the agent as the review saw it: said
-    before anything is spent, so nobody takes a long run for a stuck one."""
-    from fleetopt.evidence import measure as measure_mod
-    from fleetopt.optimizer import loop
+def limits(max_usd):
+    """What ends a run whatever happens, said before anything is spent."""
+    from fleetopt.optimizer import tools
 
-    with store.connect(out / "fleetopt.db") as conn:
-        row = conn.execute("SELECT id FROM sessions WHERE label = ? AND project = ? ORDER BY id DESC LIMIT 1",
-                           (label, str(project))).fetchone()
-        stats = measure_mod.session_stats(conn, row["id"]) if row else {}
-    one = (stats.get("wall_ms") or 60_000) / 60_000
-    k = len(findings)
-    runs = loop.RUNS * (1 + k)
-    minutes = one * (1 + 2 * k) + 2 * k  # the baseline; per finding a trial run, the rest at once, the edit
-    cost = stats.get("cost_usd")
-    money = f", about ${cost * runs:.2f} on the team's key" if cost is not None else ""
-    return (f"[fleetopt] {k} finding(s) to try. Expect about {max(5, round(minutes / 5) * 5):.0f} minutes and "
-            f"{runs} runs of the agent{money}. It stops at ${float(os.environ.get('FLEETOPT_TEAM_USD') or loop.TEAM_USD):.2f} "
-            "on the team's key whatever happens")
+    team = float(os.environ.get("FLEETOPT_TEAM_USD") or tools.TEAM_USD)
+    minutes = float(os.environ.get("FLEETOPT_MAX_MINUTES") or tools.MAX_MINUTES)
+    return (f"[fleetopt] it stops at ${team:.2f} on the team's key, after {minutes:g} minutes, or at ${max_usd:.2f} "
+            "of fleetopt's own, whichever comes first")
 
 
 def apply(args):
     """The whole loop: review the code as it stands (or reuse the review of it), then
     try the findings on a new branch and prove each one."""
     from fleetopt.evidence import evals
-    from fleetopt.optimizer import loop
+    from fleetopt.optimizer import session
 
     project = pathlib.Path(args.project).resolve()
     out = pathlib.Path(args.out).resolve()
@@ -325,14 +314,14 @@ def apply(args):
         print("[fleetopt] nothing to try, so the agent was not run again and nothing was changed.")
         return 1 if args.only else 0
     print(_level(record))
-    print(f"[fleetopt] trying, in this order: {_named(picked)}")
-    print(expect(out, project, record["label"], picked))
+    print(f"[fleetopt] findings to try: {_named(picked)}")
+    print(limits(args.max_usd))
     print(f"[fleetopt] auth: {config.auth_summary() or 'unknown (could not run auth status)'}")
     job = next((line.split(":", 1)[1].strip() for line in record["text"].splitlines() if line.startswith("Job:")),
                "answer the user's request")
-    facts = asyncio.run(loop.run(project, out, run_cmd, record["text"], picked, task=job,
-                                 model=_model("FLEETOPT_MODEL"), max_usd=args.max_usd, evals=args.evals,
-                                 first_session=before))
+    facts = asyncio.run(session.run(project, out, run_cmd, record["text"], picked, task=job,
+                                    model=_model("FLEETOPT_MODEL"), max_usd=args.max_usd, evals=args.evals,
+                                    first_session=before, only=bool(args.only), design=args.design))
     runs, team_cost = spent(out, project, before)
     own = (facts["own_cost_usd"] or 0) + ((record.get("reviewer_cost_usd") or 0) if new else 0)
     text = summary(args.agent, record, facts, runs, team_cost, own)
