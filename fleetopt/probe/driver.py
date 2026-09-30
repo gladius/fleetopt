@@ -146,7 +146,10 @@ def main(argv):
     limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else None
     root = pathlib.Path(entry["project"])
     os.chdir(root / (entry.get("cwd") or "."))  # the folder the team starts it from
-    paths = [str((root / p).resolve()) for p in entry.get("paths", ["."])]
+    # Importable as the team's code is when it runs: from the listed paths, the folder it starts
+    # from, and the project folder. Observed: `services/src` listed, the project folder not, and
+    # `import services...` in their own code failed.
+    paths = list(dict.fromkeys(str((root / p).resolve()) for p in [*entry.get("paths", ["."]), entry.get("cwd") or ".", "."]))
     sys.path[:0] = [p for p in paths if p not in sys.path]
     for path in env_files(entry, root):
         load_env(path)

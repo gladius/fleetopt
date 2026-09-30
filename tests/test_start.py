@@ -151,14 +151,15 @@ def test_the_driver_runs_it_from_its_folder_with_its_env_files(tmp_path):
 
     project = tmp_path / "p"
     (project / "app").mkdir(parents=True)
-    (project / "app" / "graph.py").write_text(PLAIN.replace(
+    (project / "app" / "helper.py").write_text("NAME = 'x'\n", encoding="utf-8")
+    (project / "app" / "graph.py").write_text("import app.helper\n" + PLAIN.replace(
         'lambda state: {"text": state["text"].upper()}',
         'lambda state: print("SEEN", __import__("os").getenv("A"), __import__("os").getenv("B"), '
         '__import__("pathlib").Path.cwd().name) or {"text": "x"}'), encoding="utf-8")
     (project / "app" / ".env").write_text("A=from-app\nB=from-app\n", encoding="utf-8")
     (project / ".env").write_text("B=from-root\n", encoding="utf-8")
     entry = {"project": str(project), "graph": "app/graph.py:graph", "cwd": "app", "env_file": [".env", "app/.env"],
-             "inputs": ["hi"]}
+             "paths": ["app"], "inputs": ["hi"]}   # the project folder not listed: their `import app...` still works
     (tmp_path / "e.json").write_text(json.dumps(entry), encoding="utf-8")
     out = subprocess.run([sys.executable, driver.__file__, str(tmp_path / "e.json")], capture_output=True, text=True).stdout
     assert "SEEN from-app from-root app" in out          # in order, a name already set is kept; started in its folder
