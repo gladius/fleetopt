@@ -108,14 +108,18 @@
   .safe { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
   .safe li { background: var(--surface); border: 1px solid var(--line); padding: 18px 20px; font-family: var(--display); font-weight: 600; font-size: 1.1rem; line-height: 1.3; }
 
-  /* today */
-  .today { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 24px 32px; }
-  .today div { display: flex; flex-direction: column; gap: 2px; border-top: 2px solid var(--ink); padding-top: 12px; }
-  .today strong { font-family: var(--display); font-weight: 700; font-size: 3rem; line-height: 1; font-variant-numeric: tabular-nums; }
-  .today .win { border-color: var(--accent); }
-  .today .win strong { color: var(--accent); }
-  .today span { color: var(--muted); font-size: 1rem; }
-  .note { background: var(--accent-soft); padding: 14px 18px; font-size: 1.05rem; align-self: flex-start; max-width: 44em; }
+  /* the code */
+  code { font-family: var(--mono); font-size: 0.84em; color: var(--ink); }
+  .code { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .code ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .code li { font-size: 0.92rem; color: var(--muted); line-height: 1.35; }
+  .code li code { display: block; font-size: 0.82rem; }
+  .entry { font-size: 0.95rem; color: var(--muted); }
+  .run { margin: 0; padding: 0; list-style: none; counter-reset: run; display: flex; flex-direction: column; gap: 8px; }
+  .run li { counter-increment: run; display: grid; grid-template-columns: 7.5em 1fr; gap: 4px 14px; font-size: 0.95rem; color: var(--muted); }
+  .run b { font-family: var(--display); font-weight: 600; color: var(--ink); }
+  .run b::before { content: counter(run) "  "; font-family: var(--mono); font-weight: 500; color: var(--accent); }
+  @media (max-width: 760px) { .code { grid-template-columns: 1fr; } .run li { grid-template-columns: 1fr; } }
 
   footer { border-top: 1px solid var(--line); padding-top: 16px; font-size: 0.85rem; color: var(--muted); }
 </style>
@@ -146,8 +150,8 @@
       <li><h3>Check</h3><span>Everything is ready</span></li>
       <li><h3>Baseline</h3><span>Checks it as it is, measures cost</span></li>
       <li class="loop"><h3>Find</h3><span>Where tokens and money go</span></li>
-      <li class="loop"><h3>Change</h3><span>Every fix, on a branch</span></li>
-      <li class="loop"><h3>Prove</h3><span>Cheaper, and it still works</span></li>
+      <li class="loop"><h3>Change</h3><span>Every fix at once, on a branch</span></li>
+      <li class="loop"><h3>Prove</h3><span>Together; split only if refused</span></li>
       <li><h3>Report</h3><span>What was kept and saved</span></li>
     </ol>
     <div class="again"><div></div><p>Looks again after each kept change</p></div>
@@ -172,11 +176,11 @@
       <div class="part">
         <h3>Tools</h3>
         <p>What it can do, each with limits built in.</p>
-        <div class="chips"><span>start</span><span>run evals</span><span>measure</span><span>save</span><span>keep</span><span>undo</span></div>
+        <div class="chips"><span>start</span><span>measure</span><span>query</span><span>run evals</span><span>save</span><span>keep</span><span>undo</span></div>
       </div>
       <div class="part">
         <h3>Rules</h3>
-        <p>Enforced, never asked: edits only on its branch, no push, no installs, no secrets.</p>
+        <p>Enforced, never asked: edits only on its branch, no push, no installs. Env files are shown to it by name only.</p>
         <div class="chips"><span>$2 on the agent's own key</span><span>2 hours</span></div>
       </div>
       <div class="under">
@@ -184,6 +188,47 @@
         <span>Records every model call &middot; measures cost past the noise &middot; a separate reader checks the results</span>
       </div>
     </div>
+  </section>
+
+  <section>
+    <h2>In the code &middot; fleetopt/</h2>
+    <p class="entry"><code>cli.py</code> the command &middot; <code>config.py</code> signs in the way Claude Code does on the machine; no key of its own</p>
+    <div class="code">
+      <div class="part">
+        <h3>optimizer/ &middot; the agent</h3>
+        <ul>
+          <li><code>agent.py</code>The one Claude session: guide, skills, tools, guards, model</li>
+          <li><code>GUIDE.md</code>How to work, step by step</li>
+          <li><code>skills/</code>Where cost hides, per provider</li>
+          <li><code>tools.py</code>The 7 tools, with the limits and git inside them</li>
+        </ul>
+      </div>
+      <div class="part">
+        <h3>probe/ &middot; runs and records</h3>
+        <ul>
+          <li><code>driver.py</code>Starts the team's graph in their own Python, with their env files and folder</li>
+          <li><code>hooks/</code>Records every model call, without editing their code</li>
+          <li><code>runner.py</code>One run, stopped if it never ends or runs away</li>
+          <li><code>store.py</code>The records, in SQLite</li>
+        </ul>
+      </div>
+      <div class="part">
+        <h3>evidence/ &middot; what counts</h3>
+        <ul>
+          <li><code>measure.py</code>3 runs, medians, only a change past the noise counts</li>
+          <li><code>pricing.py</code>Tokens to dollars, per model and provider</li>
+          <li><code>judge.py</code>The separate reader: did anything break</li>
+        </ul>
+      </div>
+    </div>
+    <ol class="run">
+      <li><b>Check</b><span>Reads the project, finds what to check against, and how the team runs it; <code>start</code> tries one request</span></li>
+      <li><b>Baseline</b><span><code>run evals</code> on the original, then <code>measure</code>: 3 runs, every call recorded</span></li>
+      <li><b>Find</b><span><code>query</code> the recorded calls and read the code, with the skills</span></li>
+      <li><b>Change</b><span>Each fix its own <code>save</code>, a named commit on fleetopt's branch</span></li>
+      <li><b>Prove</b><span>One <code>measure</code> and evals for all; <code>keep</code> only if cheaper and nothing broke, else <code>undo</code> and split</span></li>
+      <li><b>Report</b><span>Its account, and a summary computed by code; the team's copy is back as it was</span></li>
+    </ol>
   </section>
 
   <section>
@@ -195,18 +240,7 @@
     </ul>
   </section>
 
-  <section>
-    <h2>Where it stands &middot; 29 September 2026</h2>
-    <div class="today">
-      <div class="win"><strong>&minus;8%</strong><span>cost per run, kept</span></div>
-      <div><strong>4 of 4</strong><span>evals pass, before and after</span></div>
-      <div><strong>2</strong><span>changes kept on a branch</span></div>
-      <div><strong>$0.28</strong><span>spent on the agent's key</span></div>
-    </div>
-    <p class="note">First kept result, on a demo research agent running on Claude, with an eval suite we wrote for it. Next: a real team's agent, checked its own way.</p>
-  </section>
-
-  <footer>Works today on LangGraph agents in Python. Figures are from test runs. The same day, an open-source example agent was found already lean: nothing to save, and it said so.</footer>
+  <footer>For LangGraph agents in Python, with model calls through LangChain. Checked against the team's own evals (any tool), a golden dataset, or examples of what the agent is sent.</footer>
 
 </div>
 </body>
