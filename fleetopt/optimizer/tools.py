@@ -340,7 +340,8 @@ async def start(args):
         say(f"  try {CTX['tries']}: it ran, and no model call was seen")
         verdict = "It ran, and fleetopt saw no model call: find out how it calls its model."
     else:
-        say(f"  try {CTX['tries']}: did not start ({(result['error'] or 'see its output')[:100]})")
+        why = result["error"] or next((x for x in reversed(result["tail"].splitlines()) if x.strip()), "no output")
+        say(f"  try {CTX['tries']}: did not start ({why.strip()[:140]})")  # observed: 'see its output', on screen
         verdict = "It did not start."
     return _ok(f"{verdict}\n{facts}\n\nLast lines it printed:\n{result['tail']}\n\n{TRIES - CTX['tries']} try(s) left.")
 

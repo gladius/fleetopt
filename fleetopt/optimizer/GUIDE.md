@@ -74,6 +74,9 @@ without a store an empty in-memory one, as a hosting platform would.
 
 - **Find the agent** where the team says: `langgraph.json`, the README, the entry point
   their app or tests use. With several, take the one the team ships, not a building block.
+  Name the compiled graph, or the builder or function their service compiles at start-up:
+  the driver calls the function and compiles the builder with an in-memory checkpointer.
+  Never change their code to get it started.
 - **How it is called**: the state class and the first node. Copy what the project's own
   entry point passes.
 - **Run it as it runs here**: find how the team starts it (`langgraph.json`, the README, a
@@ -99,7 +102,7 @@ without a store an empty in-memory one, as a hosting platform would.
 The entry:
 
 ```json
-{"graph": "path/to/file.py:name  or  package.module:name  (end with () for a factory)",
+{"graph": "path/to/file.py:name  or  package.module:name  (a graph, a builder, or a function returning one)",
  "agent": "a short name", "job": "what it is for, one sentence", "paths": ["."],
  "interpreter": "only if its environment is not .venv or venv in the project: the path to its python",
  "cwd": "the folder it starts from, or .", "env_file": [".env"], "env": {}, "config": {}, "context": {}, "store": null,

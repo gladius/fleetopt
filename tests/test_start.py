@@ -66,6 +66,14 @@ def test_the_driver_puts_the_text_where_the_graph_takes_it():
     assert driver.build_input(state, record, template) == record   # a whole record per request goes in as it is
 
 
+def test_a_graph_built_in_a_function_and_compiled_at_start_up_is_started_as_the_service_would(tmp_path):
+    (tmp_path / "svc.py").write_text(PLAIN.replace("graph = builder.compile()", "def get_graph():\n    return builder"),
+                                     encoding="utf-8")
+    for spec in ("svc.py:get_graph", "svc.py:get_graph()", "svc.py:builder"):   # with or without (), or the builder
+        graph = driver.resolve(spec, tmp_path, [str(tmp_path)])
+        assert graph.checkpointer is not None and hasattr(graph, "ainvoke"), spec
+
+
 def test_an_agent_built_to_be_hosted_gets_a_store_and_its_context():
     class Hosted:
         store = None

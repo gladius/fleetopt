@@ -14,6 +14,7 @@ could not be loaded at all.
 import asyncio
 import importlib
 import importlib.util
+import inspect
 import json
 import os
 import pathlib
@@ -42,7 +43,8 @@ def env_files(entry, root):
 
 
 def resolve(spec, root, paths):
-    """'pkg/module.py:name', 'pkg.module:name', or either ending in '()' for a factory."""
+    """'pkg/module.py:name' or 'pkg.module:name': a compiled graph, its StateGraph builder, or a
+    function returning either (called, with or without '()' in the name)."""
     target, _, attr = spec.rpartition(":")  # the last colon: a Windows path has one of its own
     call = attr.endswith("()")
     attr = attr.removesuffix("()")
@@ -61,7 +63,20 @@ def resolve(spec, root, paths):
     else:
         module = importlib.import_module(target)
     found = getattr(module, attr)
-    return found() if call else found
+    return compiled(found() if call or inspect.isfunction(found) else found)
+
+
+def compiled(graph):
+    """A builder compiled as the team's service compiles it at start-up, with a checkpointer:
+    here one in memory, as `langgraph dev` gives it. Observed: a service whose graphs exist only
+    as functions returning builders, compiled inside the app when it starts."""
+    if hasattr(graph, "ainvoke") or not hasattr(graph, "compile"):
+        return graph
+    try:
+        from langgraph.checkpoint.memory import MemorySaver
+    except ImportError:
+        return graph.compile()
+    return graph.compile(checkpointer=MemorySaver())
 
 
 def fill(template, text):
