@@ -110,7 +110,15 @@ def test_start_proves_an_entry_by_running_it_and_says_what_it_saw(project, tmp_p
         assert saved["proven"] and saved["env"] == {"MODEL_PROVIDER": "fake"}           # a credential never travels
         assert saved["input_template"]["notes"] == []   # sent as JSON text, used as the object it describes
         assert not list((tmp_path / "out").glob("fleetopt-*"))                          # a try leaves nothing behind
-        assert "started already" in trying(ENTRY)
+        # observed: started on one input, and no way to give the rest. Until it is measured it can be started again
+        again = trying({**ENTRY, "inputs": ["cold chain", "last mile"], "env": {"MODEL_PROVIDER": "fake"},
+                        "input_template": '{"topic": "{input}", "notes": [], "rounds": 0, "summary": ""}'})
+        assert "Every measurement will run the 2 inputs in this entry" in again
+        tools.CTX["tries"] = 0
+        assert "still the one in use" in trying({**ENTRY, "graph": "agent.py:no_such_graph"})   # a failed try loses nothing
+        assert json.loads(tools.CTX["entry_path"].read_text(encoding="utf-8"))["inputs"] == ["cold chain", "last mile"]
+        tools.CTX["baseline"] = {"steps": 1}
+        assert "started and measured already" in trying(ENTRY)
         tools.CTX.update(run_cmd=None, tries=tools.TRIES)
         assert "Refused" in trying(ENTRY)                                               # four tries on the team's key
     finally:

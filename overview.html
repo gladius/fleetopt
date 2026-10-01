@@ -158,15 +158,15 @@
   </section>
 
   <section>
-    <h2>Inside &middot; one AI agent, set up like an expert</h2>
+    <h2>Inside &middot; one AI agent, set up as the expert asked for</h2>
     <div class="arch">
       <div class="part">
         <h3>Guide</h3>
-        <p>How to work: the steps above, what must be there, when to stop.</p>
+        <p>How to work: a part every expert shares, and each expert's own.</p>
       </div>
       <div class="part">
         <h3>Skills</h3>
-        <p>Where cost hides, and how to fix it per provider.</p>
+        <p>What an expert knows. Cost: where cost hides, per provider. Design: the patterns, and when each earns its keep.</p>
         <div class="chips"><span>caching</span><span>model choice</span><span>prompt growth</span><span>repeated work</span><span>tool lists</span></div>
       </div>
       <div class="core">
@@ -201,6 +201,7 @@
           <li><code>tools.py</code>The 8 tools every expert uses, with the limits and git inside them</li>
           <li><code>experts/</code>The shared guide: how to start a team's agent and work with the tools</li>
           <li><code>experts/cost/</code>One folder an expert: its guide and skills. Code adds only what its changes must earn</li>
+          <li><code>experts/design/</code>The second expert: does the design fit the job. It only reviews</li>
         </ul>
       </div>
       <div class="part">
@@ -218,6 +219,7 @@
           <li><code>measure.py</code>3 runs, medians, only a change past the noise counts</li>
           <li><code>pricing.py</code>Tokens to dollars, per model and provider</li>
           <li><code>judge.py</code>The separate reader: did anything break</li>
+          <li><code>shape.py</code>What the graph declared against what it did, for the design expert</li>
         </ul>
       </div>
     </div>

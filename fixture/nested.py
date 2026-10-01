@@ -64,3 +64,12 @@ builder.add_conditional_edges(START, by_subject, ["math", "research"])
 builder.add_edge("math", END)
 builder.add_edge("research", END)
 graph = builder.compile()
+
+
+def main() -> None:
+    for question in ("sum of 2 and 3", "check 12 times 12", "the history of rail", "check the history of rail"):
+        print(f"{question}: {graph.invoke({'question': question, 'answer': ''})['answer']}")
+
+
+if __name__ == "__main__":
+    main()

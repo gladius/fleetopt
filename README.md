@@ -23,7 +23,20 @@ the right thing yourself: `--evals "pytest tests/evals"` or `--evals metrics/cas
 ```bash
 fleetopt review <project>     # look only: where it wastes tokens and money. Changes nothing
 fleetopt apply <project>      # look, change it on a new branch, prove the changes on your checks
+fleetopt review <project> --expert design     # look only: does the design fit the job
 ```
+
+## Experts
+
+| `--expert` | What it looks for | `review` | `apply` |
+|---|---|---|---|
+| `cost` (default) | Where the agent wastes tokens and money | yes | yes: changes it and proves each change |
+| `design` | Whether the design fits the job: the patterns it is built from by what ran, what is broken, and where a simpler design would do the same | yes | not yet |
+
+The design expert's findings rest on numbers too: branches never taken, a supervisor that
+always dispatches in the same order, a review loop that never changes the draft, counted on
+the recorded runs for the graph and each graph nested in it. They are as wide as the
+requests it ran on, and the report says how wide that is.
 
 ## Install
 
@@ -129,6 +142,8 @@ answers: treat them like the project's own logs.
 - Only Anthropic has been run; OpenAI and Gemini are priced, untested.
 - Reading eval results has been tried on pytest output only; checking by a golden dataset or
   examples is tested in code, not yet on a real run.
+- The design expert only reviews. A branch "never taken" is never taken on the requests run:
+  with one or two examples that is thin, and the report says so.
 - A change is tied to a node by the function the graph runs for it. A change to a helper or a
   prompt constant used only by a node the requests never ran is not caught.
 - A golden dataset has to be a text file in the project. A spreadsheet, or a dataset kept only

@@ -273,6 +273,80 @@ def test_a_change_to_a_node_the_requests_never_ran_is_refused(tmp_path):
         tools.CTX.clear()
 
 
+# --- the design expert: structure, in numbers ------------------------------------------------
+
+def _shape(tmp_path, graph, inputs, runs=2):
+    from fleetopt.evidence import shape
+
+    ids = [_captured(tmp_path, graph, inputs)[0] for _ in range(runs)]
+    result = shape.analyze(store.connect(tmp_path / "out" / "fleetopt.db"), ids)
+    return result, {(f["kind"], f["node"]) for f in result["findings"]}, shape.render(result)
+
+
+def test_what_a_graph_declared_is_set_against_what_it_did(tmp_path):
+    result, found, text = _shape(tmp_path, "supervisor.py:graph", ("VPN drops every hour", "invoice shows a double charge"))
+    assert {("branch_never_taken", "route"), ("fixed_dispatch", "supervisor"), ("constant_rounds", "reflect"),
+            ("repeated_identical_reply", "reflect")} <= found           # the three things planted in that fixture
+    assert "route: 3 branches declared, never taken in 4 runs of it: billing, other; always goes to technical" in text
+    assert "dispatches worker_a -> worker_b -> worker_c -> draft in the same order in 4/4 runs while calling a model" in text
+    assert (result["requests"], result["distinct_inputs"]) == (4, 2) and "the evidence is 2 inputs wide" in text
+
+
+def test_each_nested_graph_is_judged_on_its_own_and_a_sound_design_gets_no_finding(tmp_path):
+    _, found, text = _shape(tmp_path, "nested.py:graph", ("sum of 2 and 3", "check the history of rail"))
+    assert found == {("branch_never_taken", "math:model")}             # research's tools ran; math's never did
+    assert "math:model: 1 branches declared, never taken in 2 runs of it: math:tools" in text
+    assert "math: ran 2 times, 2 nodes, 1 branch points" in text
+    (tmp_path / "out" / "fleetopt.db").unlink()
+    _, found, text = _shape(tmp_path, "nested.py:graph", ("sum of 2 and 3", "check 12 times 12", "the history of rail",
+                                                          "check the history of rail"))
+    assert not found and "nothing structural stands out" in text       # every branch taken: nothing to report
+
+
+def test_a_branch_point_that_does_not_declare_its_targets_is_said_so_not_guessed(tmp_path):
+    from fleetopt.evidence import shape
+
+    conn = store.connect(tmp_path / "s.db")
+    sid = _session(conn, project="p", label="x", code_state="v1", exit_code=0)
+    edges = [{"source": "__start__", "target": "pick", "conditional": False},
+             {"source": "pick", "target": "__end__", "conditional": True}]      # how an unannotated branch is drawn
+    conn.execute("INSERT INTO graphs (session_id, name, nodes, edges, driven) VALUES (?, 'g', ?, ?, 1)",
+                 (sid, json.dumps(["__start__", "pick", "a", "b", "__end__"]), json.dumps(edges)))
+    for trace in ("t1", "t2"):
+        conn.execute("INSERT INTO runs (session_id, run_id, trace_id, name, run_type) VALUES (?, ?, ?, 'g', 'chain')",
+                     (sid, trace, trace))
+        for step, node in enumerate(("pick", "a"), 1):
+            conn.execute("INSERT INTO runs (session_id, parent_run_id, trace_id, name, run_type, node, path, step)"
+                         " VALUES (?, ?, ?, ?, 'chain', ?, ?, ?)", (sid, trace, trace, node, node, node, step))
+    found = shape.analyze(conn, [sid])["findings"]
+    assert [f["kind"] for f in found] == ["targets_not_declared"]
+    assert "cannot be counted: read its function. On these runs it went to a" in found[0]["text"]
+
+
+def test_the_design_expert_only_looks_and_has_the_numbers_on_structure(tmp_path, monkeypatch):
+    design = experts.EXPERTS["design"]
+    system = design.system()
+    assert system.index("## Starting the agent") < system.index("# Your expertise: whether the design fits the job")
+    assert all(f"fleetopt:{name}" in system for name in ("patterns", "langgraph")) and "Supervisor / orchestrator" in system
+    assert "token and cost waste" not in system and "whether the design fits" not in experts.COST.system()   # one expertise each
+    o = session.build_options(ROOT / "fixture", look_only=True, expert=design)
+    assert set(o.tools) == {"Read", "Grep", "Glob"} and "mcp__fleetopt__shape" in o.allowed_tools
+    assert "mcp__fleetopt__shape" not in session.build_options(ROOT / "fixture", look_only=True).allowed_tools
+    assert design.apply is None                                         # it changes nothing, for now
+    with pytest.raises(ValueError, match="the design expert only reviews: fleetopt review --expert design"):
+        asyncio.run(session.run(_repo(tmp_path), tmp_path / "out", expert="design"))
+    project = tmp_path / "agent"
+    _fake_runs(monkeypatch)
+    tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", entry={**ENTRY, "project": str(project)},
+                look_only=True, expert=design)
+    try:
+        assert "measure the agent as it is first" in _call("shape")
+        _call("measure")
+        assert _call("shape") == "no runs to analyze"                   # nothing recorded by the faked runs
+    finally:
+        tools.CTX.clear()
+
+
 # --- the one agent: its guide, its command line ----------------------------------------------
 
 def test_an_expert_is_the_shared_guide_its_own_and_every_skill_in_its_folder():
@@ -318,6 +392,7 @@ def test_the_command_line_is_two_commands_and_a_few_flags():
     args = parse(["review", "repo", "--evals", "cases.jsonl", "--graph", "supervisor"])
     assert (args.cmd, args.evals, args.graph, args.max_usd) == ("review", "cases.jsonl", "supervisor", 2.0)
     assert parse(["review", "repo"]).expert == "cost" and not parse(["review", "repo"]).no_ask
+    assert parse(["review", "repo", "--expert", "design"]).expert == "design"
     assert parse(["apply", "repo", "--expert", "cost", "--no-ask"]).no_ask
     for gone in (["apply", "repo", "--only", "C1"], ["review", "repo", "--design"], ["capture", "repo"],
                  ["review", "repo", "--expert", "nobody"]):

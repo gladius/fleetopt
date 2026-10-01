@@ -43,6 +43,7 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
+from fleetopt.evidence import shape as shape_mod
 from fleetopt.experts import COST
 from fleetopt.probe import driver, runner, store
 
@@ -345,12 +346,15 @@ async def ask(args):
     return _ok(f"They answered: {answer[:1000]}")
 
 
-@tool("start", "Start the agent on one input with this entry, under fleetopt's probe, and say what happened: "
-      "requests seen and finished, model calls seen, the first error, the last lines it printed. `entry`: "
-      "the entry as a JSON object (see the guide). At most 4 tries, each on the team's key.", {"entry": str})
+@tool("start", "Try the agent with this entry, under fleetopt's probe, on the first of its inputs, and say what "
+      "happened: requests seen and finished, model calls seen, the first error, the last lines it printed. `entry`: "
+      "the entry as a JSON object (see the guide). Its `inputs` are every request each measurement will run, so list "
+      "them all: only the first is run here. At most 4 tries, each on the team's key. Until the first measurement "
+      "a started agent may be started again with a better entry.", {"entry": str})
 async def start(args):
-    if CTX.get("run_cmd"):
-        return _ok("The agent is started already. Measure it.")
+    if CTX.get("run_cmd") and CTX.get("baseline") is not None:
+        return _ok("The agent is started and measured already: how it is started cannot change now.")
+    before = CTX.get("entry") if CTX.get("run_cmd") else None  # observed: one input given, and no way to add the rest
     if CTX["tries"] >= TRIES:
         return _ok(f"Refused: {TRIES} tries, the most a start gets. Report what stops it.")
     try:
@@ -375,8 +379,8 @@ async def start(args):
         n = len(entry["inputs"])
         say(f"  started: {entry['name']} ({entry['graph'].rsplit('/', 1)[-1]}), {n} request{'s' * (n != 1)} "
             f"{source(entry)} each run" + (f" (try {CTX['tries']})" if CTX["tries"] > 1 else ""))
-        verdict = "It started." + ("" if result["finished"] else
-                                                   " No request finished: it is measured and reviewed as broken.")
+        verdict = (f"It started. Every measurement will run the {n} input{'s' * (n != 1)} in this entry."
+                   + ("" if result["finished"] else " No request finished: it is measured and reviewed as broken."))
     elif result["requests"] and not result["model_calls"]:
         say(f"  try {CTX['tries']}: it ran, and no model call was seen")
         verdict = "It ran, and fleetopt saw no model call: find out how it calls its model."
@@ -384,6 +388,9 @@ async def start(args):
         why = result["error"] or next((x for x in reversed(result["tail"].splitlines()) if x.strip()), "no output")
         say(f"  try {CTX['tries']}: did not start ({why.strip()[:140]})")  # observed: 'see its output', on screen
         verdict = "It did not start."
+    if not ok and before:  # the entry that did start is still the one in use
+        path.write_text(json.dumps(before, indent=1), encoding="utf-8")
+        verdict += " The entry that started before is still the one in use."
     return _ok(f"{verdict}\n{facts}\n\nLast lines it printed:\n{result['tail']}\n\n{TRIES - CTX['tries']} try(s) left.")
 
 
@@ -889,7 +896,8 @@ def finish():
 @tool("query", "Read-only SQL on what fleetopt recorded. Tables: runs(session_id, run_id, parent_run_id, trace_id, "
       "name, run_type, node, path, step, model, provider, duration_ms, input_tokens, output_tokens, cache_read_tokens, "
       "cache_write_tokens, prompt_chars, prompt, completion, inputs, outputs, error), sessions(id, label, "
-      "code_state, exit_code), graphs(session_id, name, nodes, edges, mermaid). Prefer aggregates.", {"sql": str})
+      "code_state, exit_code), graphs(session_id, name, nodes, edges, mermaid, driven: 1 for the graph that was "
+      "run). `path` is a node's place in nested graphs ('team:model'). Prefer aggregates.", {"sql": str})
 async def query(args):
     sql = args["sql"].strip()
     if not sql.lower().startswith(("select", "with")):
@@ -907,12 +915,26 @@ async def query(args):
     return _ok("\n".join(out))
 
 
+@tool("shape", "What the graph declared against what it did, over the runs of the first measurement, for the graph "
+      "that ran and each graph nested in it: branches never taken, a branch point that always sends the work the same "
+      "way (and whether it calls a model to decide), loops that always run the same number of rounds, a model whose "
+      "reply never changes from round to round, model calls spent per round of tool use, nodes that raised or paused "
+      "for a human. Numbers from the recordings, no opinion.", {})
+async def shape(args):
+    if CTX["baseline"] is None:
+        return _ok("Refused: measure the agent as it is first.")
+    with _conn() as conn:
+        result = shape_mod.analyze(conn, _ids(CTX["base"]))
+    _record("shape", findings=[f["text"] for f in result["findings"]])
+    return _ok(shape_mod.render(result))
+
+
 LOOK = [ask, start, measure, query]
 CHANGE = LOOK + [run_evals, save_change, keep, undo]
 
 
 def _tools(look_only, expert):
-    return (LOOK if look_only else CHANGE) + list(expert.tools)
+    return (LOOK if look_only else CHANGE) + [globals()[name] for name in expert.tools]
 
 
 def server(look_only=False, expert=COST):
