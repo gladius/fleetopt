@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS runs (
     completion        TEXT,
     inputs            TEXT,
     outputs           TEXT,
-    error             TEXT
+    error             TEXT,
+    path              TEXT
 );
 
 CREATE INDEX IF NOT EXISTS runs_session ON runs(session_id);
@@ -58,15 +59,22 @@ CREATE TABLE IF NOT EXISTS graphs (
     name        TEXT,
     nodes       TEXT,
     edges       TEXT,
-    mermaid     TEXT
+    mermaid     TEXT,
+    driven      INTEGER,
+    sources     TEXT
 );
 """
+# Columns added since the first release, last in their table: a db made before them gets them.
+ADDED = (("runs", "path", "TEXT"), ("graphs", "driven", "INTEGER"), ("graphs", "sources", "TEXT"))
 
 
 def connect(path):
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    for table, column, kind in ADDED:
+        if column not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
     return conn
 
 
@@ -148,11 +156,12 @@ def ingest_runs(conn, session_id, path):
                 json.dumps(r["inputs"], default=str) if "inputs" in r else None,
                 json.dumps(r["outputs"], default=str) if "outputs" in r else None,
                 r.get("error"),
+                r.get("path"),
             )
         )
 
     conn.executemany(
-        "INSERT INTO runs VALUES (" + ",".join("?" * 23) + ")",
+        "INSERT INTO runs VALUES (" + ",".join("?" * 24) + ")",
         rows,
     )
     conn.commit()
@@ -160,20 +169,16 @@ def ingest_runs(conn, session_id, path):
 
 
 def ingest_graphs(conn, session_id, path):
-    rows = []
+    """One row a graph: the same graph compiled again, or marked by the driver as the one it
+    ran, is not another graph."""
+    rows = {}
     for line in path.open():
         if not line.strip():
             continue
         g = json.loads(line)
-        rows.append(
-            (
-                session_id,
-                g.get("name"),
-                json.dumps(g.get("nodes")),
-                json.dumps(g.get("edges")),
-                g.get("mermaid"),
-            )
-        )
-    conn.executemany("INSERT INTO graphs VALUES (?, ?, ?, ?, ?)", rows)
+        key = (g.get("name"), json.dumps(g.get("nodes")), json.dumps(g.get("edges")))
+        driven = bool(g.get("driven")) or (key in rows and rows[key][5])
+        rows[key] = (session_id, *key, g.get("mermaid"), int(driven), json.dumps(g.get("sources") or {}))
+    conn.executemany("INSERT INTO graphs VALUES (?, ?, ?, ?, ?, ?, ?)", list(rows.values()))
     conn.commit()
     return len(rows)

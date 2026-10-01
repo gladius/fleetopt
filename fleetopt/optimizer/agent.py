@@ -321,7 +321,7 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     facts = {
         "mode": "review" if look_only else "apply", "project": str(project), "started": bool(ctx.get("run_cmd")),
         "agent": (ctx.get("entry") or {}).get("name"), "measured": bool(ctx.get("baseline")),
-        "baseline": ctx.get("baseline"), "proof": tools.proof() if ctx.get("entry") else None,
+        "baseline": ctx.get("baseline"), "proof": tools.proof() if ctx.get("entry") else None, "reach": tools.reached(),
         "changes": [{"name": n, "outcome": o, "detail": d} for n, (o, d) in ctx["changes"].items()],
         "kept": kept, "whole": whole, "branch": branch if kept else None,
         "team_runs": runs, "team_cost": team_cost, "own_cost": own, "account": account, "run_dir": str(run_dir),
@@ -352,6 +352,8 @@ def summary(facts):
     elif not facts["measured"]:
         lines.append("  Result   " + ("could not start it" if not facts["started"] else "could not measure it")
                      + ": see why above")
+    if facts.get("reach"):  # a change in a node the requests never ran is proven by nothing
+        lines.append(f"  Reached  {facts['reach']}, by the requests it was run on")
     lines.append(f"  Spent    {money(facts['team_cost'])} by the agent on its API key ({facts['team_runs']} runs) · "
                  f"{money(facts['own_cost'])} by fleetopt on your Claude login")
     if facts["mode"] == "review" and facts["measured"]:

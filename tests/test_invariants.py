@@ -86,7 +86,8 @@ def test_the_driver_needs_nothing_but_the_projects_own_packages():
                  {(node.module or "").split(".")[0]} if isinstance(node, ast.ImportFrom) else set())
         (tried if id(node) in optional else imported).update(names)
     assert imported <= set(sys.stdlib_module_names), imported - set(sys.stdlib_module_names)
-    assert tried == {"langchain_core", "langgraph"}
+    # ... and the probe's own hook, there only under the probe: the driver marks the graph it runs
+    assert tried == {"langchain_core", "langgraph", "_fleetopt_hook"}
 
 
 def test_an_edit_lands_inside_the_project_on_fleetopts_branch_or_not_at_all(tmp_path):

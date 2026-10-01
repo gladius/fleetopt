@@ -14,7 +14,8 @@ Limits, each learned on a real agent:
 - run_evals: the team's own eval command, in its own environment, the same command before
   and after; its model calls count toward the team's cap;
 - keep: better past the noise, the graph keeps its nodes and edges, the team's tests and
-  evals are untouched, and a separate reader finds nothing broken, on the strongest proof
+  evals are untouched, no node the requests never ran has its code changed (a bundle once
+  carried such a change along unproven), and a separate reader finds nothing broken, on the strongest proof
   the project has: its eval suite, else its golden dataset, else examples of what the agent
   is sent, one or more.
 """
@@ -414,11 +415,12 @@ def _stats(label):
 
 
 def _shape(label):
-    """The agent's structure as its compiled graphs recorded it: names, nodes, edges."""
+    """The agent's structure as its compiled graphs recorded it: names, nodes, edges. Each graph
+    once: how many times one is compiled is not its structure."""
     ids = _ids(label)
     with _conn() as conn:
-        return sorted(tuple(r) for r in conn.execute(
-            "SELECT name, nodes, edges FROM graphs WHERE session_id = ?", (ids[0],))) if ids else []
+        return sorted({tuple(r) for r in conn.execute(
+            "SELECT name, nodes, edges FROM graphs WHERE session_id = ?", (ids[0],))}) if ids else []
 
 
 def _compare(before, after):
@@ -437,25 +439,90 @@ def _read_answers(pairs):
     return judge_mod.compare_answers(CTX["job"], pairs)
 
 
-def _answers(label):
-    """[(input, answer or None, error)] per request of the first run under a label, in order."""
+def _answers(label, run=0):
+    """[(input, answer or None, error)] per request of one run under a label, in order."""
     ids = _ids(label)
     with _conn() as conn:
         return [(r["inputs"], None if r["error"] else r["outputs"], r["error"]) for r in conn.execute(
             "SELECT inputs, outputs, error FROM runs WHERE session_id = ? AND parent_run_id IS NULL"
-            " ORDER BY start_time", (ids[0],))] if ids else []
+            " ORDER BY start_time", (ids[run],))] if len(ids) > run else []
 
 
 def _pairs(label):
-    """The same requests before and after, with the team's expected answer where it gave one;
-    None when the two sides did not run the same number of requests."""
-    before, after = _answers(CTX["base"]), _answers(label)
+    """The same requests before and after, with the team's expected answer where it gave one and
+    a second run of the original, which shows how much its answers vary by themselves; None
+    when the two sides did not run the same number of requests."""
+    before, again, after = _answers(CTX["base"]), _answers(CTX["base"], 1), _answers(label)
     if not before or len(before) != len(after):
         return None
     expected = (CTX.get("entry") or {}).get("expected") or [None] * len(before)
-    return [{"input": b[0], "expected": expected[i] if i < len(expected) else None,
-             "before": b[1] if b[1] is not None else f"(did not finish: {b[2]})",
-             "after": a[1] if a[1] is not None else f"(did not finish: {a[2]})"} for i, (b, a) in enumerate(zip(before, after))]
+    shown = lambda a: a[1] if a[1] is not None else f"(did not finish: {a[2]})"
+    return [{"input": b[0], "expected": expected[i] if i < len(expected) else None, "before": shown(b),
+             "again": shown(again[i]) if len(again) == len(before) else None, "after": shown(a)}
+            for i, (b, a) in enumerate(zip(before, after))]
+
+
+def _reach(label):
+    """(the graph's nodes that ran, those that never did, {node: [file, first line, last line]})
+    over the runs under a label: what the inputs reached, and where each node's code is. A
+    change in a node they never reached is proven by nothing here."""
+    ids = _ids(label)
+    if not ids:
+        return [], [], {}
+    marks = ",".join("?" * len(ids))
+    with _conn() as conn:
+        ran = lambda column: {r[0] for r in conn.execute(
+            f"SELECT DISTINCT {column} FROM runs WHERE session_id IN ({marks}) AND {column} IS NOT NULL", ids)}
+        paths, names = ran("path"), ran("node")
+        graphs = [(bool(r["driven"]), [n for n in json.loads(r["nodes"] or "[]") if not n.endswith(("__start__", "__end__"))],
+                   json.loads(r["sources"] or "{}"))
+                  for r in conn.execute("SELECT driven, nodes, sources FROM graphs WHERE session_id = ?", (ids[0],))]
+    # Exact where the probe recorded it: each run's whole path (two sub-graphs may both have a
+    # 'model'), and the graph the driver ran, of the several a project may compile.
+    # ponytail: without them (an older LangGraph, a baseline measured before this) a nested node
+    # counts when each of its names ran, and the graph is the one with the most nodes that ran.
+    hit = (lambda node: node in paths) if paths else (lambda node: all(part in names for part in node.split(":")))
+    _, nodes, sources = max(graphs, key=lambda g: (g[0], sum(map(hit, g[1])), -len(g[1])), default=(False, [], {}))
+    return [n for n in nodes if hit(n)], [n for n in nodes if not hit(n)], sources
+
+
+def reached():
+    """What the inputs reached of the graph, in words; '' when no graph was recorded."""
+    ran, missed = (CTX.get("reach") or ([], []))[:2]
+    if not ran and not missed:
+        return ""
+    return f"{len(ran)} of {len(ran) + len(missed)} nodes" + (f"; never ran: {', '.join(missed[:8])}" if missed else "")
+
+
+def _unproven():
+    """[(node, file)]: nodes the requests never ran whose own code the changes since the
+    original edit. Code shared with a node that did run is proven through that one."""
+    _, missed, sources = CTX.get("reach") or ([], [], {})
+    if not missed:
+        return []
+    ran_code = {tuple(v) for node, v in sources.items() if node not in missed}
+    hunks, file = {}, None  # {file: [(first, last)]} in the original's line numbers, as the sources are
+    for line in _git("diff", "--relative", "-U0", CTX["start_sha"], "HEAD").splitlines():
+        if line.startswith("--- "):
+            file = line[6:] if line.startswith("--- a/") else None
+        elif line.startswith("@@") and file:
+            first, _, count = line.split()[1][1:].partition(",")
+            hunks.setdefault(file, []).append((int(first), int(first) + max(int(count or 1), 1) - 1))
+    found = []
+    for node in missed:
+        path, first, last = sources.get(node) or (None, 0, 0)
+        if not path or tuple(sources[node]) in ran_code:
+            continue
+        where = pathlib.Path(path).resolve()
+        rel = where.relative_to(CTX["project"]).as_posix() if where.is_relative_to(CTX["project"]) else None
+        if any(a <= last and b >= first for a, b in hunks.get(rel, [])):
+            found.append((node, rel))
+    return found
+
+
+def _unproven_words(found):
+    return ("it changes " + ", ".join(f"{node} ({file})" for node, file in found[:3])
+            + ", which the requests never ran: nothing here proves that change")
 
 
 def proof():
@@ -520,10 +587,16 @@ async def _baseline():
         return _ok("It ran and no model call was recorded: it calls its model without LangChain. Find where "
                    "(file and line), say so, and stop.")
     factor = BROKEN_FACTOR if not stats.get("completed") else STEP_FACTOR
-    CTX.update(baseline=stats, max_steps=max(MIN_STEPS, factor * stats["steps"]), untracked=_untracked())
+    CTX.update(baseline=stats, max_steps=max(MIN_STEPS, factor * stats["steps"]), untracked=_untracked(),
+               reach=_reach(CTX["base"]))
     say(f"  as it is: {brief(stats)}")
+    missed = CTX["reach"][1]
+    if reached():
+        say(f"  its inputs reach {reached()}")
     return _ok(f"The agent as it is, medians of {RUNS} runs of {_requests()}: {brief(stats)}; {stats.get('completed')} requests "
-               f"finished, {stats['steps']} steps a run." + ("" if CTX["look_only"] else " Edits are allowed now."))
+               f"finished, {stats['steps']} steps a run." + ("" if CTX["look_only"] else " Edits are allowed now.")
+               + (f"\n\nThese inputs never reached: {', '.join(missed)}. A change there is proven by nothing here, and "
+                  "keep refuses it: report it, do not make it." if missed else ""))
 
 
 @tool("measure", "Run the agent 3 times as the code stands and compare it with the code as last kept. The first "
@@ -565,6 +638,9 @@ async def measure(args):
              else "Nothing got better past the noise, so keep will refuse it."]
     if _shape(label) != _shape(CTX["base"]):
         notes.append("It changes the graph's nodes or edges, so keep will refuse it.")
+    unproven = _unproven()
+    if unproven:
+        notes.append(f"Keep will refuse it: {_unproven_words(unproven)}.")
     return _ok(f"{names}, medians of {RUNS} runs of {_requests()}: {brief(stats)}.\nAgainst the code as last kept: {line}\n\n"
                f"{measure_mod.render(result)}\n\n" + " ".join(notes))
 
@@ -617,6 +693,9 @@ async def keep(args):
     touched = _tests_touched()
     if touched:
         return _refuse(f"it changes the team's tests or evals ({', '.join(touched[:3])})")
+    unproven = _unproven()
+    if unproven:
+        return _refuse(_unproven_words(unproven))
     stop = over()
     if stop:
         return _ok(f"Refused: {stop}. Undo what is not kept, and report.")
@@ -634,7 +713,9 @@ async def keep(args):
             return _refuse("the two sides did not run the same requests, so their answers cannot be compared")
         say(f"  reading the answers: {len(pairs)} requests, before and after")
         held, why = await _read_answers(pairs)
-        checked = "answers correct as expected" if (CTX.get("entry") or {}).get("expected") else "answers as good as before"
+        cut = judge_mod.clipped(pairs)
+        checked = ("answers correct as expected" if (CTX.get("entry") or {}).get("expected") else "answers as good as before"
+                   ) + (f" ({cut} too long to be read whole)" if cut else "")
     _record("checked", proof=proof(), held=held, why=why, reader=judge_mod.USED.get("model"))
     if judge_mod.USED.get("model") and not CTX.get("reader_named"):
         CTX["reader_named"] = True
@@ -719,7 +800,7 @@ def finish():
 
 
 @tool("query", "Read-only SQL on what fleetopt recorded. Tables: runs(session_id, run_id, parent_run_id, trace_id, "
-      "name, run_type, node, step, model, provider, duration_ms, input_tokens, output_tokens, cache_read_tokens, "
+      "name, run_type, node, path, step, model, provider, duration_ms, input_tokens, output_tokens, cache_read_tokens, "
       "cache_write_tokens, prompt_chars, prompt, completion, inputs, outputs, error), sessions(id, label, "
       "code_state, exit_code), graphs(session_id, name, nodes, edges, mermaid). Prefer aggregates.", {"sql": str})
 async def query(args):

@@ -1,7 +1,7 @@
 """fleetopt's driver: starts an agent the way its entry says and feeds it inputs.
 
-It runs INSIDE the target's own interpreter as a plain script, so it imports nothing
-from fleetopt and nothing the project has not installed. This is the only thing
+It runs INSIDE the target's own interpreter as a plain script, so it imports nothing the
+project has not installed, and of fleetopt only the probe's hook when it runs under it. This is the only thing
 fleetopt ever executes in a target: a named graph, called with given inputs. Never a
 command somebody guessed.
 
@@ -161,6 +161,15 @@ def main(argv):
         traceback.print_exc()
         print(f"[driver] could not load {entry['graph']}: {type(exc).__name__}: {exc}")
         return 2
+    try:  # under fleetopt's probe: say which of the graphs the project compiles is the one run here
+        import _fleetopt_hook
+    except ImportError:  # run by hand, without the probe
+        pass
+    else:
+        try:
+            _fleetopt_hook.snapshot_graph(graph, driven=True)
+        except Exception:  # noqa: BLE001 - a graph it cannot describe: the run goes on
+            pass
 
     inputs = entry["inputs"][:limit]
     extra = platform(graph, entry)

@@ -87,6 +87,13 @@ def _clip(text):
     return text if len(text) <= limit else text[:limit] + f"...[+{len(text) - limit} chars]"
 
 
+def _path(metadata):
+    """Where in the nested graphs a run happened, as the graph names its nodes: 'team:model'.
+    The node's name alone is not enough: two sub-graphs may each have a 'model'."""
+    ns = metadata.get("langgraph_checkpoint_ns")
+    return ":".join(part.rsplit(":", 1)[0] for part in ns.split("|")) if ns else None
+
+
 def _to_record(run):
     metadata = (run.extra or {}).get("metadata") or {}
     duration_ms = None
@@ -100,6 +107,7 @@ def _to_record(run):
         "name": run.name,
         "run_type": run.run_type,
         "node": metadata.get("langgraph_node"),
+        "path": _path(metadata),
         "step": metadata.get("langgraph_step"),
         "model": metadata.get("ls_model_name"),
         "provider": metadata.get("ls_provider"),
@@ -159,7 +167,31 @@ def _register_tracer():
     )
 
 
-def _snapshot_graph(compiled):
+def _sources(compiled):
+    """{node, as the graph names it: [file, first line, last line]} for each node that is a
+    function, sub-graphs included. It ties a change in the code to the node it changes."""
+    import inspect
+
+    found = {}
+    try:
+        graphs = [("", compiled)] + [(ns.replace("|", ":") + ":", sub)
+                                     for ns, sub in compiled.get_subgraphs(recurse=True)]
+        for prefix, graph in graphs:
+            for name, spec in getattr(getattr(graph, "builder", None), "nodes", {}).items():
+                fn = getattr(spec.runnable, "func", None) or getattr(spec.runnable, "afunc", None)
+                try:
+                    lines, first = inspect.getsourcelines(fn)
+                    found[prefix + name] = [inspect.getsourcefile(fn), first, first + len(lines) - 1]
+                except (TypeError, OSError):  # a sub-graph, a class, a partial: no lines of its own
+                    pass
+    except Exception as exc:
+        _warn(f"node sources not recorded: {exc}")
+    return found
+
+
+def snapshot_graph(compiled, driven=False):
+    """One compiled graph's structure. `driven`: fleetopt's driver marks the graph it runs, of
+    the several a project may compile."""
     graph = compiled.get_graph(xray=True)
     try:
         mermaid = graph.draw_mermaid()
@@ -168,6 +200,8 @@ def _snapshot_graph(compiled):
     _append(
         "FLEETOPT_GRAPH_FILE",
         {
+            "driven": driven,
+            "sources": _sources(compiled),
             "name": getattr(compiled, "name", None),
             "nodes": sorted(graph.nodes),
             "edges": [
@@ -194,7 +228,7 @@ def _patch_langgraph():
     def compile(self, *args, **kwargs):  # noqa: A001 - matching the patched name
         compiled = original(self, *args, **kwargs)
         try:
-            _snapshot_graph(compiled)
+            snapshot_graph(compiled)
         except Exception as exc:
             _warn(f"graph snapshot failed: {exc}")
         return compiled

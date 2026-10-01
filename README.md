@@ -60,9 +60,14 @@ One Claude agent does the work, the way an expert would; code holds the numbers 
    named in plain words, measured together.
 6. **Prove it**: kept only if it is cheaper past the noise and nothing broke on your
    check, run again. A separate model call reads the results before and after; the agent
-   that made the change never grades it. Your tests and evals are never
-   changed, and changes to the graph's structure are out of scope. Nothing is merged or
-   pushed.
+   that made the change never grades it. With no eval suite it reads each request's
+   answers whole, beside two runs of the original, so the agent's own variation is not
+   taken for a break. Your tests and evals are never changed, and changes to the graph's
+   structure are out of scope. Nothing is merged or pushed.
+
+The report says which nodes of the graph the requests reached and which never ran, by their
+full path when graphs are nested (`research:model` is not `math:model`). A change to the code
+of a node that never ran is proven by nothing: fleetopt reports it, and refuses to keep it.
 
 When it cannot help it says so and stops: something only the team can provide (a key, a
 service, a dependency, something to check against), or an agent whose model calls it cannot
@@ -79,7 +84,7 @@ see (they do not go through LangChain).
 | A changed agent's steps | 3 times the original's: stopped, and changed code runs once before three times |
 | Tries to start an agent | 4 |
 | One run of your evals | 30 minutes (`FLEETOPT_EVAL_MINUTES`) |
-| Reading your eval results | 5 minutes; no answer means the change is not kept |
+| Reading your eval results, or one request's answers | 5 minutes; no answer means the change is not kept |
 
 ## What keeps it safe
 
@@ -118,6 +123,8 @@ answers: treat them like the project's own logs.
 - Only Anthropic has been run; OpenAI and Gemini are priced, untested.
 - Reading eval results has been tried on pytest output only; checking by a golden dataset or
   examples is tested in code, not yet on a real run.
+- A change is tied to a node by the function the graph runs for it. A change to a helper or a
+  prompt constant used only by a node the requests never ran is not caught.
 - A golden dataset has to be a text file in the project. A spreadsheet, or a dataset kept only
   in an eval service, counts through your eval script, or not at all.
 

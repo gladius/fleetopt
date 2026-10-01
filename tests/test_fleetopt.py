@@ -202,6 +202,75 @@ def test_the_probe_sees_every_node_that_ran_and_none_that_did_not(tmp_path):
     nodes = {r[0] for r in conn.execute("SELECT DISTINCT node FROM runs WHERE node IS NOT NULL")}
     assert {"route", "technical", "supervisor", "worker_a", "worker_b", "worker_c", "draft", "reflect"} <= nodes
     assert not {"billing", "other"} & nodes  # in the graph, never taken
+    tools.CTX.clear()
+    tools.CTX.update(out=tmp_path / "out", project=_fixture(tmp_path))
+    try:
+        tools.CTX["reach"] = tools._reach("x")
+        assert tools.CTX["reach"][1] == ["billing", "other"]              # what the inputs never reached, by name
+        assert tools.reached() == "8 of 10 nodes; never ran: billing, other"
+        facts = {"mode": "review", "measured": True, "reach": tools.reached(), "team_cost": 0, "team_runs": 3,
+                 "own_cost": 0, "project": "p", "run_dir": str(tmp_path)}
+        assert "Reached  8 of 10 nodes; never ran: billing, other" in "\n".join(agent.summary(facts))
+    finally:
+        tools.CTX.clear()
+
+
+def test_a_project_with_several_graphs_is_judged_by_the_one_that_ran(tmp_path):
+    tools.CTX.clear()
+    tools.CTX.update(out=tmp_path, project=tmp_path / "a")
+    graph = lambda conn, sid, nodes, driven=0: conn.execute(
+        "INSERT INTO graphs (session_id, name, nodes, edges, driven) VALUES (?, 'LangGraph', ?, '[]', ?)",
+        (sid, json.dumps(["__start__", "__end__", *nodes]), driven))
+    with store.connect(tmp_path / "fleetopt.db") as conn:
+        old = _session(conn, project=str(tmp_path / "a"), label="before-paths", code_state="v1", exit_code=0)
+        new = _session(conn, project=str(tmp_path / "a"), label="with-paths", code_state="v1", exit_code=0)
+        for sid in (old, new):
+            graph(conn, sid, ["model", "retrieve"]), graph(conn, sid, ["guard", "model", "tools", "block"])
+            graph(conn, sid, ["team:__start__", "team:model", "team:tools", "solo:model"])
+        for node in ("guard", "model", "tools"):
+            conn.execute("INSERT INTO runs (session_id, node) VALUES (?, ?)", (old, node))
+        graph(conn, new, ["team:model", "team:tools", "solo:model", "solo:tools"], driven=1)   # the driver said which
+        for node, path in (("team", "team"), ("model", "team:model"), ("solo", "solo"), ("tools", "solo:tools")):
+            conn.execute("INSERT INTO runs (session_id, node, path) VALUES (?, ?, ?)", (new, node, path))
+    try:
+        # recorded before paths and the driven graph: the graph with the most nodes that ran
+        assert tools._reach("before-paths")[:2] == (["guard", "model", "tools"], ["block"])
+        # with them: exact, though 'model' and 'tools' both ran somewhere and 'team' and 'solo' both ran
+        assert tools._reach("with-paths")[:2] == (["team:model", "solo:tools"], ["team:tools", "solo:model"])
+        assert tools._reach("never-measured") == ([], [], {}) and tools.reached() == ""
+    finally:
+        tools.CTX.clear()
+
+
+def test_a_change_to_a_node_the_requests_never_ran_is_refused(tmp_path):
+    project = _fixture(tmp_path)
+    git = lambda *a: subprocess.run(["git", "-C", str(project), "-c", "user.email=t@t", "-c", "user.name=t", *a],
+                                    check=True, capture_output=True, text=True).stdout.strip()
+    git("init", "-q", "-b", "main"), git("add", "-A"), git("commit", "-qm", "base")
+    # a sum goes to the math expert; only the research request asks for a check, so only its tools run
+    assert _captured(tmp_path, "nested.py:graph", inputs=("sum of 2 and 3", "check the history of rail"))[1] == 0
+    file = project / "nested.py"
+    source = file.read_text(encoding="utf-8")
+
+    def changed(old, new):
+        git("reset", "-q", "--hard", tools.CTX["start_sha"])
+        file.write_text(source.replace(old, new), encoding="utf-8")
+        git("commit", "-qam", "a change")
+        return tools._unproven()
+
+    tools.CTX.clear()
+    tools.CTX.update(out=tmp_path / "out", project=project, start_sha=git("rev-parse", "HEAD"))
+    try:
+        tools.CTX["reach"] = tools._reach("x")
+        assert tools.CTX["reach"][1] == ["math:tools"]                  # research's tools ran; the same name here did not
+        assert tools.reached() == "3 of 4 nodes; never ran: math:tools"
+        assert changed("(checked with the calculator)", "(checked)") == [("math:tools", "nested.py")]
+        assert "math:tools (nested.py), which the requests never ran" in tools._unproven_words(tools._unproven())
+        assert changed("(checked against the archive)", "(checked)") == []     # the same node name, in the graph that ran
+        assert changed('f"Work out: ', 'f"Compute: ') == []                    # a node that ran
+        assert changed('reply="an answer"', 'reply="a reply"') == []           # shared code: not tied to a node
+    finally:
+        tools.CTX.clear()
 
 
 # --- the one agent: its guide, its command line ----------------------------------------------
@@ -596,7 +665,8 @@ def test_answers_are_paired_request_by_request_with_what_the_team_expects(tmp_pa
     tools.CTX.update(out=tmp_path, project=tmp_path / "a", base="baseline-x",
                      entry={"expected": ["refund in 14 days", None]})
     with store.connect(tmp_path / "fleetopt.db") as conn:
-        for label, answers in (("baseline-x", ["14 days", "ok"]), ("change-1-x", ["two weeks", None])):
+        for label, answers in (("baseline-x", ["14 days", "ok"]), ("baseline-x", ["a fortnight", "fine"]),
+                               ("change-1-x", ["two weeks", None])):
             sid = _session(conn, project=str(tmp_path / "a"), label=label, code_state="v1", exit_code=0)
             for i, answer in enumerate(answers):
                 conn.execute("INSERT INTO runs (session_id, inputs, outputs, error, start_time) VALUES (?, ?, ?, ?, ?)",
@@ -606,8 +676,36 @@ def test_answers_are_paired_request_by_request_with_what_the_team_expects(tmp_pa
         assert [(p["input"], p["expected"], p["before"]) for p in pairs] == [("q0", "refund in 14 days", "14 days"),
                                                                              ("q1", None, "ok")]
         assert pairs[1]["after"].startswith("(did not finish")               # an unfinished answer is shown as one
+        assert [p["again"] for p in pairs] == ["a fortnight", "fine"]        # the original's own variation, beside it
     finally:
         tools.CTX.clear()
+
+
+def test_the_reader_reads_each_request_whole_beside_the_originals_second_run(monkeypatch):
+    from fleetopt.evidence import judge
+
+    seen = []
+
+    async def ask(prompt, model=None):
+        seen.append(prompt)
+        return {"broke": "restart the valve" in prompt, "reason": "the fix now names another part"}
+
+    monkeypatch.setattr(judge, "_ask", ask)
+    state = json.dumps({"messages": ["the request", "tool output " * 1000, "FINAL ANSWER: restart the pump"]})
+    pairs = [{"input": "INC-1", "expected": None, "before": state, "again": state, "after": state},
+             {"input": "INC-2", "expected": None, "before": state, "again": state, "after": state.replace("pump", "valve")},
+             {"input": "INC-3", "expected": None, "before": "a", "after": "b"}]
+    held, why = asyncio.run(judge.compare_answers("triage", pairs))
+    assert len(seen) == 3 and all(p.count("--- ") == 0 and "INPUT\nINC-" in p for p in seen)   # one call a request
+    assert seen[0].count("FINAL ANSWER: restart the pump") == 3 and "characters left out" not in seen[0]   # read whole
+    assert "BEFORE AGAIN" in seen[0].split("WHAT THE AGENT IS FOR")[1]
+    assert "BEFORE AGAIN" not in seen[2].split("WHAT THE AGENT IS FOR")[1]   # one run of the original: shown as before
+    assert held is False and why == "request 2 (INC-2): the fix now names another part"   # named by code
+    assert asyncio.run(judge.compare_answers("triage", pairs[:1])) == (True, "1 read, none worse")
+    huge = "x" * (judge.ANSWER_CHARS + 5) + "FINAL ANSWER: restart the pump"
+    asyncio.run(judge.compare_answers("triage", [{"input": "q", "expected": None, "before": huge, "after": "b"}]))
+    assert "characters left out" in seen[-1] and "FINAL ANSWER: restart the pump" in seen[-1]   # past the limit: both ends
+    assert judge.clipped([{"before": huge, "again": None, "after": "b"}]) == 1                   # and the report says so
 
 
 def test_the_agent_runs_on_whatever_model_this_setup_has(tmp_path, monkeypatch, capsys):

@@ -118,6 +118,10 @@ The entry:
   its own, then measure them together: one measurement, not one per change. If `keep`
   refuses, `undo`, redo half of them, measure, and keep what passes; go on splitting only
   the half that fails.
+- **Change only what the inputs reach.** The first `measure` names the nodes they never
+  ran. A change there saves nothing here and is proven by nothing, and `keep` refuses a
+  bundle that edits such a node's code: report it as worth changing, with the kind of
+  request that would reach it, and leave the code as it is.
 - **Never touch the team's tests, evals or eval data.** They are how the team knows the
   agent works; `keep` refuses a change to them.
 - **The smallest change that does it.** No refactoring on the way, no new dependency.
