@@ -45,11 +45,14 @@ fleetopt review "$T"
 
 ## How it works
 
-One Claude agent does the work, the way an expert would; code holds the numbers and the limits.
+One Claude session does the work, the way an expert would; code holds the numbers and the limits.
+Which expert is `--expert` (cost by default): an expert is a guide and skills in
+`fleetopt/experts/<name>/`, working with the same tools and under the same rules as every other.
 
 1. **Start it.** The agent reads the project and works out how its agent runs here: which
    graph, which env files, which folder. Then it tries it on one input. It is remembered per
-   project. Run fleetopt from the terminal where your agent works for you: that terminal's
+   project. While getting started it may ask you up to three things only you know (which env
+   file, which graph you ship); with no terminal, or `--no-ask`, it never asks. Run fleetopt from the terminal where your agent works for you: that terminal's
    environment and cloud logins are what the agent runs with.
 2. **Check it as it is** (apply): your eval suite, or its answers to your golden dataset or examples.
 3. **Measure it** as it is: 3 runs, every model call, token and step recorded.
@@ -83,6 +86,7 @@ see (they do not go through LangChain).
 | One run of the agent | 15 minutes (`FLEETOPT_RUN_MINUTES`), stopped with everything it started |
 | A changed agent's steps | 3 times the original's: stopped, and changed code runs once before three times |
 | Tries to start an agent | 4 |
+| Questions to you, before the first measurement | 3, five minutes each to answer |
 | One run of your evals | 30 minutes (`FLEETOPT_EVAL_MINUTES`) |
 | Reading your eval results, or one request's answers | 5 minutes; no answer means the change is not kept |
 
@@ -105,6 +109,8 @@ Enforced, not asked; each is a test in `tests/test_invariants.py`.
 |---|---|
 | `--evals WHAT` | What to check the agent with: your eval command (`pytest tests/evals`) or a file of test cases, expected answers or example requests. Found in the project otherwise |
 | `--graph NAME` | Which agent, when a project has several |
+| `--expert NAME` | Which expert looks at it (default `cost`) |
+| `--no-ask` | Never ask a question at the terminal |
 | `--max-usd N` | Cap on fleetopt's own spend |
 | `--out DIR` | Where records go (default `./.fleetopt`) |
 

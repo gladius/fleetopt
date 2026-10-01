@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from fleetopt.optimizer import tools
+from fleetopt import tools
 from fleetopt.probe import driver
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]

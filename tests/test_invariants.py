@@ -13,16 +13,16 @@ import pytest
 
 from fleetopt import cli, config
 from fleetopt.evidence import judge, measure
-from fleetopt.optimizer import agent, tools
+from fleetopt import experts, session, tools
 from fleetopt.probe import store
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 HOOK = (ROOT / "fleetopt" / "probe" / "hooks" / "_fleetopt_hook.py").read_text(encoding="utf-8")
-GUIDE = " ".join(agent.SYSTEM.split())
+GUIDE = " ".join(experts.COST.system().split())
 
 
 def options(**kw):
-    return agent.build_options(ROOT / "fixture", **kw)
+    return session.build_options(ROOT / "fixture", **kw)
 
 
 def _session(conn, **row):
@@ -55,8 +55,8 @@ def test_a_session_cannot_read_secrets_or_stop_to_ask():
 def test_a_review_can_only_look():
     o = options(look_only=True)
     assert set(o.tools) == {"Read", "Grep", "Glob"} and o.hooks is None
-    assert set(o.allowed_tools) == {"Read", "Grep", "Glob", "mcp__fleetopt__start", "mcp__fleetopt__measure",
-                                    "mcp__fleetopt__query"}
+    assert set(o.allowed_tools) == {"Read", "Grep", "Glob", "mcp__fleetopt__ask", "mcp__fleetopt__start",
+                                    "mcp__fleetopt__measure", "mcp__fleetopt__query"}
 
 
 # --- what touches the target is enforced, not asked ----------------------------------
@@ -100,7 +100,7 @@ def test_an_edit_lands_inside_the_project_on_fleetopts_branch_or_not_at_all(tmp_
                                     check=True, capture_output=True)
     git("init", "-q", "-b", "main"); git("add", "-A"); git("commit", "-qm", "base")
     tools.CTX.clear()
-    guard = agent.guard_edit(project, "main")
+    guard = session.guard_edit(project, "main")
     ask = lambda path: asyncio.run(guard({"tool_input": {"file_path": str(path)}}, "id", None))
     denied = lambda v: v.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
 
@@ -117,7 +117,7 @@ def test_an_edit_lands_inside_the_project_on_fleetopts_branch_or_not_at_all(tmp_
 
 
 def test_nothing_is_published_and_git_is_fleetopts():
-    guard = agent.guard_bash()
+    guard = session.guard_bash()
     ask = lambda cmd: asyncio.run(guard({"tool_input": {"command": cmd}}, "id", None))
     for cmd in ("git push origin fleetopt/change", "git checkout -b x", "git commit -am x", "git reset --hard HEAD~1",
                 "git -C . update-index --add x", "git hash-object -w f", "git stash", "git add -A"):
@@ -154,7 +154,7 @@ def test_the_agent_drives_and_the_limits_live_in_its_tools():
     assert (tools.RUNS, tools.TEAM_USD, tools.STEP_FACTOR, tools.MAX_MINUTES) == (3, 2.0, 3, 120)
     served = {n.removeprefix("mcp__fleetopt__") for n in options().allowed_tools if n.startswith("mcp__")}
     # it measures, saves, keeps and undoes through fleetopt; nothing judges on its word
-    assert served == {"start", "measure", "query", "run_evals", "save_change", "keep", "undo"}
+    assert served == {"ask", "start", "measure", "query", "run_evals", "save_change", "keep", "undo"}
     assert "never remove what ends a loop" in GUIDE.lower() and "when you cannot help" in GUIDE.lower()
     assert "Never look for another way to do what was refused" in GUIDE      # a refusal is an answer
     assert "never use anything about whoever runs this tool" in GUIDE          # nothing about the operator goes out
@@ -175,14 +175,14 @@ def test_the_teams_own_evals_are_the_proof_and_without_them_it_stops():
 
 def test_a_saving_is_cost_first_and_a_clean_token_cut_counts_too():
     v = lambda **kw: {k: {"verdict": x} for k, x in kw.items()}
-    assert tools.gain(v(cost_usd="improved")) == "cost_usd"
+    assert experts.gain(v(cost_usd="improved")) == "cost_usd"
     # the answers' length varies from run to run, which the change does not control
-    assert tools.gain(v(cost_usd="within noise", input_tokens="improved", output_tokens="within noise")) == "input_tokens"
-    assert tools.gain(v(cost_usd="unpriced", input_tokens="improved")) == "input_tokens"
-    assert tools.gain(v(cost_usd="regressed", input_tokens="improved")) is None      # fewer tokens that cost more
-    assert tools.gain(v(cost_usd="within noise", input_tokens="improved", output_tokens="regressed")) is None
-    assert tools.gain(v(cost_usd="improved", completed="regressed")) is None         # finishing less is never a saving
-    assert tools.gain(v(cost_usd="within noise", input_tokens="within noise")) is None
+    assert experts.gain(v(cost_usd="within noise", input_tokens="improved", output_tokens="within noise")) == "input_tokens"
+    assert experts.gain(v(cost_usd="unpriced", input_tokens="improved")) == "input_tokens"
+    assert experts.gain(v(cost_usd="regressed", input_tokens="improved")) is None      # fewer tokens that cost more
+    assert experts.gain(v(cost_usd="within noise", input_tokens="improved", output_tokens="regressed")) is None
+    assert experts.gain(v(cost_usd="improved", completed="regressed")) is None         # finishing less is never a saving
+    assert experts.gain(v(cost_usd="within noise", input_tokens="within noise")) is None
 
 
 def test_what_is_shown_is_for_a_person():
@@ -196,7 +196,7 @@ def test_what_is_shown_is_for_a_person():
              "changes": [{"name": "cache the system prompt", "outcome": "kept", "detail": "cost -24%"}],
              "proof": "the team's evals (pytest evals), before and after", "team_cost": 0.31, "team_runs": 16,
              "own_cost": 0.77, "project": "/p", "run_dir": "/r"}
-    text = "\n".join(agent.summary(facts))
+    text = "\n".join(session.summary(facts))
     assert "1 change(s) kept on branch fleetopt/x: cost -24%" in text and "cache the system prompt  kept" in text
     assert "$0.31 by the agent on its API key (16 runs)" in text and "C1" not in text and "label" not in text
 

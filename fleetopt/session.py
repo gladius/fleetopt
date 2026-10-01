@@ -1,12 +1,14 @@
-"""The one agent behind `fleetopt review` and `fleetopt apply`, and the boundary around it.
+"""The one session behind `fleetopt review` and `fleetopt apply`, and the boundary around it.
 
 One Claude Agent SDK session does the whole job, as an expert would: it works out how to
-start the project's agent, measures it, finds the waste, changes the code, proves each
-change, looks again and reports. `review` is the same agent without the tools that
-change anything. What it may not decide is enforced, not asked: the tools (tools.py)
-hold the numbers, the limits and git; the hooks here keep edits inside the project on
-fleetopt's branch, and nothing installed, pushed or run by hand. What is kept is decided by
-`keep`, on the measurements and on the team's own evals, never on what the session wrote.
+start the project's agent, measures it, finds what its expertise looks for, changes the
+code, proves each change, looks again and reports. Which expert it is (experts/) decides
+its guide, its skills and what a change must earn; `review` is the same session without the
+tools that change anything. What it may not decide is enforced, not asked: the tools
+(tools.py) hold the numbers, the limits and git; the hooks here keep edits inside the
+project on fleetopt's branch, and nothing installed, pushed or run by hand. What is kept is
+decided by `keep`, on the measurements and on the team's own evals, never on what the
+session wrote.
 """
 
 import datetime
@@ -20,25 +22,12 @@ import sys
 
 from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
-from fleetopt import config
+from fleetopt import config, tools
 from fleetopt.evidence import measure as measure_mod
-from fleetopt.optimizer import tools
+from fleetopt.experts import COST, EXPERTS
 from fleetopt.probe import store
 
-_HERE = pathlib.Path(__file__).parent
-SKILLS = ("caching", "model-tier", "prompt-growth", "redundant-work", "tool-surface")
 MODEL, FALLBACK = "sonnet", "opus"  # aliases: whatever this Claude Code setup provides; FLEETOPT_MODEL overrides
-
-
-def _body(path):
-    text = path.read_text(encoding="utf-8")
-    return text.split("---", 2)[2].strip() if text.startswith("---") else text
-
-
-# The guide, then the mechanics of each pattern it names: all in the prompt, cached after
-# the first turn, so the agent never works without the one it needs.
-SYSTEM = ((_HERE / "GUIDE.md").read_text(encoding="utf-8") + "\n\n## The mechanics each pattern refers to\n\n"
-          + "\n\n".join(f"<!-- fleetopt:{n} -->\n" + _body(_HERE / "skills" / n / "SKILL.md") for n in SKILLS))
 
 # Running the agent by hand spends the team's tokens twice and records nothing; eval
 # runners count too, since they run the agent on every case and bill its graders. Python
@@ -116,7 +105,7 @@ def guard_bash():
     return hook
 
 
-def build_options(project, model=None, max_usd=None, start_branch=None, look_only=False, max_turns=150):
+def build_options(project, model=None, max_usd=None, start_branch=None, look_only=False, max_turns=150, expert=COST):
     """Everything the session is allowed to be. `look_only`: no Bash, Edit, Write, save_change,
     keep or undo at all."""
     reads = ["Read", "Grep", "Glob"]
@@ -128,11 +117,11 @@ def build_options(project, model=None, max_usd=None, start_branch=None, look_onl
     ]}
     return ClaudeAgentOptions(
         cwd=str(project), model=model or MODEL, fallback_model=FALLBACK if (model or MODEL) != FALLBACK else MODEL,
-        system_prompt=SYSTEM,
-        mcp_servers={"fleetopt": tools.server(look_only)},
+        system_prompt=expert.system(),
+        mcp_servers={"fleetopt": tools.server(look_only, expert)},
         # Built-ins by allowlist: no web, no scheduler, no subagents. Nothing is asked;
         # what keeps each tool safe is enforced by the hooks and inside fleetopt's tools.
-        tools=builtins, allowed_tools=[*tools.names(look_only), *builtins], hooks=hooks,
+        tools=builtins, allowed_tools=[*tools.names(look_only, expert), *builtins], hooks=hooks,
         # Headless, and never a secret read (config.DENY_READS).
         disallowed_tools=["AskUserQuestion", *config.DENY_READS],
         # Authenticates like Claude Code on this machine, and inherits nothing else from
@@ -143,16 +132,6 @@ def build_options(project, model=None, max_usd=None, start_branch=None, look_onl
 
 
 # --- one run ------------------------------------------------------------------------------
-
-MISSION = {
-    True: "Review the LangGraph agent in this project: start it if needed, measure it once as it is, find where "
-          "it wastes tokens and money, and report what is worth changing. This run changes nothing and does not "
-          "run the team's evals; say what the project has to check the agent against (an eval suite and how it "
-          "is run, a golden dataset, examples of what it is sent) or that it has none of these.",
-    False: "Make the LangGraph agent in this project cost less without changing what it answers: start it if "
-           "needed, measure it, find the waste, change it, prove each change, look again, and report.",
-}
-
 
 def _activity(block, project, shown):
     """What the agent is doing, in words, once per thing: observed, five minutes of nothing but
@@ -190,8 +169,14 @@ def _saved_entry(path):
     return entry if entry.get("proven") and pathlib.Path(entry.get("interpreter", "")).exists() else None
 
 
-def _review_path(out, project, state):
-    return out / "reviews" / f"{project.name}-{hashlib.sha1(str(project).encode()).hexdigest()[:8]}-{state}.md"
+def _review_path(out, project, state, expert):
+    """An expert's review of one state of the code: what its own `apply` starts from."""
+    return out / "reviews" / f"{project.name}-{hashlib.sha1(str(project).encode()).hexdigest()[:8]}-{state}-{expert.name}.md"
+
+
+def _told(path):
+    """What the team answered when asked, on this run or an earlier one."""
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
 
 
 def _newest(out):
@@ -201,9 +186,9 @@ def _newest(out):
         return conn.execute("SELECT COALESCE(MAX(id), 0) FROM sessions").fetchone()[0]
 
 
-def _prompt(look_only, entry, evals, graph, team, minutes, max_usd, branch, earlier):
+def _prompt(expert, look_only, entry, evals, graph, team, minutes, max_usd, branch, earlier, told=()):
     ctx = tools.CTX
-    lines = [MISSION[look_only], ""]
+    lines = [expert.review if look_only else expert.apply, ""]
     if entry:
         lines.append(f"How to start it is known, from an earlier try: {entry['name']} ({entry['graph']}), "
                      f"{len(entry['inputs'])} input(s) {tools.source(entry)}. It is started: measure it.")
@@ -218,6 +203,8 @@ def _prompt(look_only, entry, evals, graph, team, minutes, max_usd, branch, earl
                         "its README), name that python as `interpreter`."))
         if graph:
             lines.append(f"The person running fleetopt asked for this agent: {graph}.")
+        for item in told:
+            lines.append(f"The team was asked before: {item['question']} They answered: {item['answer']}")
     if evals:
         lines.append(f"The person running fleetopt says to check the agent with: {evals} (an eval command, or a file "
                      "of test cases, expected answers or example requests). Use it.")
@@ -230,14 +217,19 @@ def _prompt(look_only, entry, evals, graph, team, minutes, max_usd, branch, earl
     return "\n".join(lines)
 
 
-async def run(project, out, *, look_only=False, evals=None, graph=None, model=None, max_usd=5.0):
-    """One run of the agent. Returns the facts the summary is computed from. Raises
-    RuntimeError when it cannot begin (the project is not under git)."""
+async def run(project, out, *, look_only=False, evals=None, graph=None, model=None, max_usd=5.0, expert="cost",
+              ask=False):
+    """One run of one expert. Returns the facts the summary is computed from. Raises
+    RuntimeError when it cannot begin (the project is not under git), ValueError when the
+    expert cannot do what was asked. `ask`: someone is at the terminal to answer a question."""
     from claude_agent_sdk import (AssistantMessage, ClaudeSDKError, ResultMessage, SystemMessage, TextBlock,
                                   ToolResultBlock, ToolUseBlock, UserMessage, query)
 
     from fleetopt.progress import ticking
 
+    expert = EXPERTS[expert]
+    if not look_only and not expert.apply:
+        raise ValueError(f"the {expert.name} expert only reviews: fleetopt review --expert {expert.name}")
     project, out = pathlib.Path(project).resolve(), pathlib.Path(out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     began = datetime.datetime.now()
@@ -247,19 +239,20 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     team = float(os.environ.get("FLEETOPT_TEAM_USD") or tools.TEAM_USD)
     minutes = float(os.environ.get("FLEETOPT_MAX_MINUTES") or tools.MAX_MINUTES)
     first = _newest(out)
-    tools.begin(project, out, entry_file=path, entry=entry, run_dir=run_dir,
-                look_only=look_only, team_usd=team, minutes=minutes, first_session=first)
+    tools.begin(project, out, entry_file=path, entry=entry, run_dir=run_dir, look_only=look_only, team_usd=team,
+                minutes=minutes, first_session=first, expert=expert, ask=ask)
     ctx = tools.CTX
     start_branch = _git(project, "rev-parse", "--abbrev-ref", "HEAD")
     branch = None if look_only else f"fleetopt/{began:%Y%m%d-%H%M%S}"
     if branch:
         tools._git("checkout", "-q", "-b", branch)
     earlier = None
-    if not look_only and _review_path(out, project, ctx["start_state"]).exists():
-        earlier = _review_path(out, project, ctx["start_state"]).read_text(encoding="utf-8")
+    if not look_only and _review_path(out, project, ctx["start_state"], expert).exists():
+        earlier = _review_path(out, project, ctx["start_state"], expert).read_text(encoding="utf-8")
 
-    prompt = _prompt(look_only, entry, evals, graph, team, minutes, max_usd, branch, earlier)
-    options = build_options(project, model, max_usd, start_branch, look_only)
+    prompt = _prompt(expert, look_only, entry, evals, graph, team, minutes, max_usd, branch, earlier,
+                     _told(tools.told_path(path)))
+    options = build_options(project, model, max_usd, start_branch, look_only, expert=expert)
     run_dir.mkdir(parents=True, exist_ok=True)
     log_file = (run_dir / "log.txt").open("w", encoding="utf-8")
 
@@ -314,12 +307,13 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         if not kept:
             tools._git("branch", "-q", "-D", branch)
     if look_only and ctx.get("baseline") and account:
-        review = _review_path(out, project, ctx["start_state"])
+        review = _review_path(out, project, ctx["start_state"], expert)
         review.parent.mkdir(parents=True, exist_ok=True)
         review.write_text(account + "\n", encoding="utf-8")
     runs, team_cost = measure_mod.spent(out, project, first)
     facts = {
-        "mode": "review" if look_only else "apply", "project": str(project), "started": bool(ctx.get("run_cmd")),
+        "mode": "review" if look_only else "apply", "expert": expert.name, "changes_it": bool(expert.apply),
+        "project": str(project), "started": bool(ctx.get("run_cmd")),
         "agent": (ctx.get("entry") or {}).get("name"), "measured": bool(ctx.get("baseline")),
         "baseline": ctx.get("baseline"), "proof": tools.proof() if ctx.get("entry") else None, "reach": tools.reached(),
         "changes": [{"name": n, "outcome": o, "detail": d} for n, (o, d) in ctx["changes"].items()],
@@ -356,8 +350,9 @@ def summary(facts):
         lines.append(f"  Reached  {facts['reach']}, by the requests it was run on")
     lines.append(f"  Spent    {money(facts['team_cost'])} by the agent on its API key ({facts['team_runs']} runs) · "
                  f"{money(facts['own_cost'])} by fleetopt on your Claude login")
-    if facts["mode"] == "review" and facts["measured"]:
-        lines.append(f"  Next     fleetopt apply {facts['project']}")
+    if facts["mode"] == "review" and facts["measured"] and facts.get("changes_it", True):
+        lines.append(f"  Next     fleetopt apply {facts['project']}"
+                     + (f" --expert {facts['expert']}" if facts.get("expert", "cost") != "cost" else ""))
     lines.append(f"  Details  {_shown(pathlib.Path(facts['run_dir']) / 'report.md')}")
     return lines
 

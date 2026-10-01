@@ -176,7 +176,7 @@
       <div class="part">
         <h3>Tools</h3>
         <p>What it can do, each with limits built in.</p>
-        <div class="chips"><span>start</span><span>measure</span><span>query</span><span>run evals</span><span>save</span><span>keep</span><span>undo</span></div>
+        <div class="chips"><span>ask</span><span>start</span><span>measure</span><span>query</span><span>run evals</span><span>save</span><span>keep</span><span>undo</span></div>
       </div>
       <div class="part">
         <h3>Rules</h3>
@@ -195,12 +195,12 @@
     <p class="entry"><code>cli.py</code> the command &middot; <code>config.py</code> signs in the way Claude Code does on the machine; no key of its own</p>
     <div class="code">
       <div class="part">
-        <h3>optimizer/ &middot; the agent</h3>
+        <h3>the session &middot; and its experts</h3>
         <ul>
-          <li><code>agent.py</code>The one Claude session: guide, skills, tools, guards, model</li>
-          <li><code>GUIDE.md</code>How to work, step by step</li>
-          <li><code>skills/</code>Where cost hides, per provider</li>
-          <li><code>tools.py</code>The 7 tools, with the limits and git inside them</li>
+          <li><code>session.py</code>The one Claude session: guards, model, the run</li>
+          <li><code>tools.py</code>The 8 tools every expert uses, with the limits and git inside them</li>
+          <li><code>experts/</code>The shared guide: how to start a team's agent and work with the tools</li>
+          <li><code>experts/cost/</code>One folder an expert: its guide and skills. Code adds only what its changes must earn</li>
         </ul>
       </div>
       <div class="part">

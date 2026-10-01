@@ -18,7 +18,7 @@ import pytest
 
 from fleetopt import cli, config
 from fleetopt.evidence import measure
-from fleetopt.optimizer import agent, tools
+from fleetopt import experts, session, tools
 from fleetopt.probe import runner, store
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -44,7 +44,7 @@ def test_ids_scope_to_project_and_newest_code_state(tmp_path):
 # --- the Bash guard: enforced, not asked ------------------------------------------
 
 def _guard(cmd):
-    return asyncio.run(agent.guard_bash()({"tool_input": {"command": cmd}}, "id", None))
+    return asyncio.run(session.guard_bash()({"tool_input": {"command": cmd}}, "id", None))
 
 
 @pytest.mark.parametrize("cmd", [
@@ -210,7 +210,7 @@ def test_the_probe_sees_every_node_that_ran_and_none_that_did_not(tmp_path):
         assert tools.reached() == "8 of 10 nodes; never ran: billing, other"
         facts = {"mode": "review", "measured": True, "reach": tools.reached(), "team_cost": 0, "team_runs": 3,
                  "own_cost": 0, "project": "p", "run_dir": str(tmp_path)}
-        assert "Reached  8 of 10 nodes; never ran: billing, other" in "\n".join(agent.summary(facts))
+        assert "Reached  8 of 10 nodes; never ran: billing, other" in "\n".join(session.summary(facts))
     finally:
         tools.CTX.clear()
 
@@ -275,12 +275,16 @@ def test_a_change_to_a_node_the_requests_never_ran_is_refused(tmp_path):
 
 # --- the one agent: its guide, its command line ----------------------------------------------
 
-def test_the_agent_reads_one_guide_and_every_cost_skill():
+def test_an_expert_is_the_shared_guide_its_own_and_every_skill_in_its_folder():
     assert config.SETTING_SOURCES == []
-    on_disk = {p.name for p in (ROOT / "fleetopt" / "optimizer" / "skills").iterdir() if p.is_dir()}
-    assert on_disk == set(agent.SKILLS)
-    assert all(f"fleetopt:{name}" in agent.SYSTEM for name in agent.SKILLS)
-    assert "minimum prefix" in agent.SYSTEM and "## The flow" in agent.SYSTEM
+    cost = experts.EXPERTS["cost"]
+    on_disk = {p.name for p in (ROOT / "fleetopt" / "experts" / "cost" / "skills").iterdir() if p.is_dir()}
+    assert on_disk == set(cost.skills) == {"caching", "model-tier", "prompt-growth", "redundant-work", "tool-surface"}
+    assert all(f"fleetopt:{name}" in cost.system() for name in cost.skills)
+    system = cost.system()
+    assert system.index("## Starting the agent") < system.index("# Your expertise: token and cost waste")  # shared, then its own
+    assert "minimum prefix" in system and "## The flow" in system
+    assert cost.apply and cost.earned is experts.gain and cost.keeps_shape   # what its changes must earn
 
 
 def test_while_it_investigates_a_person_sees_what_it_is_looking_at(tmp_path, capsys):
@@ -291,7 +295,7 @@ def test_while_it_investigates_a_person_sees_what_it_is_looking_at(tmp_path, cap
                        ("mcp__fleetopt__query", {"sql": "SELECT 1"}), ("mcp__fleetopt__query", {"sql": "SELECT 2"}),
                        ("Grep", {"pattern": "x"}), ("mcp__fleetopt__measure", {}),
                        ("Edit", {"file_path": str(tmp_path / "agent.py")})):
-        agent._activity(ToolUseBlock(id="t", name=name, input=args), tmp_path, shown)
+        session._activity(ToolUseBlock(id="t", name=name, input=args), tmp_path, shown)
     assert capsys.readouterr().out.split("\n")[:-1] == [
         "  reading agent.py", "  looking at the recorded calls", "  searching the code", "  editing agent.py"]
 
@@ -299,11 +303,11 @@ def test_while_it_investigates_a_person_sees_what_it_is_looking_at(tmp_path, cap
 def test_the_report_is_what_is_printed_and_nothing_said_before_it():
     said = ("Confirmed: repo is back to the original state.\n\nI ran 4 differing inputs total...\n\n"
             "**What it is for:** research.\n**What it spends:** $0.0086 a run")
-    assert agent._report_only(said) == "**What it is for:** research.\n**What it spends:** $0.0086 a run"
-    assert agent._report_only("no report heading at all") == "no report heading at all"
-    assert agent._sentence("The research step re-sends every note. I will trim it.") == \
+    assert session._report_only(said) == "**What it is for:** research.\n**What it spends:** $0.0086 a run"
+    assert session._report_only("no report heading at all") == "no report heading at all"
+    assert session._sentence("The research step re-sends every note. I will trim it.") == \
         "The research step re-sends every note."
-    assert agent._sentence("## Plan\nfirst trim") == "Plan"
+    assert session._sentence("## Plan\nfirst trim") == "Plan"
 
 
 def test_the_command_line_is_two_commands_and_a_few_flags():
@@ -313,9 +317,24 @@ def test_the_command_line_is_two_commands_and_a_few_flags():
     assert parse(["--out", "before", "review", "repo"]).out == "before"
     args = parse(["review", "repo", "--evals", "cases.jsonl", "--graph", "supervisor"])
     assert (args.cmd, args.evals, args.graph, args.max_usd) == ("review", "cases.jsonl", "supervisor", 2.0)
-    for gone in (["apply", "repo", "--only", "C1"], ["review", "repo", "--design"], ["capture", "repo"]):
+    assert parse(["review", "repo"]).expert == "cost" and not parse(["review", "repo"]).no_ask
+    assert parse(["apply", "repo", "--expert", "cost", "--no-ask"]).no_ask
+    for gone in (["apply", "repo", "--only", "C1"], ["review", "repo", "--design"], ["capture", "repo"],
+                 ["review", "repo", "--expert", "nobody"]):
         with pytest.raises(SystemExit):
             parse(gone)
+
+
+def test_an_expert_that_only_reviews_is_never_asked_to_change_anything(tmp_path, monkeypatch):
+    looks = experts.Expert(name="cost", does="looks", review="Look at it.")
+    monkeypatch.setitem(experts.EXPERTS, "looks", looks)
+    monkeypatch.setitem(session.EXPERTS, "looks", looks)
+    with pytest.raises(ValueError, match="only reviews: fleetopt review --expert cost"):
+        asyncio.run(session.run(_repo(tmp_path), tmp_path / "out", expert="looks"))
+    facts = {"mode": "review", "expert": "cost", "changes_it": False, "measured": True, "team_cost": 0, "team_runs": 3,
+             "own_cost": 0, "project": "p", "run_dir": str(tmp_path)}
+    assert "fleetopt apply" not in "\n".join(session.summary(facts))       # nothing to run next
+    assert "Next     fleetopt apply p" in "\n".join(session.summary({**facts, "changes_it": True}))
 
 
 # --- the tools: what is kept has earned it ---------------------------------------------------
@@ -434,6 +453,71 @@ def test_the_tools_keep_what_earns_it_on_the_teams_evals_and_undo_the_rest(tmp_p
         tools.CTX.clear()
 
 
+def test_one_change_is_dropped_by_name_and_the_rest_stay_saved(tmp_path, monkeypatch):
+    project = _repo(tmp_path)
+    _fake_runs(monkeypatch)
+    edit = lambda text, name="agent.py": (project / name).write_text(text, encoding="utf-8")
+    git = lambda *a: subprocess.run(["git", "-C", str(project), *a], capture_output=True, text=True, check=True).stdout
+    tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", entry={**ENTRY, "project": str(project)},
+                run_dir=tmp_path / "run")
+    git("checkout", "-q", "-b", "fleetopt/test")
+    try:
+        _call("measure")
+        edit("x = 1\n"), _call("save_change", name="cache the system prompt")
+        edit("y = 1\n", "helper.py"), _call("save_change", name="bound the output")
+        edit("z = 1\n", "other.py"), _call("save_change", name="smaller model")
+        _call("measure")
+        assert "no saved change is named 'trim notes'" in _call("undo", why="", names=["trim notes"])
+        text = _call("undo", why="it reads worse", names=["bound the output"])
+        assert "Still saved: cache the system prompt, smaller model. Measure them again." in text
+        assert not (project / "helper.py").exists() and (project / "other.py").exists()
+        assert git("log", "--format=%s").split("\n")[:3] == ["smaller model", "cache the system prompt", "base"]
+        assert tools.CTX["changes"]["bound the output"] == ["undone", "it reads worse"]
+        assert "Nothing" not in _call("measure") and "Kept" not in _call("keep")   # measured again; evals not run: refused
+        _call("undo", why="start over")
+
+        edit("x = 1\n"), _call("save_change", name="first edit of a line")      # the second is built on the first
+        edit("x = 2\n"), _call("save_change", name="second edit of the same line")
+        assert "everything is undone" in _call("undo", why="", names=["first edit of a line"])
+        assert (project / "agent.py").read_text(encoding="utf-8") == "x = 0\n" and not tools.CTX["saved"]
+        assert tools.CTX["changes"]["second edit of the same line"][1] == "it does not fit without a change that was undone"
+        edit("x = 3\n"), _call("save_change", name="one"), edit("y = 3\n", "b.py"), _call("save_change", name="two")
+        edit("y = 4\n", "b.py")                                                # not saved yet
+        assert "unsaved edits" in _call("undo", why="", names=["one"])          # dropping one must not lose them
+    finally:
+        tools.CTX.clear()
+
+
+def test_a_question_goes_to_someone_at_the_terminal_only_while_getting_started(tmp_path, monkeypatch):
+    project = _repo(tmp_path)
+    _fake_runs(monkeypatch)
+    typed = iter(["the one in langgraph.json", "", None])
+    monkeypatch.setattr(tools, "_typed", lambda seconds: next(typed))
+    entry_file = tmp_path / "out" / "e.json"
+    tools.begin(project, tmp_path / "out", entry_file=entry_file, entry={**ENTRY, "project": str(project)})
+    try:
+        assert "No one is there to ask" in _call("ask", question="Which graph do you ship?")   # no terminal: never asked
+        tools.CTX["ask"] = True
+        assert "They answered: the one in langgraph.json" in _call("ask", question="Which graph do you ship?")
+        assert json.loads(tools.told_path(entry_file).read_text(encoding="utf-8")) == [
+            {"question": "Which graph do you ship?", "answer": "the one in langgraph.json"}]
+        assert "No answer came" in _call("ask", question="Is data/x.csv your test data?") and tools.CTX["ask"]   # skipped
+        assert "No answer came" in _call("ask", question="Which env file?") and not tools.CTX["ask"]             # nobody there
+        tools.CTX.update(ask=True, asked=0)
+        for _ in range(tools.ASKS):
+            monkeypatch.setattr(tools, "_typed", lambda seconds: "yes")
+            _call("ask", question="Again?")
+        assert "3 questions, the most a run asks" in _call("ask", question="One more?")
+        tools.CTX["asked"] = 0
+        _call("measure")
+        assert "questions are for getting the agent started" in _call("ask", question="Should I keep it?")
+        told = session._told(tools.told_path(entry_file))                      # the next run is told, and need not ask
+        prompt = session._prompt(experts.COST, True, None, None, None, 2.0, 120, 2.0, None, None, told)
+        assert "The team was asked before: Which graph do you ship? They answered: the one in langgraph.json" in prompt
+    finally:
+        tools.CTX.clear()
+
+
 def test_an_agent_whose_model_calls_cannot_be_seen_is_said_so_and_nothing_more_is_spent(tmp_path, monkeypatch):
     project = _repo(tmp_path)
     runs = []
@@ -483,7 +567,7 @@ def test_one_agent_starts_measures_changes_and_leaves_nothing_unproven(tmp_path,
 
     monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
     try:
-        facts = asyncio.run(agent.run(project, tmp_path / "out"))
+        facts = asyncio.run(session.run(project, tmp_path / "out"))
     finally:
         tools.CTX.clear()
     git = lambda *a: subprocess.run(["git", "-C", str(project), *a], capture_output=True, text=True).stdout.strip()
@@ -494,7 +578,7 @@ def test_one_agent_starts_measures_changes_and_leaves_nothing_unproven(tmp_path,
                                                                     ("trim notes", "undone")]
     assert git("rev-parse", "--abbrev-ref", "HEAD") == "main"                # the team's copy is where it was
     assert git("show", f"{facts['branch']}:agent.py") == "x = 1"             # the branch holds what was kept
-    text = "\n".join(agent.summary(facts))
+    text = "\n".join(session.summary(facts))
     assert "1 change(s) kept on branch fleetopt/" in text and "the team's evals (pytest evals), before and after" in text
     entry = json.loads(tools.entry_path(tmp_path / "out", project).read_text(encoding="utf-8"))
     assert entry["proven"] and entry["name"] == "researcher"                 # the next run knows how to start it
@@ -518,7 +602,7 @@ def test_review_is_the_same_agent_without_anything_that_changes_code(tmp_path, m
 
     monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
     try:
-        facts = asyncio.run(agent.run(project, tmp_path / "out", look_only=True))
+        facts = asyncio.run(session.run(project, tmp_path / "out", look_only=True))
     finally:
         tools.CTX.clear()
     assert not seen["tools"] & {"Bash", "Edit", "Write", "mcp__fleetopt__save_change", "mcp__fleetopt__keep",
@@ -528,7 +612,7 @@ def test_review_is_the_same_agent_without_anything_that_changes_code(tmp_path, m
     assert "fleetopt" not in branches
     reviews = list((tmp_path / "out" / "reviews").glob("*.md"))
     assert len(reviews) == 1 and "cache the system prompt" in reviews[0].read_text(encoding="utf-8")
-    assert "Next     fleetopt apply" in "\n".join(agent.summary(facts))
+    assert "Next     fleetopt apply" in "\n".join(session.summary(facts))
 
 
 def test_a_stopped_run_puts_the_teams_copy_back(tmp_path, monkeypatch, capsys):
@@ -550,7 +634,7 @@ def test_a_stopped_run_puts_the_teams_copy_back(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(claude_agent_sdk, "query", stopped_midway)
     try:
         with pytest.raises(KeyboardInterrupt):
-            asyncio.run(agent.run(project, tmp_path / "out"))
+            asyncio.run(session.run(project, tmp_path / "out"))
     finally:
         tools.CTX.clear()
     git = lambda *a: subprocess.run(["git", "-C", str(project), *a], capture_output=True, text=True).stdout.strip()
@@ -575,7 +659,7 @@ def test_a_saved_start_is_used_again_even_with_one_input(tmp_path, monkeypatch):
 
     monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
     try:
-        asyncio.run(agent.run(project, tmp_path / "out"))
+        asyncio.run(session.run(project, tmp_path / "out"))
     finally:
         tools.CTX.clear()
     assert "How to start it is known" in seen["prompt"]            # one example is enough for a simple agent
@@ -711,9 +795,9 @@ def test_the_reader_reads_each_request_whole_beside_the_originals_second_run(mon
 def test_the_agent_runs_on_whatever_model_this_setup_has(tmp_path, monkeypatch, capsys):
     import claude_agent_sdk
 
-    o = agent.build_options(ROOT / "fixture")
+    o = session.build_options(ROOT / "fixture")
     assert (o.model, o.fallback_model) == ("sonnet", "opus")              # aliases, not version numbers
-    assert agent.build_options(ROOT / "fixture", model="opus").fallback_model == "sonnet"
+    assert session.build_options(ROOT / "fixture", model="opus").fallback_model == "sonnet"
     project = _repo(tmp_path)
 
     async def the_agent(prompt, options):
@@ -721,7 +805,7 @@ def test_the_agent_runs_on_whatever_model_this_setup_has(tmp_path, monkeypatch, 
 
     monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
     try:
-        asyncio.run(agent.run(project, tmp_path / "out"))
+        asyncio.run(session.run(project, tmp_path / "out"))
     finally:
         tools.CTX.clear()
     assert "model: claude-sonnet-9-20270101" in capsys.readouterr().out   # what it picked is shown

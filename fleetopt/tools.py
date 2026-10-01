@@ -1,11 +1,15 @@
-"""The agent's tools, and the limits inside them.
+"""The tools every expert works with, and the limits inside them.
 
-The agent decides how to start the project's agent, what to change, what to bundle, what
+The session decides how to start the project's agent, what to change, what to bundle, what
 to try next and when to stop. It does not decide what the numbers are or whether a change
-is kept, and it cannot go past a limit: those are here, the same for every agent. Git is
-fleetopt's alone, so a session cannot fake a baseline.
+is kept, and it cannot go past a limit: those are here, the same for every agent and every
+expert. Git is fleetopt's alone, so a session cannot fake a baseline. The one thing an
+expert brings to `keep` is what a change must earn (experts/): for cost, cheaper past the
+noise with the graph's structure as it was.
 
 Limits, each learned on a real agent:
+- ask: three questions at most, before the first measurement, and only when someone is at the
+  terminal;
 - start: 4 tries, one input each on the team's key; "started" only when a try shows
   requests ran and a model answered, never on the session's word;
 - measure: changed code runs once before three times, and a run that takes 3x the
@@ -26,21 +30,26 @@ import hashlib
 import json
 import os
 import pathlib
+import queue
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
+from fleetopt.experts import COST
 from fleetopt.probe import driver, runner, store
 
 RUNS = 3           # runs of the agent per measurement
 TRIES = 4          # tries to start the agent, one input each
+ASKS = 3           # questions to the person who started the run, before the first measurement
+ASK_MINUTES = 5    # the wait for an answer
 MAX_INPUTS = 8     # requests a run
 EVAL_MINUTES = 30  # one run of the team's evals; FLEETOPT_EVAL_MINUTES overrides
 STEP_FACTOR = 3    # a changed agent may take this many times the original's steps per run
@@ -89,25 +98,6 @@ def brief(stats):
     cost = "cost not priced" if stats.get("cost_usd") is None else f"${stats['cost_usd']:.4f} a run"
     return (f"{cost} · {stats.get('input_tokens') or 0:,.0f} tokens in · {stats.get('output_tokens') or 0:,.0f} out · "
             f"{stats.get('llm_calls') or 0:g} model calls · {(stats.get('wall_ms') or 0) / 1000:.1f} s")
-
-
-GAINS = ("cost_usd", "wall_ms", "completed", "cost_per_completed")
-
-
-def gain(result):
-    """What got better past the noise, or None. Nothing may finish less often and cost may
-    not rise. A clean cut in tokens counts too, with neither count worse: total cost can sit
-    inside the noise because the length of a model's answers varies from run to run, which
-    the change does not control (observed: input tokens -20% on every run, cost -11% called
-    noise)."""
-    verdict = lambda key: (result.get(key) or {}).get("verdict")
-    if "regressed" in (verdict("completed"), verdict("cost_usd")):
-        return None
-    first = next((k for k in GAINS if verdict(k) in ("improved", "baseline finished nothing")), None)
-    tokens = (verdict("input_tokens"), verdict("output_tokens"))
-    if first or "regressed" in tokens:
-        return first
-    return next((k for k, v in zip(("input_tokens", "output_tokens"), tokens) if v == "improved"), None)
 
 
 # --- limits and records -------------------------------------------------------------------
@@ -305,6 +295,56 @@ def started(entry):
                tag=tag, base=f"baseline-{tag}", kept_label=f"baseline-{tag}")
 
 
+def told_path(entry_file):
+    """Where what the team answered is kept, beside how the agent is started."""
+    return pathlib.Path(entry_file).with_suffix(".answers.json")
+
+
+def _typed(seconds):
+    """A line typed at the terminal, or None when none came in time. A thread, since a read of
+    the keyboard cannot be given a time limit the same way on every system."""
+    box = queue.Queue()
+    threading.Thread(target=lambda: box.put(sys.stdin.readline()), daemon=True).start()
+    try:
+        return box.get(timeout=seconds).strip()
+    except queue.Empty:
+        return None
+
+
+@tool("ask", "Ask the person who started this run one question, in one plain sentence, when you are blocked on "
+      "a fact only the team has and the project does not show (which of two env files, which graph they ship, "
+      "whether a file is their test data). Only before the first measurement, three at most, and often no one "
+      "is there. Never ask for a key, token or password.", {"question": str})
+async def ask(args):
+    question = " ".join((args.get("question") or "").split())[:400]
+    if not question:
+        return _ok("Refused: ask one plain question.")
+    if CTX["baseline"] is not None:
+        return _ok("Refused: questions are for getting the agent started, and whoever started this may have left. "
+                   "Decide from what you have, or say so in your report.")
+    if not CTX.get("ask"):
+        return _ok("No one is there to ask. Decide from what the project shows, or stop and list what is missing.")
+    if CTX["asked"] >= ASKS:
+        return _ok(f"Refused: {ASKS} questions, the most a run asks. Decide from what you have.")
+    CTX["asked"] += 1
+    say(f"\n  a question for you ({ASK_MINUTES} minutes to answer; press Enter to skip):\n    {question}")
+    print("  > ", end="", flush=True)
+    CTX["said_at"] = time.time() + 60 * ASK_MINUTES  # no 'still working' line over the question
+    answer = await asyncio.to_thread(_typed, 60 * ASK_MINUTES)
+    CTX["said_at"] = time.time()
+    if answer is None:
+        CTX["ask"] = False  # nobody there: a second question would wait as long for nothing
+        say("  no answer: going on without one")
+    if not answer:
+        return _ok("No answer came. Decide from what the project shows, or stop and list what is missing.")
+    path = told_path(CTX["entry_path"])
+    told = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(told + [{"question": question, "answer": answer[:1000]}], indent=1), encoding="utf-8")
+    _record("asked", question=question)
+    return _ok(f"They answered: {answer[:1000]}")
+
+
 @tool("start", "Start the agent on one input with this entry, under fleetopt's probe, and say what happened: "
       "requests seen and finished, model calls seen, the first error, the last lines it printed. `entry`: "
       "the entry as a JSON object (see the guide). At most 4 tries, each on the team's key.", {"entry": str})
@@ -350,14 +390,14 @@ async def start(args):
 # --- the run: git, measurement and the gate -----------------------------------------------
 
 def begin(project, out, *, entry_file, entry=None, look_only=False, team_usd=TEAM_USD, minutes=MAX_MINUTES,
-          first_session=0, run_dir=None):
+          first_session=0, run_dir=None, expert=COST, ask=False):
     """Everything the tools share for one run, from the code as it stands."""
     CTX.clear()
     CTX.update(project=pathlib.Path(project).resolve(), out=pathlib.Path(out).resolve(), events=[], entry_path=entry_file,
                run_dir=pathlib.Path(run_dir or out), look_only=look_only, evals_before=None, evals_after={}, n_evals=0,
                max_team_usd=team_usd, max_minutes=minutes, deadline=time.time() + 60 * minutes,
                first_session=first_session, said_at=time.time(), tries=0, run_cmd=None, job="answer the user's request",
-               baseline=None, saved=[], measured=None, results={}, changes={}, n=0)
+               baseline=None, saved=[], measured=None, results={}, changes={}, n=0, expert=expert, ask=ask, asked=0)
     if _git("status", "--porcelain", "--untracked-files=no"):  # undo and the final clean-up reset to the last commit
         raise RuntimeError("the project has uncommitted changes. Commit or stash them first: fleetopt works from your "
                            "last commit, and would lose them when it undoes a change")
@@ -634,9 +674,10 @@ async def measure(args):
     line = moved(result)
     _mark("measured", line)
     say(f"  measured: {line}")
-    notes = ["Something got better past the noise: run the team's evals on this code, then keep." if gain(result)
-             else "Nothing got better past the noise, so keep will refuse it."]
-    if _shape(label) != _shape(CTX["base"]):
+    expert = CTX["expert"]
+    notes = ["Something got better past the noise: run the team's evals on this code, then keep." if expert.earned(result)
+             else f"{expert.nothing.capitalize()}, so keep will refuse it."]
+    if expert.keeps_shape and _shape(label) != _shape(CTX["base"]):
         notes.append("It changes the graph's nodes or edges, so keep will refuse it.")
     unproven = _unproven()
     if unproven:
@@ -686,9 +727,10 @@ async def keep(args):
     if _dirty():
         return _ok("Refused: there are edits since the measurement. Save and measure them, or undo.")
     result = CTX["results"][label]
-    if not gain(result):
-        return _refuse("nothing got better past the noise")
-    if _shape(label) != _shape(CTX["base"]):
+    expert = CTX["expert"]  # what a change must earn is the expert's; the rest is the same for all
+    if not expert.earned(result):
+        return _refuse(expert.nothing)
+    if expert.keeps_shape and _shape(label) != _shape(CTX["base"]):
         return _refuse("it changes the graph's nodes or edges, which is a design change")
     touched = _tests_touched()
     if touched:
@@ -737,7 +779,7 @@ async def keep(args):
       "today; after your changes are saved, run the same command again before keep. Returns the exit code and "
       "the end of the output; the whole output is kept.", {"command": str})
 async def run_evals(args):
-    from fleetopt.optimizer import agent  # the shell's rules apply to this command too
+    from fleetopt import session as agent  # the shell's rules apply to this command too
 
     command = " ".join((args.get("command") or "").split())
     if not command:
@@ -772,19 +814,64 @@ async def run_evals(args):
     return _ok(f"Exit {code} in {seconds:.0f} s. Whole output: {kept}\n\nThe end of it:\n{tail}")
 
 
-@tool("undo", "Put the code back as it was last kept, dropping every change saved since. `why`: a few words.",
-      {"why": str})
+def _drop(names):
+    """Take the named changes out of what is saved, keeping the others as they were: back to
+    the code as last kept, then each remaining change put on again in order. False, with
+    everything undone, when one of them no longer fits without what was dropped."""
+    shas = _git("rev-list", "--reverse", f"{CTX['kept_sha']}..HEAD").split()
+    stay = [(name, sha) for name, sha in zip(CTX["saved"], shas) if name not in names]
+    _git("reset", "-q", "--hard", CTX["kept_sha"])
+    for _, sha in stay:
+        try:
+            _git("-c", "user.name=fleetopt", "-c", "user.email=fleetopt@localhost", "cherry-pick", "--allow-empty", sha)
+        except RuntimeError:
+            subprocess.run(["git", "-C", str(CTX["project"]), "cherry-pick", "--abort"], capture_output=True)
+            _reset()
+            return False
+    CTX.update(saved=[name for name, _ in stay], measured=None, untracked=_untracked())
+    return True
+
+
+@tool("undo", "Put the code back as it was last kept, dropping every change saved since; or, with `names`, drop "
+      "only the saved changes named and keep the others saved, to be measured again. `why`: a few words.",
+      {"type": "object", "properties": {"why": {"type": "string"}, "names": {"type": "array", "items": {"type": "string"}}},
+       "required": ["why"]})
 async def undo(args):
     if not CTX["saved"] and not _dirty():
         return _ok("Nothing to undo: the code is as it was last kept.")
     why = " ".join((args.get("why") or "").split())[:160]
-    names = list(CTX["saved"])
-    for name in names:
-        outcome, detail = CTX["changes"].get(name, ["", ""])
-        CTX["changes"][name] = ["undone", detail if outcome in ("failed", "not kept") else (why or detail)]
+    saved = list(CTX["saved"])
+    names = [" ".join(str(n).split())[:80] for n in args.get("names") or []] or saved
+    unknown = [n for n in names if n not in saved]
+    if unknown:
+        return _ok(f"Refused: no saved change is named {unknown[0]!r}. Saved: {', '.join(saved) or 'none'}.")
+    some = bool(args.get("names")) and set(names) != set(saved)
+    if some and _dirty():
+        return _ok("Refused: there are unsaved edits. Save them first, or undo everything.")
+
+    def mark(dropped, reason):
+        for name in dropped:
+            outcome, detail = CTX["changes"].get(name, ["", ""])
+            CTX["changes"][name] = ["undone", detail if outcome in ("failed", "not kept") else (reason or detail)]
+
+    if some and _drop(names):
+        mark(names, why)
+        for name in CTX["saved"]:  # what stays was measured with what left: it is measured again
+            CTX["changes"][name] = ["saved", ""]
+        _record("undo", changes=names, why=why)
+        say(f"  undone: {' + '.join(names)}" + (f" ({why})" if why else ""))
+        return _ok(f"Undone: {', '.join(names)}. Still saved: {', '.join(CTX['saved'])}. Measure them again.")
+    if some:  # the others were built on what was dropped
+        mark(names, why)
+        mark([n for n in saved if n not in names], "it does not fit without a change that was undone")
+        _record("undo", changes=saved, why=why)
+        say(f"  undone: {' + '.join(saved)} (the others do not fit without {' + '.join(names)})")
+        return _ok("The other changes do not fit without the ones dropped, so everything is undone. The code is "
+                   "as it was last kept: make the changes worth keeping again.")
+    mark(saved, why)
     _reset()
-    _record("undo", changes=names, why=why)
-    say(f"  undone: {' + '.join(names) or 'unsaved edits'}" + (f" ({why})" if why else ""))
+    _record("undo", changes=saved, why=why)
+    say(f"  undone: {' + '.join(saved) or 'unsaved edits'}" + (f" ({why})" if why else ""))
     return _ok("Undone. The code is as it was last kept.")
 
 
@@ -820,13 +907,17 @@ async def query(args):
     return _ok("\n".join(out))
 
 
-LOOK = [start, measure, query]
+LOOK = [ask, start, measure, query]
 CHANGE = LOOK + [run_evals, save_change, keep, undo]
 
 
-def server(look_only=False):
-    return create_sdk_mcp_server(name="fleetopt", tools=LOOK if look_only else CHANGE)
+def _tools(look_only, expert):
+    return (LOOK if look_only else CHANGE) + list(expert.tools)
 
 
-def names(look_only=False):
-    return [f"mcp__fleetopt__{t.name}" for t in (LOOK if look_only else CHANGE)]
+def server(look_only=False, expert=COST):
+    return create_sdk_mcp_server(name="fleetopt", tools=_tools(look_only, expert))
+
+
+def names(look_only=False, expert=COST):
+    return [f"mcp__fleetopt__{t.name}" for t in _tools(look_only, expert)]
