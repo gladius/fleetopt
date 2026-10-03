@@ -138,6 +138,21 @@ answers: treat them like the project's own logs.
 
 ## Known limits
 
+Found on real agents on 2026-10-02 and 2026-10-03, not yet fixed. Until they are, read a cost
+result with these in mind:
+
+- **An eval command that cannot run counts as passing.** Observed: `pytest` was not installed,
+  the command failed with "command not found" before and after a change, and the change was
+  kept as "the team's evals pass as before". The evals never ran.
+- **An eval suite that calls no model proves plumbing, not answers.** A test that drives the
+  agent with a fake model passes whatever the prompts say. Nothing yet makes the answers be
+  read as well in that case.
+- **The cost expert does not account for where the money goes.** It checks five areas against
+  thresholds and dismisses them. Observed: a model call that only rewords a sub-agent's
+  answer, 29% of one agent's cost, was reported as nothing to change.
+- A design review may write requests of its own when the project holds too few, and says so;
+  its findings are then as wide as those requests.
+
 - LangGraph in Python only; model calls must go through LangChain to be seen.
 - Only Anthropic has been run; OpenAI and Gemini are priced, untested.
 - Reading eval results has been tried on pytest output only; checking by a golden dataset or
