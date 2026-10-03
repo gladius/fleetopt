@@ -213,7 +213,7 @@ def _prompt(expert, look_only, entry, evals, graph, team, minutes, max_usd, bran
     if branch:
         lines.append(f"Changes go on fleetopt's branch {branch}.")
     if earlier:
-        lines += ["", "An earlier review of this exact code:", earlier]
+        lines += ["", earlier]
     return "\n".join(lines)
 
 
@@ -247,8 +247,11 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     if branch:
         tools._git("checkout", "-q", "-b", branch)
     earlier = None
-    if not look_only and _review_path(out, project, ctx["start_state"], expert).exists():
-        earlier = _review_path(out, project, ctx["start_state"], expert).read_text(encoding="utf-8")
+    if not look_only:  # what every expert found on this exact code, its own first: one's findings reach the others
+        found = [(e, _review_path(out, project, ctx["start_state"], e)) for e in (expert, *EXPERTS.values()) if e.name != expert.name or e is expert]
+        texts = [f"The {e.name} expert reviewed this exact code earlier:\n{p.read_text(encoding='utf-8')}"
+                 for e, p in dict.fromkeys(found) if p.exists()]
+        earlier = "\n\n".join(texts) or None
 
     prompt = _prompt(expert, look_only, entry, evals, graph, team, minutes, max_usd, branch, earlier,
                      _told(tools.told_path(path)))

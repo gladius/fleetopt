@@ -353,7 +353,7 @@ def test_an_expert_is_the_shared_guide_its_own_and_every_skill_in_its_folder():
     assert config.SETTING_SOURCES == []
     cost = experts.EXPERTS["cost"]
     on_disk = {p.name for p in (ROOT / "fleetopt" / "experts" / "cost" / "skills").iterdir() if p.is_dir()}
-    assert on_disk == set(cost.skills) == {"caching", "model-tier", "prompt-growth", "redundant-work", "tool-surface"}
+    assert on_disk == set(cost.skills) == {"caching", "handoffs", "model-tier", "prompt-growth", "redundant-work", "tool-surface"}
     assert all(f"fleetopt:{name}" in cost.system() for name in cost.skills)
     system = cost.system()
     assert system.index("## Starting the agent") < system.index("# Your expertise: token and cost waste")  # shared, then its own
@@ -453,6 +453,7 @@ def _fake_runs(monkeypatch, failing=(), flat=(), broke=(), reshaped=()):
     monkeypatch.setattr(tools, "_measure", run)
     monkeypatch.setattr(tools, "_run_evals", evals)
     monkeypatch.setattr(tools, "_read_evals", read)
+    monkeypatch.setattr(tools, "_evals_called_a_model", lambda: True)   # a real suite, which runs the agent
     monkeypatch.setattr(tools, "_compare", lambda before, after: {"cost_usd": {
         "before": 0.0125, "after": 0.01, "delta_pct": -20.0, "verdict": "within noise" if last() in flat else "improved"}})
     monkeypatch.setattr(tools, "_shape", lambda label: ["changed"] if not label.startswith("baseline") and last() in reshaped
@@ -524,6 +525,64 @@ def test_the_tools_keep_what_earns_it_on_the_teams_evals_and_undo_the_rest(tmp_p
         tools.CTX["deadline"] = 1
         edit("x = 9\n"), _call("save_change", name="late")
         assert "time limit" in _call("measure")
+    finally:
+        tools.CTX.clear()
+
+
+def test_what_one_expert_found_reaches_the_others_apply(tmp_path, monkeypatch):
+    import claude_agent_sdk
+
+    project = _repo(tmp_path)
+    _fake_runs(monkeypatch), _tried(monkeypatch)
+    reviews = tmp_path / "out" / "reviews"
+    reviews.mkdir(parents=True)
+    key = session.hashlib.sha1(str(project).encode()).hexdigest()[:8]
+    (reviews / f"{project.name}-{key}-{runner.code_state(project)}-design.md").write_text(
+        "What it is for: x\nFor the cost expert:\n- the specialists' closing call only rewords\n", encoding="utf-8")
+    seen = {}
+
+    async def the_agent(prompt, options):
+        seen["prompt"] = prompt
+        return
+        yield
+
+    monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
+    try:
+        asyncio.run(session.run(project, tmp_path / "out"))
+    finally:
+        tools.CTX.clear()
+    assert "The design expert reviewed this exact code earlier:" in seen["prompt"]
+    assert "the specialists' closing call only rewords" in seen["prompt"]
+
+
+def test_evals_that_did_not_run_or_called_no_model_are_not_the_proof(tmp_path, monkeypatch):
+    project = _repo(tmp_path)
+    seen = _fake_runs(monkeypatch)
+    monkeypatch.setattr(tools, "_run_evals", lambda command: (127, 0.1, "/bin/sh: line 1: pytest: command not found"))
+    read = []
+
+    async def answers(pairs):
+        read.append("answers")
+        return True, ""
+
+    monkeypatch.setattr(tools, "_read_answers", answers)
+    monkeypatch.setattr(tools, "_pairs", lambda label: [{"input": "q", "expected": None, "before": "a", "after": "b"}])
+    tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", entry={**ENTRY, "project": str(project)},
+                run_dir=tmp_path / "run")
+    subprocess.run(["git", "-C", str(project), "checkout", "-q", "-b", "fleetopt/test"], check=True)
+    try:
+        text = _call("run_evals", command="pytest tests")
+        assert "Not recorded: the command did not run (exit 127: /bin/sh: line 1: pytest: command not found)" in text
+        assert tools.CTX["evals_before"] is None                                   # observed: kept on two "not found"s
+        _call("measure")
+        monkeypatch.setattr(tools, "_run_evals", lambda command: (0, 1.0, "3 passed"))
+        _call("run_evals", command="pytest tests")                                # a suite that drives a fake model
+        monkeypatch.setattr(tools, "_evals_called_a_model", lambda: False)
+        (project / "agent.py").write_text("x = 1\n", encoding="utf-8")
+        _call("save_change", name="trim the prompt"), _call("measure"), _call("run_evals", command="pytest tests")
+        assert "Kept" in _call("keep") and read == ["answers"]                     # the answers were read as well
+        assert tools.CTX["changes"]["trim the prompt"][1].endswith("the team's evals pass as before, and answers as good as before")
+        assert seen["read"] == ["trim the prompt"]
     finally:
         tools.CTX.clear()
 

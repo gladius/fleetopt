@@ -22,6 +22,11 @@ fails or falls below it AFTER, if AFTER ran fewer evals, or if AFTER did not fin
 that already failed BEFORE and still fails is not the change's fault. A score that moved but
 still meets its threshold is fine.
 
+If BEFORE did not run any eval at all (the command was not found, nothing was collected, it
+stopped before the first case), nothing is proven by these runs: reply broke: true, with the
+reason "the evals did not run before the change". Two runs that failed the same way are not a
+pass.
+
 COMMAND
 {command}
 

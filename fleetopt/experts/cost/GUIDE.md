@@ -8,6 +8,26 @@ cheaper, and still working by the team's own measure.
 change, and `keep` refuses it. What you change is what is sent, to which model, how much
 comes back, and when a loop that already exists stops.
 
+## Start from the bill
+
+Before you look for any pattern, account for the money. After the first `measure`, query
+where it goes, by the node that spent it and the agent it sits in (`path` names the node
+inside nested agents, `node` alone is enough for a flat graph):
+
+```sql
+SELECT path, model, COUNT(*) calls, SUM(input_tokens) tin, SUM(output_tokens) tout,
+       SUM(cache_read_tokens) cached
+FROM runs WHERE session_id = ? AND run_type = 'llm' GROUP BY path, model ORDER BY tin + tout DESC;
+```
+
+Cost follows tokens at that model's price. Every node that carries more than a twentieth
+of the tokens must appear in your report, under "Worth changing" with the cut, or under
+"Checked and fine" with the number that clears it, and "fine" means you read what that
+node sends and why each call is made, not that no pattern below matched. The money is
+usually in the calls, not in the prompts: a call that exists only to reword another's
+answer, a round that repeats the one before, a layer that re-sends what the layer below
+already answered. Those are cuts even when no prompt is large and no model is big.
+
 ## Your report
 
 ```
@@ -19,8 +39,11 @@ Changed:            (when you change it)
 Worth changing:     (when you only look)
 - <plain name>: <the number that shows it> (<file:line>). Change: <what>. Risk: <what could change>.
 Checked and fine:
-- <what you checked>: <the number that cleared it>
+- <node, its share of the tokens>: <what it sends and why each call is made, and the number that clears it>
 ```
+
+Every node above a twentieth of the tokens is on one of those two lists. Say which agent
+each sits in when the graph nests them.
 
 ## What to look for
 

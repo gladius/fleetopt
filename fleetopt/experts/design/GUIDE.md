@@ -18,7 +18,9 @@ pattern that fits is worth a line too: "supervisor justified: 4 distinct worker 
    relative to that.
 2. **Run it on requests that differ in kind.** A design is judged by what it does across
    different requests, so take the widest set the project offers, up to eight. One request
-   shows one path.
+   shows one path. When the project offers too few, you may add requests of the kinds its
+   prompts describe: name them as yours in `inputs_from`, count them under "How wide the
+   evidence is", and never give them expected answers.
 3. **Get the numbers.** After the first `measure`, `shape` gives what the graph declared
    against what it did: for the graph that ran and for each graph nested in it. `query`
    has the rest (`SELECT mermaid FROM graphs WHERE driven = 1` is the declared shape).

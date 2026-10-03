@@ -159,6 +159,8 @@ def test_the_agent_drives_and_the_limits_live_in_its_tools():
     assert "Never look for another way to do what was refused" in GUIDE      # a refusal is an answer
     assert "never use anything about whoever runs this tool" in GUIDE          # nothing about the operator goes out
     assert "The graph keeps its nodes and edges" in GUIDE                      # design is out of scope for now
+    assert "Every node that carries more than a twentieth of the tokens must appear in your report" in GUIDE
+    assert "fleetopt:handoffs" in GUIDE and "A call that only rewords" in GUIDE   # observed: 29% of a cost missed
 
 
 def test_the_teams_own_evals_are_the_proof_and_without_them_it_stops():

@@ -49,6 +49,7 @@ from fleetopt.probe import driver, runner, store
 
 RUNS = 3           # runs of the agent per measurement
 TRIES = 4          # tries to start the agent, one input each
+NOT_RUN = (126, 127, 9009)  # a command that could not run at all: not found, not executable (9009: Windows)
 ASKS = 3           # questions to the person who started the run, before the first measurement
 ASK_MINUTES = 5    # the wait for an answer
 MAX_INPUTS = 8     # requests a run
@@ -590,6 +591,15 @@ def _tests_touched():
     return [f for f in _git("diff", "--name-only", CTX["kept_sha"], "HEAD").splitlines() if TESTS.search(f) or f == golden]
 
 
+def _evals_called_a_model():
+    """Whether the team's eval runs of this run recorded a model call at all."""
+    with _conn() as conn:
+        return bool(conn.execute(
+            "SELECT 1 FROM runs r JOIN sessions s ON s.id = r.session_id WHERE s.project = ? AND s.id > ?"
+            "   AND s.label LIKE 'evals-%' AND r.run_type = 'llm' LIMIT 1",
+            (str(CTX["project"]), CTX.get("first_session", 0))).fetchone())
+
+
 def _run_evals(command):
     """The team's eval command, in the project's own environment, under the probe so its model
     calls count toward the cap, with the env file the agent runs with. Returns (exit code,
@@ -749,28 +759,34 @@ async def keep(args):
     if stop:
         return _ok(f"Refused: {stop}. Undo what is not kept, and report.")
     before = CTX["evals_before"]
+    held, why, checked = True, "", []
     if before:  # the team's suite: the strongest proof, so when it was run it is the one that counts
         after = CTX["evals_after"].get(runner.code_state(CTX["project"]))
         if not after:
             return _ok("Refused: run the team's evals on this code first (run_evals, the same command as on the original).")
         say("  reading the team's evals: before and after")
         held, why = await _read_evals(before["command"], before["text"], after["text"])
-        checked = "the team's evals pass as before"
-    else:  # a golden dataset, or examples of what it is sent: the recorded answers, request by request
+        checked.append("the team's evals pass as before")
+    # A golden dataset, or examples of what it is sent: the recorded answers, request by request.
+    # Also when there is a suite that called no model (observed: a test driving the agent with a
+    # fake model): it proves the plumbing, and passes whatever the prompts say.
+    if held and (not before or not _evals_called_a_model()):
         pairs = _pairs(label)
         if not pairs:
             return _refuse("the two sides did not run the same requests, so their answers cannot be compared")
-        say(f"  reading the answers: {len(pairs)} requests, before and after")
+        say(f"  reading the answers: {len(pairs)} requests, before and after"
+            + (" (the team's evals called no model)" if before else ""))
         held, why = await _read_answers(pairs)
         cut = judge_mod.clipped(pairs)
-        checked = ("answers correct as expected" if (CTX.get("entry") or {}).get("expected") else "answers as good as before"
-                   ) + (f" ({cut} too long to be read whole)" if cut else "")
+        checked.append(("answers correct as expected" if (CTX.get("entry") or {}).get("expected") else "answers as good as before")
+                       + (f" ({cut} too long to be read whole)" if cut else ""))
+    checked = ", and ".join(checked)
     _record("checked", proof=proof(), held=held, why=why, reader=judge_mod.USED.get("model"))
     if judge_mod.USED.get("model") and not CTX.get("reader_named"):
         CTX["reader_named"] = True
         say(f"    read by: {judge_mod.USED['model']}")
     if not held:
-        what = "the team's evals" if before else "the answers"
+        what = "the team's evals" if before and len(checked.split(", and ")) == 1 else "the answers"
         return _refuse(f"{what}: {why}")
     detail = f"{moved(result)} · {checked}"
     names = list(CTX["saved"])
@@ -807,6 +823,12 @@ async def run_evals(args):
     say(f"  running the team's evals{' on the code as it is' if original else ''}: {command}")
     code, seconds, text = await asyncio.to_thread(_run_evals, command)
     CTX["untracked"] = _untracked()  # results files an eval run writes are not edits
+    if code in NOT_RUN:  # observed: `pytest` not installed, "command not found" before and after, and the change kept
+        say(f"    did not run (exit {code})")
+        return _ok(f"Not recorded: the command did not run (exit {code}: {text.strip().splitlines()[-1][:160] if text.strip() else 'no output'}). "
+                   "It is not what the team runs here, or something it needs is missing: that is the team's to provide. "
+                   "Give the command that runs their evals in this environment, or, if there is none, the golden dataset or "
+                   "examples are the proof.")
     kept = CTX["run_dir"] / f"evals-{CTX['n_evals']}.log"
     kept.parent.mkdir(parents=True, exist_ok=True)
     kept.write_text(text, encoding="utf-8")
