@@ -606,6 +606,32 @@ def test_a_fake_model_in_the_teams_evals_is_not_a_model_call_and_costs_nothing(t
     tools.CTX.clear()
 
 
+def test_the_bill_is_handed_over_first_and_the_report_must_account_for_it(tmp_path):
+    tools.CTX.clear()
+    tools.CTX.update(out=tmp_path, project=tmp_path / "a")
+    with store.connect(tmp_path / "fleetopt.db") as conn:
+        for _ in range(2):
+            sid = _session(conn, project=str(tmp_path / "a"), label="baseline-x", code_state="v1", exit_code=0)
+            for node, path, tin, tout in (("model", "model", 1000, 100), ("model", "tools:model", 1600, 200),
+                                          ("tools", "tools", 0, 0), ("route", "route", 60, 2)):
+                conn.execute("INSERT INTO runs (session_id, run_type, node, path, model, provider, input_tokens, output_tokens)"
+                             " VALUES (?, 'llm', ?, ?, 'gpt-5-nano', 'openai', ?, ?)", (sid, node, path, tin, tout))
+    try:
+        rows = tools.bill("baseline-x")
+        assert [(x["node"], x["calls"], round(x["share"], 2)) for x in rows] == [("tools:model", 1.0, 0.61), ("model", 1.0, 0.37),
+                                                                                  ("route", 1.0, 0.02), ("tools", 1.0, 0.0)]
+        assert "tools:model" in tools.bill_words(rows).splitlines()[1] and "$0." in tools.bill_words(rows)
+        report = "Checked and fine:\n- model, 37% of the tokens: fine\n- the route node is tiny"
+        assert tools.unaccounted(report, rows) == ["tools:model"]            # named by its path, not just 'model'
+        assert tools.unaccounted(report + "\n- `tools:model`: one call restates the search", rows) == []
+        facts = {"mode": "review", "measured": True, "bill": rows, "unaccounted": ["tools:model"], "team_cost": 0,
+                 "team_runs": 3, "own_cost": 0, "project": "p", "run_dir": str(tmp_path)}
+        assert "Account  1 of 2 nodes above 5% of the tokens are in the report; not accounted for: tools:model" in \
+            "\n".join(session.summary(facts))
+    finally:
+        tools.CTX.clear()
+
+
 def test_one_change_is_dropped_by_name_and_the_rest_stay_saved(tmp_path, monkeypatch):
     project = _repo(tmp_path)
     _fake_runs(monkeypatch)

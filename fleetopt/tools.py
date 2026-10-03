@@ -534,6 +534,58 @@ def _reach(label):
     return [n for n in nodes if hit(n)], [n for n in nodes if not hit(n)], sources
 
 
+def bill(label):
+    """Where the tokens go, a run: by node (its path in nested graphs) and model, largest first.
+    Share is of tokens, so it holds when a model has no price."""
+    ids = _ids(label)
+    if not ids:
+        return []
+    from fleetopt.evidence import pricing
+
+    marks = ",".join("?" * len(ids))
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT COALESCE(path, node, '(graph)') AS at, model, provider, COUNT(*) n, SUM(input_tokens) tin,"
+            f"       SUM(output_tokens) tout, SUM(cache_read_tokens) cr, SUM(cache_write_tokens) cw"
+            f"  FROM runs WHERE session_id IN ({marks}) AND run_type = 'llm' GROUP BY at, model, provider"
+            f"  ORDER BY tin + tout DESC", ids).fetchall()
+    out = []
+    for r in rows:
+        cost = pricing.cost(r["model"] or r["provider"], r["tin"], r["tout"], r["cr"], r["cw"])
+        out.append({"node": r["at"], "model": r["model"] or r["provider"] or "?", "calls": r["n"] / len(ids),
+                    "tokens": (r["tin"] + r["tout"]) / len(ids), "cost": None if cost is None else cost / len(ids)})
+    total = sum(x["tokens"] for x in out) or 1
+    for x in out:
+        x["share"] = x["tokens"] / total
+    return out
+
+
+def bill_words(rows, limit=12):
+    width = max([len(x["node"]) for x in rows[:limit]] + [4])  # whole names: the report quotes them
+    lines = [f"{'node':{width}} {'model':20} {'calls':>5} {'tokens':>8} {'share':>5}  cost, a run"]
+    for x in rows[:limit]:
+        lines.append(f"{x['node']:{width}} {x['model'][:20]:20} {x['calls']:>5.1f} {x['tokens']:>8,.0f} {x['share']:>4.0%}  "
+                     + ("not priced" if x["cost"] is None else f"${x['cost']:.4f}"))
+    return "\n".join(lines)
+
+
+ACCOUNT_FLOOR = 0.05  # a node with this share of the tokens must be in the report
+
+
+def unaccounted(report, rows, floor=ACCOUNT_FLOOR):
+    """Nodes above the floor the report never names: what the expert did not account for. A nested
+    node is named by its path; a plain one by its name as a word."""
+    missing = []
+    for x in rows:
+        if x["share"] < floor or x["node"] == "(graph)":
+            continue
+        name = x["node"]
+        named = name in report if ":" in name else re.search(rf"(?<![\w:]){re.escape(name)}(?![\w:])", report)
+        if not named:
+            missing.append(name)
+    return missing
+
+
 def reached():
     """What the inputs reached of the graph, in words; '' when no graph was recorded."""
     ran, missed = (CTX.get("reach") or ([], []))[:2]
@@ -649,7 +701,7 @@ async def _baseline():
                    "(file and line), say so, and stop.")
     factor = BROKEN_FACTOR if not stats.get("completed") else STEP_FACTOR
     CTX.update(baseline=stats, max_steps=max(MIN_STEPS, factor * stats["steps"]), untracked=_untracked(),
-               reach=_reach(CTX["base"]))
+               reach=_reach(CTX["base"]), bill=bill(CTX["base"]))
     say(f"  as it is: {brief(stats)}")
     missed = CTX["reach"][1]
     if reached():
@@ -657,7 +709,9 @@ async def _baseline():
     return _ok(f"The agent as it is, medians of {RUNS} runs of {_requests()}: {brief(stats)}; {stats.get('completed')} requests "
                f"finished, {stats['steps']} steps a run." + ("" if CTX["look_only"] else " Edits are allowed now.")
                + (f"\n\nThese inputs never reached: {', '.join(missed)}. A change there is proven by nothing here, and "
-                  "keep refuses it: report it, do not make it." if missed else ""))
+                  "keep refuses it: report it, do not make it." if missed else "")
+               + (f"\n\nWhere the tokens go, a run (every node above {ACCOUNT_FLOOR:.0%} must be in your report, with a "
+                  f"cut or the number that clears it):\n{bill_words(CTX['bill'])}" if CTX["bill"] else ""))
 
 
 @tool("measure", "Run the agent 3 times as the code stands and compare it with the code as last kept. The first "

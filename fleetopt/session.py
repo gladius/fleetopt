@@ -319,6 +319,7 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         "project": str(project), "started": bool(ctx.get("run_cmd")),
         "agent": (ctx.get("entry") or {}).get("name"), "measured": bool(ctx.get("baseline")),
         "baseline": ctx.get("baseline"), "proof": tools.proof() if ctx.get("entry") else None, "reach": tools.reached(),
+        "bill": ctx.get("bill") or [], "unaccounted": tools.unaccounted(account, ctx.get("bill") or []) if account else None,
         "changes": [{"name": n, "outcome": o, "detail": d} for n, (o, d) in ctx["changes"].items()],
         "kept": kept, "whole": whole, "branch": branch if kept else None,
         "team_runs": runs, "team_cost": team_cost, "own_cost": own, "account": account, "run_dir": str(run_dir),
@@ -351,6 +352,11 @@ def summary(facts):
                      + ": see why above")
     if facts.get("reach"):  # a change in a node the requests never ran is proven by nothing
         lines.append(f"  Reached  {facts['reach']}, by the requests it was run on")
+    if facts.get("bill") and facts.get("unaccounted") is not None:  # did the expert account for where the money goes
+        big = [x["node"] for x in facts["bill"] if x["share"] >= tools.ACCOUNT_FLOOR and x["node"] != "(graph)"]
+        missing = facts["unaccounted"]
+        lines.append(f"  Account  {len(big) - len(missing)} of {len(big)} nodes above {tools.ACCOUNT_FLOOR:.0%} of the tokens are "
+                     "in the report" + (f"; not accounted for: {', '.join(missing[:6])}" if missing else ""))
     lines.append(f"  Spent    {money(facts['team_cost'])} by the agent on its API key ({facts['team_runs']} runs) · "
                  f"{money(facts['own_cost'])} by fleetopt on your Claude login")
     if facts["mode"] == "review" and facts["measured"] and facts.get("changes_it", True):
