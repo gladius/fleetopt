@@ -592,12 +592,16 @@ def _tests_touched():
 
 
 def _evals_called_a_model():
-    """Whether the team's eval runs of this run recorded a model call at all."""
+    """Whether the team's eval runs of this run called a real model: one with a price. Observed:
+    a test driving the agent with a fake model records 'llm' runs too, with no model name."""
+    from fleetopt.evidence import pricing
+
     with _conn() as conn:
-        return bool(conn.execute(
-            "SELECT 1 FROM runs r JOIN sessions s ON s.id = r.session_id WHERE s.project = ? AND s.id > ?"
-            "   AND s.label LIKE 'evals-%' AND r.run_type = 'llm' LIMIT 1",
-            (str(CTX["project"]), CTX.get("first_session", 0))).fetchone())
+        used = conn.execute(
+            "SELECT DISTINCT r.model, r.provider FROM runs r JOIN sessions s ON s.id = r.session_id WHERE s.project = ?"
+            "   AND s.id > ? AND s.label LIKE 'evals-%' AND r.run_type = 'llm'",
+            (str(CTX["project"]), CTX.get("first_session", 0))).fetchall()
+    return any(pricing.rate(r["model"] or r["provider"]) for r in used)
 
 
 def _run_evals(command):

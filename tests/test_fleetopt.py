@@ -587,6 +587,25 @@ def test_evals_that_did_not_run_or_called_no_model_are_not_the_proof(tmp_path, m
         tools.CTX.clear()
 
 
+def test_a_fake_model_in_the_teams_evals_is_not_a_model_call_and_costs_nothing(tmp_path):
+    tools.CTX.clear()
+    tools.CTX.update(out=tmp_path, project=tmp_path / "a", first_session=0)
+    with store.connect(tmp_path / "fleetopt.db") as conn:
+        fake = _session(conn, project=str(tmp_path / "a"), label="evals-1", code_state="v1", exit_code=0)
+        conn.execute("INSERT INTO runs (session_id, run_type, provider, input_tokens, output_tokens) VALUES (?, 'llm', 'faketoolmodel', 50, 5)", (fake,))
+        conn.commit()
+        assert not tools._evals_called_a_model()                                  # observed: counted as a model call
+        assert measure.session_stats(conn, fake)["cost_usd"] == 0.0                # and made the whole run "not priced"
+        real = _session(conn, project=str(tmp_path / "a"), label="evals-2", code_state="v1", exit_code=0)
+        conn.execute("INSERT INTO runs (session_id, run_type, model, provider, input_tokens, output_tokens) VALUES (?, 'llm', 'gpt-5-nano', 'openai', 50, 5)", (real,))
+        conn.commit()
+        assert tools._evals_called_a_model()
+        odd = _session(conn, project=str(tmp_path / "a"), label="x", code_state="v1", exit_code=0)
+        conn.execute("INSERT INTO runs (session_id, run_type, model, input_tokens, output_tokens) VALUES (?, 'llm', 'some-new-model', 50, 5)", (odd,))
+        assert measure.session_stats(conn, odd)["cost_usd"] is None                # a named model with no price stays unpriced
+    tools.CTX.clear()
+
+
 def test_one_change_is_dropped_by_name_and_the_rest_stay_saved(tmp_path, monkeypatch):
     project = _repo(tmp_path)
     _fake_runs(monkeypatch)

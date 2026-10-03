@@ -141,6 +141,9 @@ def session_stats(conn, session_id):
             r["cache_read_tokens"],
             r["cache_write_tokens"],
         )
+        if c is None and not r["model"]:
+            c = 0.0  # no model name at all: a fake or a local model, with nothing to bill (observed: a test's
+            #          fake model made a whole run "not priced", and the cap on the team's key went blind)
         if c is None:
             priced = False
         else:
