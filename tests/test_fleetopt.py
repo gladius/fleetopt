@@ -628,6 +628,10 @@ def test_the_bill_is_handed_over_first_and_the_report_must_account_for_it(tmp_pa
                  "team_runs": 3, "own_cost": 0, "project": "p", "run_dir": str(tmp_path)}
         assert "Account  1 of 2 nodes above 5% of the tokens are in the report; not accounted for: tools:model" in \
             "\n".join(session.summary(facts))
+        broken = {**facts, "mode": "apply", "kept": 1, "whole": "tokens in -20%", "branch": "b", "changes": [], "proof": "x",
+                  "baseline": {"completed": 0}}
+        assert "Broken   the agent as it is finished none of its requests: what was kept makes a broken agent cheaper" in \
+            "\n".join(session.summary(broken))                                   # observed: -20% tokens on 0 of 12 finishing
     finally:
         tools.CTX.clear()
 

@@ -350,6 +350,9 @@ def summary(facts):
     elif not facts["measured"]:
         lines.append("  Result   " + ("could not start it" if not facts["started"] else "could not measure it")
                      + ": see why above")
+    if facts["measured"] and (facts.get("baseline") or {}).get("completed") == 0:
+        lines.append("  Broken   the agent as it is finished none of its requests"
+                     + (": what was kept makes a broken agent cheaper, not a working one" if facts.get("kept") else ""))
     if facts.get("reach"):  # a change in a node the requests never ran is proven by nothing
         lines.append(f"  Reached  {facts['reach']}, by the requests it was run on")
     if facts.get("bill") and facts.get("unaccounted") is not None:  # did the expert account for where the money goes
