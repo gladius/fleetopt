@@ -33,6 +33,13 @@ fleetopt review <project> --expert design     # look only: does the design fit t
 | `cost` (default) | Where the agent wastes tokens and money | yes | yes: changes it and proves each change |
 | `design` | Whether the design fits the job: the patterns it is built from by what ran, what is broken, and where a simpler design would do the same | yes | not yet |
 
+An expert is a folder of prose, with no code in it: `GUIDE.md`, whose header says what it is
+asked, which shared tools it uses and what a change of its must earn, and `skills/<name>/SKILL.md`.
+fleetopt loads every such folder in its own `fleetopt/experts/`, in the directories named in
+`FLEETOPT_EXPERTS`, and in `~/.config/fleetopt/experts`: put a folder there and `--expert <its name>`
+runs it. A header can name a tool or a rule fleetopt has; it cannot bring its own, so an expert
+cannot loosen its own proof. `PLAN.md` says where this is going.
+
 The design expert's findings rest on numbers too: branches never taken, a supervisor that
 always dispatches in the same order, a review loop that never changes the draft, counted on
 the recorded runs for the graph and each graph nested in it. They are as wide as the
@@ -59,8 +66,8 @@ fleetopt review "$T"
 ## How it works
 
 One Claude session does the work, the way an expert would; code holds the numbers and the limits.
-Which expert is `--expert` (cost by default): an expert is a guide and skills in
-`fleetopt/experts/<name>/`, working with the same tools and under the same rules as every other.
+Which expert is `--expert` (cost by default): an expert is a folder of prose (see Experts),
+working with the same tools and under the same rules as every other.
 
 1. **Start it.** The agent reads the project and works out how its agent runs here: which
    graph, which env files, which folder. Then it tries it on one input. It is remembered per

@@ -199,9 +199,8 @@
         <ul>
           <li><code>session.py</code>The one Claude session: guards, model, the run</li>
           <li><code>tools.py</code>The 8 tools every expert uses, with the limits and git inside them</li>
-          <li><code>experts/</code>The shared guide: how to start a team's agent and work with the tools</li>
-          <li><code>experts/cost/</code>One folder an expert: its guide and skills. Code adds only what its changes must earn</li>
-          <li><code>experts/design/</code>The second expert: does the design fit the job. It only reviews</li>
+          <li><code>expert.py</code>Loads an expert from a folder; holds the rules a change must meet</li>
+          <li><code>experts/</code>Prose only. The shared guide, and one folder an expert: <code>cost/</code>, <code>design/</code></li>
         </ul>
       </div>
       <div class="part">

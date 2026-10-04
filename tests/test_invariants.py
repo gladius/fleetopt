@@ -13,7 +13,7 @@ import pytest
 
 from fleetopt import cli, config
 from fleetopt.evidence import judge, measure
-from fleetopt import experts, session, tools
+from fleetopt import expert as experts, session, tools
 from fleetopt.probe import store
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]

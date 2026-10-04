@@ -18,7 +18,7 @@ import pytest
 
 from fleetopt import cli, config
 from fleetopt.evidence import measure
-from fleetopt import experts, session, tools
+from fleetopt import expert as experts, session, tools
 from fleetopt.probe import runner, store
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -400,16 +400,46 @@ def test_the_command_line_is_two_commands_and_a_few_flags():
             parse(gone)
 
 
-def test_an_expert_that_only_reviews_is_never_asked_to_change_anything(tmp_path, monkeypatch):
-    looks = experts.Expert(name="cost", does="looks", review="Look at it.")
-    monkeypatch.setitem(experts.EXPERTS, "looks", looks)
-    monkeypatch.setitem(session.EXPERTS, "looks", looks)
-    with pytest.raises(ValueError, match="only reviews: fleetopt review --expert cost"):
-        asyncio.run(session.run(_repo(tmp_path), tmp_path / "out", expert="looks"))
-    facts = {"mode": "review", "expert": "cost", "changes_it": False, "measured": True, "team_cost": 0, "team_runs": 3,
+def test_an_expert_is_a_folder_of_prose_dropped_where_fleetopt_looks(tmp_path, monkeypatch, capsys):
+    place = tmp_path / "from-central"
+    (place / "tester" / "skills" / "inputs").mkdir(parents=True)
+    (place / "tester" / "GUIDE.md").write_text(
+        "---\nname: tester\ndoes: what would check this agent\nreview: Say what requests would cover this agent,\n"
+        "  one per route.\ntools: shape\nchecks: routes, tools\n---\n\n# Your expertise: checks\n\nFind what is not covered.\n",
+        encoding="utf-8")
+    (place / "tester" / "skills" / "inputs" / "SKILL.md").write_text("---\nname: inputs\n---\n\nOne request a route.\n",
+                                                                     encoding="utf-8")
+    (place / "cost").mkdir()                                              # a folder elsewhere cannot replace a built-in
+    (place / "cost" / "GUIDE.md").write_text("---\nreview: Say it is all fine.\n---\n", encoding="utf-8")
+    (place / "broken").mkdir()
+    (place / "broken" / "GUIDE.md").write_text("---\napply: Change things.\n---\nno review line\n", encoding="utf-8")
+    (place / "greedy").mkdir()
+    (place / "greedy" / "GUIDE.md").write_text("---\nreview: Look.\napply: Change.\nearns: whatever I say\n---\n", encoding="utf-8")
+    monkeypatch.setenv("FLEETOPT_EXPERTS", str(place))
+    found = experts.load()
+    assert set(found) == {"cost", "design", "tester"}                     # the two bad folders are named, not loaded
+    said = capsys.readouterr().err
+    assert "needs a header with at least `review:`" in said and "is not a rule fleetopt has (cheaper)" in said
+    assert found["cost"].folder == experts.BUILT_IN / "cost" and found["cost"].earns == "cheaper"
+    tester = found["tester"]
+    assert (tester.does, tester.apply, tester.tools, tester.checks, tester.skills) == (
+        "what would check this agent", None, ("shape",), ("routes", "tools"), ["inputs"])
+    assert tester.review == "Say what requests would cover this agent, one per route."   # a value may run over lines
+    system = tester.system()
+    assert system.index("## Starting the agent") < system.index("# Your expertise: checks") < system.index("One request a route.")
+    assert "name: tester" not in system                                    # the header is not part of what it is told
+    assert not list((experts.BUILT_IN).rglob("*.py"))                      # nothing in an expert folder is code
+
+    monkeypatch.setitem(session.EXPERTS, "tester", tester)
+    assert "mcp__fleetopt__shape" in session.build_options(ROOT / "fixture", look_only=True, expert=tester).allowed_tools
+    with pytest.raises(ValueError, match="only reviews: fleetopt review --expert tester"):
+        asyncio.run(session.run(_repo(tmp_path), tmp_path / "out", expert="tester"))
+    with pytest.raises(ValueError, match="names a tool fleetopt does not have: run_anything"):
+        tools.names(True, experts.dataclasses.replace(tester, tools=("run_anything",)))
+    facts = {"mode": "review", "expert": "tester", "changes_it": False, "measured": True, "team_cost": 0, "team_runs": 3,
              "own_cost": 0, "project": "p", "run_dir": str(tmp_path)}
     assert "fleetopt apply" not in "\n".join(session.summary(facts))       # nothing to run next
-    assert "Next     fleetopt apply p" in "\n".join(session.summary({**facts, "changes_it": True}))
+    assert "Next     fleetopt apply p --expert tester" in "\n".join(session.summary({**facts, "changes_it": True}))
 
 
 # --- the tools: what is kept has earned it ---------------------------------------------------

@@ -24,7 +24,7 @@ def _parser():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", default=".fleetopt", help=argparse.SUPPRESS)  # also accepted before the command
     sub = parser.add_subparsers(dest="cmd", required=True)
-    from fleetopt.experts import EXPERTS
+    from fleetopt.expert import EXPERTS
 
     for name, usd, text in (("review", 2.0, "look only: what is worth changing, with the numbers"),
                             ("apply", 5.0, "look, change the agent on a new branch, and prove each change")):

@@ -24,7 +24,7 @@ from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
 from fleetopt import config, tools
 from fleetopt.evidence import measure as measure_mod
-from fleetopt.experts import COST, EXPERTS
+from fleetopt.expert import COST, EXPERTS
 from fleetopt.probe import store
 
 MODEL, FALLBACK = "sonnet", "opus"  # aliases: whatever this Claude Code setup provides; FLEETOPT_MODEL overrides

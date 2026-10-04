@@ -44,7 +44,7 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
 from fleetopt.evidence import shape as shape_mod
-from fleetopt.experts import COST
+from fleetopt.expert import COST
 from fleetopt.probe import driver, runner, store
 
 RUNS = 3           # runs of the agent per measurement
@@ -1010,11 +1010,15 @@ async def shape(args):
 
 
 LOOK = [ask, start, measure, query]
+OPTIONAL = {"shape": shape}  # tools an expert's header may ask for, beside the ones every expert has
 CHANGE = LOOK + [run_evals, save_change, keep, undo]
 
 
 def _tools(look_only, expert):
-    return (LOOK if look_only else CHANGE) + [globals()[name] for name in expert.tools]
+    unknown = [name for name in expert.tools if name not in OPTIONAL]
+    if unknown:  # an expert's header names tools; it cannot bring its own
+        raise ValueError(f"the {expert.name} expert names a tool fleetopt does not have: {', '.join(unknown)}")
+    return (LOOK if look_only else CHANGE) + [OPTIONAL[name] for name in expert.tools]
 
 
 def server(look_only=False, expert=COST):
