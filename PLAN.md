@@ -27,7 +27,7 @@ tracks what it checked, and reports. Experts are written centrally, as prose.
 | # | Step | Done when | State |
 |---|---|---|---|
 | 1 | Experts as folders of prose, loaded from a named place | Committed, tested | done |
-| 2 | Tracking: a matrix of node x check, opened by code, closed by the expert with its number | A real cost run prints the `Checks` line | in progress |
+| 2 | Tracking: a matrix of node x check, opened by code, closed by the expert with its number | A real cost run prints the `Checks` line | done: 12 of 12 closed on the workshop agent |
 | 3 | Pre-run the three demo agents and keep the outputs | Outputs saved | before the demo |
 | 4 | An expert calls another through a tool; the tester is the first called expert | A cost run on an agent with no checks proceeds on generated requests, labelled so | after |
 | 5 | Ask later in a run ("this cut changes one answer: keep it?") | Used once with a person at the terminal | after |
