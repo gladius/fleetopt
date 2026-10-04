@@ -570,6 +570,37 @@ def bill_words(rows, limit=12):
 
 
 ACCOUNT_FLOOR = 0.05  # a node with this share of the tokens must be in the report
+VERDICTS = ("fine", "cut", "n/a")
+
+
+def _open_checks():
+    """The expert's list: each node that carries the money against each check its header names,
+    every one open. Made by code from the recordings, so the expert cannot shorten it."""
+    nodes = [x["node"] for x in CTX.get("bill") or [] if x["share"] >= ACCOUNT_FLOOR and x["node"] != "(graph)"]
+    CTX["checks"] = {(node, check): None for node in nodes for check in CTX["expert"].checks}
+    with _conn() as conn:
+        conn.executemany("INSERT INTO checks (project, run, expert, node, name) VALUES (?, ?, ?, ?, ?)",
+                         [(str(CTX["project"]), CTX["run_dir"].name, CTX["expert"].name, n, c) for n, c in CTX["checks"]])
+
+
+def open_checks():
+    return [cell for cell, closed in (CTX.get("checks") or {}).items() if closed is None]
+
+
+def _open_words():
+    """What is still open, node by node."""
+    by_node = {}
+    for node, check in open_checks():
+        by_node.setdefault(node, []).append(check)
+    return "; ".join(f"{node}: {', '.join(checks)}" for node, checks in by_node.items()) or "none"
+
+
+def check_facts():
+    """The list as it stands, for the summary and the record."""
+    cells = CTX.get("checks") or {}
+    return {"total": len(cells), "closed": sum(v is not None for v in cells.values()),
+            "open": [f"{n} x {c}" for n, c in open_checks()],
+            "cells": [{"node": n, "check": c, "verdict": v and v[0], "evidence": v and v[1]} for (n, c), v in cells.items()]}
 
 
 def unaccounted(report, rows, floor=ACCOUNT_FLOOR):
@@ -702,6 +733,7 @@ async def _baseline():
     factor = BROKEN_FACTOR if not stats.get("completed") else STEP_FACTOR
     CTX.update(baseline=stats, max_steps=max(MIN_STEPS, factor * stats["steps"]), untracked=_untracked(),
                reach=_reach(CTX["base"]), bill=bill(CTX["base"]))
+    _open_checks()
     say(f"  as it is: {brief(stats)}")
     missed = CTX["reach"][1]
     if reached():
@@ -711,7 +743,9 @@ async def _baseline():
                + (f"\n\nThese inputs never reached: {', '.join(missed)}. A change there is proven by nothing here, and "
                   "keep refuses it: report it, do not make it." if missed else "")
                + (f"\n\nWhere the tokens go, a run (every node above {ACCOUNT_FLOOR:.0%} must be in your report, with a "
-                  f"cut or the number that clears it):\n{bill_words(CTX['bill'])}" if CTX["bill"] else ""))
+                  f"cut or the number that clears it):\n{bill_words(CTX['bill'])}" if CTX["bill"] else "")
+               + (f"\n\nYour checks, all open ({len(CTX['checks'])}). Close each with `checked` as you settle it: "
+                  f"{_open_words()}" if CTX["checks"] else ""))
 
 
 @tool("measure", "Run the agent 3 times as the code stands and compare it with the code as last kept. The first "
@@ -977,7 +1011,8 @@ def finish():
       "name, run_type, node, path, step, model, provider, duration_ms, input_tokens, output_tokens, cache_read_tokens, "
       "cache_write_tokens, prompt_chars, prompt, completion, inputs, outputs, error), sessions(id, label, "
       "code_state, exit_code), graphs(session_id, name, nodes, edges, mermaid, driven: 1 for the graph that was "
-      "run). `path` is a node's place in nested graphs ('team:model'). Prefer aggregates.", {"sql": str})
+      "run), checks(run, expert, node, name, verdict, evidence). `path` is a node's place in nested graphs "
+      "('team:model'). Prefer aggregates.", {"sql": str})
 async def query(args):
     sql = args["sql"].strip()
     if not sql.lower().startswith(("select", "with")):
@@ -995,6 +1030,47 @@ async def query(args):
     return _ok("\n".join(out))
 
 
+@tool("checked", "Close cells of your list of checks: a node, one of your checks, the verdict (`fine`, `cut` or "
+      "`n/a`) and the evidence: the number that settles it (for `cut` also the change, for `n/a` why the check "
+      "cannot apply to that node). Several at once. Answers with what is still open.",
+      {"type": "object", "required": ["items"], "properties": {"items": {"type": "array", "items": {
+          "type": "object", "required": ["node", "check", "verdict", "evidence"], "properties": {
+              "node": {"type": "string"}, "check": {"type": "string"},
+              "verdict": {"type": "string", "enum": list(VERDICTS)}, "evidence": {"type": "string"}}}}}})
+async def checked(args):
+    cells = CTX.get("checks")
+    if not cells:
+        return _ok("Measure the agent as it is first: the list is made then." if CTX["baseline"] is None
+                   else "There is nothing on your list: no node carries enough of the tokens, or your expertise names no checks.")
+    items = args.get("items")
+    if isinstance(items, str):  # observed elsewhere: a list sent as JSON text
+        try:
+            items = json.loads(items)
+        except ValueError:
+            items = None
+    closed, refused = [], []
+    for item in items if isinstance(items, list) else []:
+        cell = (str(item.get("node", "")).strip(), str(item.get("check", "")).strip())
+        verdict, evidence = str(item.get("verdict", "")).strip(), " ".join(str(item.get("evidence", "")).split())[:300]
+        if cell not in cells:
+            refused.append(f"{cell[0]} x {cell[1]}: not on your list")
+        elif verdict not in VERDICTS:
+            refused.append(f"{cell[0]} x {cell[1]}: the verdict is fine, cut or n/a")
+        elif not evidence or (verdict != "n/a" and not re.search(r"\d", evidence)):
+            refused.append(f"{cell[0]} x {cell[1]}: give the number that settles it" if verdict != "n/a" else
+                           f"{cell[0]} x {cell[1]}: say why it cannot apply")
+        else:
+            cells[cell] = (verdict, evidence)
+            closed.append((verdict, evidence, datetime.datetime.now().isoformat(timespec="seconds"),
+                           CTX["run_dir"].name, *cell))
+    if closed:
+        with _conn() as conn:
+            conn.executemany("UPDATE checks SET verdict = ?, evidence = ?, at = ? WHERE run = ? AND node = ? AND name = ?", closed)
+    left = open_checks()
+    return _ok(f"Closed {len(closed)}." + (f" Not closed: {'; '.join(refused[:8])}." if refused else "")
+               + (f" Still open ({len(left)}): {_open_words()}" if left else " Nothing is open."))
+
+
 @tool("shape", "What the graph declared against what it did, over the runs of the first measurement, for the graph "
       "that ran and each graph nested in it: branches never taken, a branch point that always sends the work the same "
       "way (and whether it calls a model to decide), loops that always run the same number of rounds, a model whose "
@@ -1009,7 +1085,7 @@ async def shape(args):
     return _ok(shape_mod.render(result))
 
 
-LOOK = [ask, start, measure, query]
+LOOK = [ask, start, measure, query, checked]
 OPTIONAL = {"shape": shape}  # tools an expert's header may ask for, beside the ones every expert has
 CHANGE = LOOK + [run_evals, save_change, keep, undo]
 

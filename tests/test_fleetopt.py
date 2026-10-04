@@ -666,6 +666,49 @@ def test_the_bill_is_handed_over_first_and_the_report_must_account_for_it(tmp_pa
         tools.CTX.clear()
 
 
+def test_the_experts_list_of_checks_is_made_by_code_and_closed_with_numbers(tmp_path):
+    project = _repo(tmp_path)
+    tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", entry={**ENTRY, "project": str(project)},
+                run_dir=tmp_path / "out" / "runs" / "r1", look_only=True)
+    with store.connect(tmp_path / "out" / "fleetopt.db") as conn:            # the agent as it is, measured before
+        for _ in range(tools.RUNS):
+            sid = _session(conn, project=str(project), label=tools.CTX["base"], code_state=tools.CTX["start_state"], exit_code=0)
+            conn.execute("INSERT INTO runs (session_id, run_type, name, outputs, duration_ms) VALUES (?, 'chain', 'g', 'answer', 5)", (sid,))
+            for path, tin in (("model", 900), ("tools:model", 1500), ("route", 40)):
+                conn.execute("INSERT INTO runs (session_id, run_type, node, path, model, provider, input_tokens, output_tokens,"
+                             " parent_run_id) VALUES (?, 'llm', ?, ?, 'gpt-5-nano', 'openai', ?, 50, 'r')",
+                             (sid, path.split(":")[-1], path, tin))
+    try:
+        text = _call("checked", items=[])
+        assert "Measure the agent as it is first" in text
+        text = _call("measure")
+        checks = tools.CTX["expert"].checks
+        assert len(checks) == 6 and len(tools.CTX["checks"]) == 12             # two nodes carry the money, six checks each
+        assert "Your checks, all open (12)" in text and "tools:model: caching, handoffs" in text and "route:" not in text
+        text = _call("checked", items=[
+            {"node": "tools:model", "check": "caching", "verdict": "fine", "evidence": "largest prefix 725 tokens, under 1,024"},
+            {"node": "tools:model", "check": "handoffs", "verdict": "cut", "evidence": "14 of 68 calls only reword: return the raw result"},
+            {"node": "model", "check": "tool-surface", "verdict": "n/a", "evidence": "binds no tools"},
+            {"node": "model", "check": "caching", "verdict": "fine", "evidence": "looks fine"},          # no number
+            {"node": "route", "check": "caching", "verdict": "fine", "evidence": "40 tokens"},           # not on the list
+            {"node": "model", "check": "model-tier", "verdict": "great", "evidence": "1 model"}])
+        assert text.startswith("Closed 3.") and "model x caching: give the number that settles it" in text
+        assert "route x caching: not on your list" in text and "the verdict is fine, cut or n/a" in text
+        assert "Still open (9)" in text
+        facts = tools.check_facts()
+        assert (facts["total"], facts["closed"]) == (12, 3) and "model x caching" in facts["open"]
+        line = next(l for l in session.summary({"mode": "review", "measured": True, "checks": facts, "team_cost": 0, "team_runs": 3,
+                                                "own_cost": 0, "project": "p", "run_dir": str(tmp_path)}) if "Checks" in l)
+        assert line.startswith("  Checks   3 of 12 closed (node x check); open: tools:model x model-tier,")   # the largest node first
+        assert line.endswith(" ...")                                               # six shown, the rest in run.json
+        with store.connect(tmp_path / "out" / "fleetopt.db") as conn:        # kept, for us and for its own queries
+            rows = conn.execute("SELECT node, name, verdict FROM checks WHERE run = 'r1' AND verdict IS NOT NULL ORDER BY node, name").fetchall()
+        assert [tuple(r) for r in rows] == [("model", "tool-surface", "n/a"), ("tools:model", "caching", "fine"),
+                                            ("tools:model", "handoffs", "cut")]
+    finally:
+        tools.CTX.clear()
+
+
 def test_one_change_is_dropped_by_name_and_the_rest_stay_saved(tmp_path, monkeypatch):
     project = _repo(tmp_path)
     _fake_runs(monkeypatch)

@@ -50,6 +50,16 @@ all of it plainly and stop:
    model's answer varying: run the evals once more before you give up on the change.
 7. **Report.**
 
+## Your checks
+
+After the first `measure` you are given a list: for every node that carries more than a
+twentieth of the tokens, each check your expertise makes. Every one starts open, and code
+made the list from what was recorded: you cannot shorten it. Close each with `checked` as
+you settle it, several in one call: `fine` with the number that clears it, `cut` with the
+number and the change, `n/a` with why that check cannot apply to that node. Each answer
+tells you what is still open, and what is left open is printed beside your report. Close a
+check when you have looked, not before.
+
 ## Starting the agent
 
 fleetopt runs the agent with its own driver, in the project's own interpreter, under a

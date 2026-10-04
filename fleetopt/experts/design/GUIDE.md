@@ -7,6 +7,7 @@ review: Review the design of the LangGraph agent in this project: start it if ne
   nothing and does not run the team's evals; say what the project has to check the agent against (an eval
   suite and how it is run, a golden dataset, examples of what it is sent) or that it has none of these.
 tools: shape
+checks: pattern, warranted, failures
 ---
 
 # Your expertise: whether the design fits the job
@@ -57,6 +58,13 @@ pattern that fits is worth a line too: "supervisor justified: 4 distinct worker 
    or say in one line why the structure earns its keep. Defects are no reason to skip
    this: a design can be both broken and over-built, and fixing defects inside a design
    that should not exist is wasted work.
+
+## Your checks
+
+For each node that carries the money you close three: `pattern` (which pattern it is part
+of, by what ran, and the number that shows it), `warranted` (whether that pattern earns its
+keep here: `fine`, or `cut` with the simpler design), and `failures` (what raised or was
+swallowed there, or the count that says nothing did).
 
 ## Two sizes of change
 

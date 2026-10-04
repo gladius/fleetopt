@@ -63,6 +63,17 @@ CREATE TABLE IF NOT EXISTS graphs (
     driven      INTEGER,
     sources     TEXT
 );
+
+CREATE TABLE IF NOT EXISTS checks (
+    project   TEXT,
+    run       TEXT,
+    expert    TEXT,
+    node      TEXT,
+    name      TEXT,
+    verdict   TEXT,
+    evidence  TEXT,
+    at        TEXT
+);
 """
 # Columns added since the first release, last in their table: a db made before them gets them.
 ADDED = (("runs", "path", "TEXT"), ("graphs", "driven", "INTEGER"), ("graphs", "sources", "TEXT"))

@@ -9,6 +9,7 @@ apply: Make the LangGraph agent in this project cost less without changing what 
   needed, measure it, find the waste, change it, prove each change, look again, and report.
 earns: cheaper
 structure: kept
+checks: caching, handoffs, model-tier, prompt-growth, redundant-work, tool-surface
 ---
 
 # Your expertise: token and cost waste

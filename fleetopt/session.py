@@ -320,6 +320,7 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         "agent": (ctx.get("entry") or {}).get("name"), "measured": bool(ctx.get("baseline")),
         "baseline": ctx.get("baseline"), "proof": tools.proof() if ctx.get("entry") else None, "reach": tools.reached(),
         "bill": ctx.get("bill") or [], "unaccounted": tools.unaccounted(account, ctx.get("bill") or []) if account else None,
+        "checks": tools.check_facts(),
         "changes": [{"name": n, "outcome": o, "detail": d} for n, (o, d) in ctx["changes"].items()],
         "kept": kept, "whole": whole, "branch": branch if kept else None,
         "team_runs": runs, "team_cost": team_cost, "own_cost": own, "account": account, "run_dir": str(run_dir),
@@ -362,6 +363,11 @@ def summary(facts):
                      "in the report" + (f"; not accounted for: {', '.join(missing[:6])}" if missing else ""))
     lines.append(f"  Spent    {money(facts['team_cost'])} by the agent on its API key ({facts['team_runs']} runs) · "
                  f"{money(facts['own_cost'])} by fleetopt on your Claude login")
+    checks = facts.get("checks") or {}
+    if checks.get("total"):  # the expert's own list, made by code from the recordings, closed by it with its numbers
+        lines.append(f"  Checks   {checks['closed']} of {checks['total']} closed (node x check)"
+                     + (f"; open: {', '.join(checks['open'][:6])}" + (" ..." if len(checks["open"]) > 6 else "")
+                        if checks["open"] else ""))
     if facts["mode"] == "review" and facts["measured"] and facts.get("changes_it", True):
         lines.append(f"  Next     fleetopt apply {facts['project']}"
                      + (f" --expert {facts['expert']}" if facts.get("expert", "cost") != "cost" else ""))
