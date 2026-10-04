@@ -333,6 +333,9 @@ def test_the_design_expert_only_looks_and_has_the_numbers_on_structure(tmp_path,
     assert set(o.tools) == {"Read", "Grep", "Glob"} and "mcp__fleetopt__shape" in o.allowed_tools
     assert "mcp__fleetopt__shape" not in session.build_options(ROOT / "fixture", look_only=True).allowed_tools
     assert design.apply is None                                         # it changes nothing, for now
+    assert (design.model, experts.EXPERTS["cost"].model) == ("opus", None)   # each expert on the model its header names
+    assert (o.model, o.fallback_model) == ("opus", "sonnet")
+    assert session.build_options(ROOT / "fixture", look_only=True, expert=design, model="haiku").model == "haiku"   # the person's choice wins
     with pytest.raises(ValueError, match="the design expert only reviews: fleetopt review --expert design"):
         asyncio.run(session.run(_repo(tmp_path), tmp_path / "out", expert="design"))
     project = tmp_path / "agent"

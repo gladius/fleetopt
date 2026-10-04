@@ -28,7 +28,10 @@ from fleetopt import expert as experts
 from fleetopt.expert import COST, EXPERTS
 from fleetopt.probe import store
 
-MODEL, FALLBACK = "sonnet", "opus"  # aliases: whatever this Claude Code setup provides; FLEETOPT_MODEL overrides
+# Aliases: whatever this Claude Code setup provides. An expert's header may name its own (`model:`), since
+# what an expertise needs differs (observed: design reviews found more on opus, at about twice the cost);
+# FLEETOPT_MODEL, the person's choice for this run, overrides both.
+MODEL, FALLBACK = "sonnet", "opus"
 
 # Running the agent by hand spends the team's tokens twice and records nothing; eval
 # runners count too, since they run the agent on every case and bill its graders. Python
@@ -117,7 +120,8 @@ def build_options(project, model=None, max_usd=None, start_branch=None, look_onl
             project, start_branch or _git(project, "rev-parse", "--abbrev-ref", "HEAD"))]),
     ]}
     return ClaudeAgentOptions(
-        cwd=str(project), model=model or MODEL, fallback_model=FALLBACK if (model or MODEL) != FALLBACK else MODEL,
+        cwd=str(project), model=model or expert.model or MODEL,
+        fallback_model=FALLBACK if (model or expert.model or MODEL) != FALLBACK else MODEL,
         system_prompt=expert.system(),
         mcp_servers={"fleetopt": tools.server(look_only, expert)},
         # Built-ins by allowlist: no web, no scheduler, no subagents. Nothing is asked;
@@ -141,7 +145,7 @@ async def consult(expert, task, project, *, asked_by, usd=1.0, minutes=15, model
 
     from claude_agent_sdk import ClaudeSDKError, ResultMessage, query
 
-    chosen = model or os.environ.get("FLEETOPT_MODEL") or MODEL
+    chosen = model or os.environ.get("FLEETOPT_MODEL") or expert.model or MODEL
     options = ClaudeAgentOptions(
         cwd=str(project), model=chosen, fallback_model=FALLBACK if chosen != FALLBACK else MODEL,
         system_prompt=expert.system(), mcp_servers={"fleetopt": tools.server(True, expert, called=True)},

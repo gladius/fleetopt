@@ -7,6 +7,7 @@ review: Review the design of the LangGraph agent in this project: start it if ne
   nothing and does not run the team's evals; say what the project has to check the agent against (an eval
   suite and how it is run, a golden dataset, examples of what it is sent) or that it has none of these.
 tools: shape
+model: opus
 ---
 
 # Your expertise: whether the design fits the job

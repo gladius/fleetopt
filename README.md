@@ -153,9 +153,11 @@ Enforced, not asked; each is a test in `tests/test_invariants.py`.
 | `--max-usd N` | Cap on fleetopt's own spend |
 | `--out DIR` | Where records go (default `./.fleetopt`) |
 
-Models: the agent runs on `sonnet` (falling back to `opus`) and the reader on `haiku` (falling
-back to `sonnet`): whatever those names give in your Claude setup, login, gateway, Bedrock or
-Vertex. The model used is printed at the start. `FLEETOPT_MODEL` and `FLEETOPT_JUDGE_MODEL` override.
+Models: a session runs on the model its expert's header names (`model: opus` for design),
+else on `sonnet`, falling back to `opus`; the reader runs on `haiku`, falling back to `sonnet`.
+These are names, not versions: whatever they give in your Claude setup, login, gateway, Bedrock
+or Vertex. The model used is printed at the start. `FLEETOPT_MODEL` overrides the expert's choice
+for a run, and `FLEETOPT_JUDGE_MODEL` the reader's.
 
 Each run leaves `.fleetopt/runs/<time>-<project>/`: `report.md`, `run.json`, `log.txt` (the
 whole session, live), `evals-N.log` (each eval run's output), and `patch.diff` when something

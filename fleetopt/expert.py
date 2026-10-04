@@ -95,6 +95,7 @@ class Expert:
     keeps_shape: bool = True  # a change to the graph's nodes or edges is refused
     tools: tuple = ()         # shared tools it uses beside the ones every expert has
     calls: tuple = ()         # experts it may hand a task to
+    model: str | None = None  # the model its session runs on: an alias (opus, sonnet, haiku); None: fleetopt's default
     rows: str = "spenders"    # what its list of checks is made over (ROWS)
     checks: tuple = ()        # the checks: each is closed, on every row, with what settles it
     checks_text: str = ""     # CHECKS.md as written: what each check means and what settles it
@@ -150,7 +151,8 @@ def read(folder):
     return Expert(folder=folder, name=meta.get("name") or folder.name, does=meta.get("does", ""), review=meta["review"],
                   apply=meta.get("apply") or None, earns=meta.get("earns") or None,
                   keeps_shape=meta.get("structure", "kept") != "free", tools=_names(meta.get("tools")),
-                  calls=_names(meta.get("calls")), rows=rows, checks=checks, checks_text=text)
+                  calls=_names(meta.get("calls")), model=meta.get("model") or None, rows=rows, checks=checks,
+                  checks_text=text)
 
 
 def places():
