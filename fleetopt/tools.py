@@ -257,6 +257,7 @@ def _entry(plan):
             "cwd": cwd, "env_file": env_file, "env": env, "config": plan.get("config") or {},
             "context": plan.get("context") or {}, "store": plan.get("store"), "input_template": template,
             "inputs": [t for t, _ in cases], "inputs_from": plan.get("inputs_from"),
+            "written": _written([t for t, _ in cases]),
             "expected": [e for _, e in cases] if any(e for _, e in cases) else None,
             "expected_from": golden if any(e for _, e in cases) else None}
 
@@ -280,9 +281,25 @@ def _copied(source, answers):
                          f"(e.g. {missing[0][:60]!r})")
 
 
+def _written(inputs):
+    """How many of the inputs are not in the project's files: written for this run, by this
+    expert or one it called. The opening of each is looked for, as text."""
+    def missing(item):
+        if isinstance(item, dict):
+            item = max((v for v in item.values() if isinstance(v, str)), key=len, default="")
+        needle = next((line.strip() for line in str(item).splitlines() if line.strip()), "")[:80]
+        if len(needle) < 8:
+            return False  # too short to tell
+        return subprocess.run(["git", "-C", str(CTX["project"]), "grep", "--untracked", "-F", "-q", "--", needle],
+                              capture_output=True).returncode != 0
+    return sum(missing(item) for item in inputs)
+
+
 def source(entry):
-    """Where the inputs came from, in words."""
-    return f"from {entry['inputs_from']}" if entry.get("inputs_from") else "written by fleetopt"
+    """Where the inputs came from, in words: what the entry says, and what the project's files bear out."""
+    told = f"from {entry['inputs_from']}" if entry.get("inputs_from") else "written by fleetopt"
+    n, written = len(entry.get("inputs") or []), entry.get("written") or 0
+    return told + (f" ({written} of {n} written for this run, not found in the project)" if written and entry.get("inputs_from") else "")
 
 
 def started(entry):
@@ -405,7 +422,8 @@ def begin(project, out, *, entry_file, entry=None, look_only=False, team_usd=TEA
                run_dir=pathlib.Path(run_dir or out), look_only=look_only, evals_before=None, evals_after={}, n_evals=0,
                max_team_usd=team_usd, max_minutes=minutes, deadline=time.time() + 60 * minutes,
                first_session=first_session, said_at=time.time(), tries=0, run_cmd=None, job="answer the user's request",
-               baseline=None, saved=[], measured=None, results={}, changes={}, n=0, expert=expert, ask=ask, asked=0)
+               baseline=None, saved=[], measured=None, results={}, changes={}, n=0, expert=expert, ask=ask, asked=0,
+               calls=0, called_usd=0.0)
     if _git("status", "--porcelain", "--untracked-files=no"):  # undo and the final clean-up reset to the last commit
         raise RuntimeError("the project has uncommitted changes. Commit or stash them first: fleetopt works from your "
                            "last commit, and would lose them when it undoes a change")
@@ -573,11 +591,24 @@ ACCOUNT_FLOOR = 0.05  # a node with this share of the tokens must be in the repo
 VERDICTS = ("fine", "cut", "n/a")
 
 
+def _rows(kind):
+    """What a list of checks is made over, from what was recorded (expert.ROWS)."""
+    if kind == "nodes":  # every node of the graph, run or not
+        ran, missed, _ = CTX.get("reach") or ([], [], {})
+        return [*ran, *missed]
+    if kind == "branches":  # every branch a branch point declares
+        ids = _ids(CTX["base"])
+        with _conn() as conn:
+            _, edges = shape_mod.declared(conn, ids) if ids else ([], [])
+        return [f"{e['source']} -> {e['target']}" for e in edges if e.get("conditional") and not e["target"].endswith("__end__")]
+    return [x["node"] for x in CTX.get("bill") or [] if x["share"] >= ACCOUNT_FLOOR and x["node"] != "(graph)"]
+
+
 def _open_checks():
-    """The expert's list: each node that carries the money against each check its header names,
-    every one open. Made by code from the recordings, so the expert cannot shorten it."""
-    nodes = [x["node"] for x in CTX.get("bill") or [] if x["share"] >= ACCOUNT_FLOOR and x["node"] != "(graph)"]
-    CTX["checks"] = {(node, check): None for node in nodes for check in CTX["expert"].checks}
+    """The expert's list: each row its CHECKS.md asks for against each check it names, every one
+    open. Made by code from the recordings, so the expert cannot shorten it."""
+    expert = CTX["expert"]
+    CTX["checks"] = {(row, check): None for row in _rows(expert.rows) for check in expert.checks}
     with _conn() as conn:
         conn.executemany("INSERT INTO checks (project, run, expert, node, name) VALUES (?, ?, ?, ?, ?)",
                          [(str(CTX["project"]), CTX["run_dir"].name, CTX["expert"].name, n, c) for n, c in CTX["checks"]])
@@ -1030,6 +1061,49 @@ async def query(args):
     return _ok("\n".join(out))
 
 
+CALLS = 2          # tasks handed to other experts, a run
+CALL_USD = 1.0     # what one such task may spend on the Claude login
+CALL_MINUTES = 15
+
+
+@tool("call", "Hand a task to another expert and get its answer back before you go on. It works in its own session, "
+      "with only its own guide and skills, reads the project and changes nothing. `expert`: one your guide says you "
+      "may call. `task`: what you need from it, in full: it knows nothing of what you have done or found. At most 2 "
+      "calls a run.", {"expert": str, "task": str})
+async def call(args):
+    from fleetopt import expert as experts, session
+
+    mine, name, task = CTX["expert"], (args.get("expert") or "").strip(), (args.get("task") or "").strip()
+    if name not in mine.calls:
+        return _ok(f"Refused: the {mine.name} expert may call: {', '.join(mine.calls) or 'no one'}.")
+    if not task:
+        return _ok("Refused: say what you need from it.")
+    if CTX["calls"] >= CALLS:
+        return _ok(f"Refused: {CALLS} calls, the most a run makes.")
+    stop = over()
+    if stop:
+        return _ok(f"Refused: {stop}.")
+    try:
+        other = experts.get(name)
+    except ValueError as exc:
+        return _ok(f"Refused: {exc}.")
+    CTX["calls"] += 1
+    say(f"  calling the {name} expert")
+    answer, cost, failed = await session.consult(other, task, CTX["project"], asked_by=mine.name, usd=CALL_USD,
+                                                 minutes=CALL_MINUTES)
+    CTX["called_usd"] = CTX.get("called_usd", 0.0) + cost
+    kept = CTX["run_dir"] / f"call-{CTX['calls']}-{name}.md"
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    kept.write_text(f"Task, from the {mine.name} expert:\n{task}\n\nAnswer, from {name}@{other.version}:\n{answer}\n", encoding="utf-8")
+    _record("called", expert=name, version=other.version, cost=cost, failed=failed, kept=str(kept))
+    CTX["said_at"] = time.time()
+    if failed:
+        say(f"    the {name} expert did not answer: {failed[:120]}")
+        return _ok(f"The {name} expert did not answer: {failed}. Go on without it, or say so in your report.")
+    say(f"    the {name} expert answered")
+    return _ok(f"The {name} expert's answer (kept in {kept}):\n\n{answer}")
+
+
 @tool("checked", "Close cells of your list of checks: a node, one of your checks, the verdict (`fine`, `cut` or "
       "`n/a`) and the evidence: the number that settles it (for `cut` also the change, for `n/a` why the check "
       "cannot apply to that node). Several at once. Answers with what is still open.",
@@ -1090,16 +1164,19 @@ OPTIONAL = {"shape": shape}  # tools an expert's header may ask for, beside the 
 CHANGE = LOOK + [run_evals, save_change, keep, undo]
 
 
-def _tools(look_only, expert):
+def _tools(look_only, expert, called=False):
     unknown = [name for name in expert.tools if name not in OPTIONAL]
     if unknown:  # an expert's header names tools; it cannot bring its own
         raise ValueError(f"the {expert.name} expert names a tool fleetopt does not have: {', '.join(unknown)}")
-    return (LOOK if look_only else CHANGE) + [OPTIONAL[name] for name in expert.tools]
+    extra = [OPTIONAL[name] for name in expert.tools]
+    if called:  # asked by another expert: it reads what was recorded, and starts, measures, asks and calls nothing
+        return [query] + extra
+    return (LOOK if look_only else CHANGE) + extra + ([call] if expert.calls else [])
 
 
-def server(look_only=False, expert=COST):
-    return create_sdk_mcp_server(name="fleetopt", tools=_tools(look_only, expert))
+def server(look_only=False, expert=COST, called=False):
+    return create_sdk_mcp_server(name="fleetopt", tools=_tools(look_only, expert, called))
 
 
-def names(look_only=False, expert=COST):
-    return [f"mcp__fleetopt__{t.name}" for t in _tools(look_only, expert)]
+def names(look_only=False, expert=COST, called=False):
+    return [f"mcp__fleetopt__{t.name}" for t in _tools(look_only, expert, called)]

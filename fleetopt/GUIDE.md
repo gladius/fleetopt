@@ -26,10 +26,10 @@ all of it plainly and stop:
      requests, records of real ones in a data or metrics file, an example in the README,
      a script or notebook. The answers after are compared with the original's.
 
-   Stop only when the project has none of these. Then name what you looked at and why
-   each fell short (the file, and what it held), and say: "Nothing to check the agent
-   against: add evals, a golden dataset or an example of what it is sent, then run this
-   again." Never invent an expected answer.
+   Stop only when the project has none of these and your expertise names no one to call
+   for them. Then name what you looked at and why each fell short (the file, and what it
+   held), and say: "Nothing to check the agent against: add evals, a golden dataset or an
+   example of what it is sent, then run this again." Never invent an expected answer.
 3. Model calls fleetopt can see: the first measurement shows them. If it ran and none
    were recorded, it calls its model without LangChain: find where, and say so.
 
@@ -59,6 +59,14 @@ you settle it, several in one call: `fine` with the number that clears it, `cut`
 number and the change, `n/a` with why that check cannot apply to that node. Each answer
 tells you what is still open, and what is left open is printed beside your report. Close a
 check when you have looked, not before.
+
+## Calling another expert
+
+When your expertise says you may, `call` hands a task to another expert and gives you its
+answer before you go on. It works in its own session, knows nothing of what you have done,
+reads the project and changes nothing: so say in the task everything it needs, and what
+you want back. Two calls a run at most; each spends time and money, so call when you
+lack something that expert makes, not to have your own work checked.
 
 ## Starting the agent
 

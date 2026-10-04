@@ -1,7 +1,8 @@
 """An expert, loaded from a folder of prose, fetched from the central catalogue when needed.
 
-An expert is a folder: GUIDE.md, whose header says what it is asked to do and what its
-changes must earn, and skills/<name>/SKILL.md. Nothing in the folder is code, so it can be
+An expert is a folder: GUIDE.md, whose header says what it is asked to do, what its changes
+must earn and which experts it may call; CHECKS.md, what it tracks (which rows, and what
+settles each check); and skills/<name>/SKILL.md. Nothing in the folder is code, so it can be
 written, reviewed, zipped and served like any document. No expert lives in fleetopt's code.
 
 Where an expert is found, first hit wins:
@@ -53,6 +54,10 @@ def gain(result):
 
 
 RULES = {"cheaper": (gain, "nothing got better past the noise")}
+# What a list of checks may be made over. Code makes the rows from what was recorded:
+# spenders: the nodes that carry more than a twentieth of the tokens; nodes: every node of the
+# graph, run or not; branches: every branch a branch point declares.
+ROWS = ("spenders", "nodes", "branches")
 
 
 # --- the folder ------------------------------------------------------------------------------
@@ -89,7 +94,10 @@ class Expert:
     earns: str | None = None  # the rule a change of its must meet (RULES)
     keeps_shape: bool = True  # a change to the graph's nodes or edges is refused
     tools: tuple = ()         # shared tools it uses beside the ones every expert has
-    checks: tuple = ()        # what it checks on every node that matters: its report accounts for each
+    calls: tuple = ()         # experts it may hand a task to
+    rows: str = "spenders"    # what its list of checks is made over (ROWS)
+    checks: tuple = ()        # the checks: each is closed, on every row, with what settles it
+    checks_text: str = ""     # CHECKS.md as written: what each check means and what settles it
 
     @property
     def earned(self):
@@ -115,6 +123,7 @@ class Expert:
         """The shared guide, this expert's, then the mechanics of each skill it has: all in
         the prompt, cached after the first turn, so it never works without the one it needs."""
         return (SHARED.read_text(encoding="utf-8").strip() + "\n\n" + header(self.folder / "GUIDE.md")[1]
+                + (f"\n\n## What you check\n\n{self.checks_text}" if self.checks_text else "")
                 + "\n\n## The mechanics each pattern refers to\n\n"
                 + "\n\n".join(f"<!-- fleetopt:{n} -->\n" + header(self.folder / "skills" / n / "SKILL.md")[1]
                               for n in self.skills))
@@ -130,10 +139,18 @@ def read(folder):
         raise ValueError(f"{folder}: `earns: {meta['earns']}` is not a rule fleetopt has ({', '.join(RULES)})")
     if meta.get("apply") and not meta.get("earns"):
         raise ValueError(f"{folder}: an expert that changes code (`apply:`) must name what a change earns (`earns:`)")
+    rows, checks, text = meta.get("rows", "spenders"), _names(meta.get("checks")), ""
+    if (folder / "CHECKS.md").is_file():  # what it tracks, in its own file: `- name: what settles it`, one a line
+        tracked, text = header(folder / "CHECKS.md")
+        rows = tracked.get("rows", rows)
+        checks = tuple(line[2:].partition(":")[0].strip(" *`") for line in text.splitlines()
+                       if line.startswith("- ") and ":" in line)
+    if rows not in ROWS:
+        raise ValueError(f"{folder}: `rows: {rows}` is not something fleetopt can list ({', '.join(ROWS)})")
     return Expert(folder=folder, name=meta.get("name") or folder.name, does=meta.get("does", ""), review=meta["review"],
                   apply=meta.get("apply") or None, earns=meta.get("earns") or None,
                   keeps_shape=meta.get("structure", "kept") != "free", tools=_names(meta.get("tools")),
-                  checks=_names(meta.get("checks")))
+                  calls=_names(meta.get("calls")), rows=rows, checks=checks, checks_text=text)
 
 
 def places():

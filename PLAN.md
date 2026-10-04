@@ -27,9 +27,9 @@ tracks what it checked, and reports. Experts are written centrally, as prose.
 | # | Step | Done when | State |
 |---|---|---|---|
 | 1 | Experts as folders of prose, outside the code (`experts/`), loaded from a named place | Committed, tested | done |
-| 2 | Tracking: a matrix of node x check, opened by code, closed by the expert with its number | A real cost run prints the `Checks` line | done: 12 of 12 closed on the workshop agent |
+| 2 | Tracking: a matrix of rows x checks, opened by code, closed by the expert with its number. `CHECKS.md` in the expert's folder names the rows (spenders, nodes, branches) and the checks | A real cost run prints the `Checks` line | done: closed in full on three real agents |
 | 3 | Pre-run the three demo agents and keep the outputs | Outputs saved | before the demo |
-| 4 | An expert calls another through a tool; the tester is the first called expert | A cost run on an agent with no checks proceeds on generated requests, labelled so | after |
+| 4 | An expert calls another through a tool (`calls:` in its header); the tester is the first called expert | A cost run on an agent with no checks proceeds on generated requests, labelled so | built; see "Where it stands" |
 | 5 | Ask later in a run ("this cut changes one answer: keep it?") | Used once with a person at the terminal | after |
 | 6 | Fetch an expert from the central catalogue over http, its fingerprint recorded with the run | `--expert name` works on a machine that never saw it | built and tried against a local web server; no real central server yet, and nothing decides when a pulled copy is refreshed except `fleetopt pull` |
 | 7 | See model calls made outside LangChain | An agent with its own HTTP client measures | after |
@@ -53,3 +53,9 @@ Three real agents run. One proven saving: cost -42% on a supervisor-of-superviso
 a first fix was refused for changing an answer. One honest nothing: a call worth 29% of cost
 found, its removal measured, worse, undone. One broken agent: the design review found why it
 finishes nothing. On the production agent: not yet run with this version.
+
+2026-10-05: step 4 shown on a real run. On a project holding no examples at all, the cost
+expert called the tester, which read the graph and wrote four requests reaching 4 of 4
+nodes; the run went on with them and its report says "4 of 4 written for this run, not
+found in the project". Not yet shown: the same on a real agent with a real model, and a
+change kept on written requests.

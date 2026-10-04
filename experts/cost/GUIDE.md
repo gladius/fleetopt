@@ -9,7 +9,7 @@ apply: Make the LangGraph agent in this project cost less without changing what 
   needed, measure it, find the waste, change it, prove each change, look again, and report.
 earns: cheaper
 structure: kept
-checks: caching, handoffs, model-tier, prompt-growth, redundant-work, tool-surface
+calls: tester
 ---
 
 # Your expertise: token and cost waste
@@ -21,6 +21,16 @@ cheaper, and still working by the team's own measure.
 **The graph keeps its nodes and edges.** Removing, merging or rewiring them is a design
 change, and `keep` refuses it. What you change is what is sent, to which model, how much
 comes back, and when a loop that already exists stops.
+
+## When the project has nothing to check the agent against
+
+Call the tester before you stop: ask it for requests that exercise this agent, and tell it
+which graph and what you found. Put what it returns in the entry as `inputs`, with
+`inputs_from` saying the tester wrote them and which it took from the project, and never
+with expected answers. The answers after a change are then compared with the original's
+on those requests, and your report says under "How it was checked" that the requests were
+written for this run, not the team's. If the tester returns nothing usable, stop as the
+guide says.
 
 ## Start from the bill
 

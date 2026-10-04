@@ -56,7 +56,7 @@ def test_a_review_can_only_look():
     o = options(look_only=True)
     assert set(o.tools) == {"Read", "Grep", "Glob"} and o.hooks is None
     assert set(o.allowed_tools) == {"Read", "Grep", "Glob", "mcp__fleetopt__ask", "mcp__fleetopt__start",
-                                    "mcp__fleetopt__measure", "mcp__fleetopt__query", "mcp__fleetopt__checked"}
+                                    "mcp__fleetopt__measure", "mcp__fleetopt__query", "mcp__fleetopt__checked", "mcp__fleetopt__call"}
 
 
 # --- what touches the target is enforced, not asked ----------------------------------
@@ -154,7 +154,7 @@ def test_the_agent_drives_and_the_limits_live_in_its_tools():
     assert (tools.RUNS, tools.TEAM_USD, tools.STEP_FACTOR, tools.MAX_MINUTES) == (3, 2.0, 3, 120)
     served = {n.removeprefix("mcp__fleetopt__") for n in options().allowed_tools if n.startswith("mcp__")}
     # it measures, saves, keeps and undoes through fleetopt; nothing judges on its word
-    assert served == {"ask", "start", "measure", "query", "checked", "run_evals", "save_change", "keep", "undo"}
+    assert served == {"ask", "start", "measure", "query", "checked", "call", "run_evals", "save_change", "keep", "undo"}
     assert "never remove what ends a loop" in GUIDE.lower() and "when you cannot help" in GUIDE.lower()
     assert "Never look for another way to do what was refused" in GUIDE      # a refusal is an answer
     assert "never use anything about whoever runs this tool" in GUIDE          # nothing about the operator goes out

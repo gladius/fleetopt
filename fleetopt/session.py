@@ -132,6 +132,44 @@ def build_options(project, model=None, max_usd=None, start_branch=None, look_onl
     )
 
 
+async def consult(expert, task, project, *, asked_by, usd=1.0, minutes=15, model=None):
+    """One expert asked by another: its own session, with its own guide and skills and nothing of
+    the caller's, reading the project and the recordings and changing nothing. Returns (its
+    answer, what it spent, why it failed or None). The caller waits: an answer that arrives
+    after the caller has moved on is lost (observed with sub-agents, twice)."""
+    import asyncio
+
+    from claude_agent_sdk import ClaudeSDKError, ResultMessage, query
+
+    chosen = model or os.environ.get("FLEETOPT_MODEL") or MODEL
+    options = ClaudeAgentOptions(
+        cwd=str(project), model=chosen, fallback_model=FALLBACK if chosen != FALLBACK else MODEL,
+        system_prompt=expert.system(), mcp_servers={"fleetopt": tools.server(True, expert, called=True)},
+        tools=["Read", "Grep", "Glob"], allowed_tools=[*tools.names(True, expert, called=True), "Read", "Grep", "Glob"],
+        disallowed_tools=["AskUserQuestion", *config.DENY_READS], setting_sources=config.SETTING_SOURCES,
+        extra_args=config.sdk_args(), strict_mcp_config=True, skills=[], env=config.SDK_ENV, max_turns=60,
+        max_budget_usd=usd, permission_mode="default")
+    prompt = (f"The {asked_by} expert, at work on the LangGraph agent in this project, asks you for this:\n\n{task}\n\n"
+              "You only read: the project's files, and what was recorded if anything was. You start nothing, measure "
+              "nothing and change nothing; whoever asked does that with what you return. Your last message is your "
+              "answer and nothing else.")
+    answer, cost = "", 0.0
+
+    async def run():
+        nonlocal answer, cost
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, ResultMessage):
+                answer, cost = message.result or "", getattr(message, "total_cost_usd", None) or 0.0
+
+    try:
+        await asyncio.wait_for(run(), 60 * minutes)
+    except asyncio.TimeoutError:
+        return answer, cost, f"no answer in {minutes:g} minutes"
+    except ClaudeSDKError as exc:
+        return answer, cost, str(exc).splitlines()[0][:200]
+    return answer, cost, None if answer.strip() else "it returned nothing"
+
+
 # --- one run ------------------------------------------------------------------------------
 
 def _activity(block, project, shown):
@@ -325,7 +363,8 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         "checks": tools.check_facts(),
         "changes": [{"name": n, "outcome": o, "detail": d} for n, (o, d) in ctx["changes"].items()],
         "kept": kept, "whole": whole, "branch": branch if kept else None,
-        "team_runs": runs, "team_cost": team_cost, "own_cost": own, "account": account, "run_dir": str(run_dir),
+        "team_runs": runs, "team_cost": team_cost, "own_cost": own + ctx.get("called_usd", 0.0), "account": account,
+        "run_dir": str(run_dir),
     }
     (run_dir / "report.md").write_text("\n\n".join(filter(None, [account, "\n".join(summary(facts))])) + "\n",
                                        encoding="utf-8")

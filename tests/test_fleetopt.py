@@ -747,6 +747,83 @@ def test_the_experts_list_of_checks_is_made_by_code_and_closed_with_numbers(tmp_
         tools.CTX.clear()
 
 
+def test_one_expert_hands_a_task_to_another_and_waits_for_its_answer(tmp_path, monkeypatch):
+    project = _repo(tmp_path)
+    asked = []
+
+    async def consult(other, task, where, *, asked_by, usd, minutes):
+        asked.append((other.name, asked_by, task, usd))
+        return ("Requests for the agent:\n1. sum of 2 and 3\n   from: written by the tester", 0.31, None) if len(asked) == 1 \
+            else ("", 0.05, "no answer in 15 minutes")
+
+    monkeypatch.setattr(session, "consult", consult)
+    cost, tester = experts.EXPERTS["cost"], experts.EXPERTS["tester"]
+    assert cost.calls == ("tester",) and not tester.calls and not list(tester.folder.rglob("*.py"))   # prose, like the rest
+    assert "mcp__fleetopt__call" in tools.names(False, cost) and "mcp__fleetopt__call" not in tools.names(True, tester)
+    assert tools.names(True, tester, called=True) == ["mcp__fleetopt__query"]     # called: it reads, and that is all
+    assert "When another expert calls you" in tester.system() and "token and cost waste" not in tester.system()
+    tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json", run_dir=tmp_path / "out" / "runs" / "r1")
+    try:
+        assert "may call: tester" in _call("call", expert="design", task="is this a supervisor?")
+        assert "say what you need" in _call("call", expert="tester", task=" ")
+        text = _call("call", expert="tester", task="Requests that exercise nested.py:graph; the project has none.")
+        assert "The tester expert's answer" in text and "1. sum of 2 and 3" in text
+        assert asked == [("tester", "cost", "Requests that exercise nested.py:graph; the project has none.", tools.CALL_USD)]
+        kept = (tmp_path / "out" / "runs" / "r1" / "call-1-tester.md").read_text(encoding="utf-8")
+        assert f"Answer, from tester@{tester.version}" in kept and "Task, from the cost expert" in kept
+        assert "did not answer: no answer in 15 minutes. Go on without it" in _call("call", expert="tester", task="again")
+        assert "2 calls, the most a run makes" in _call("call", expert="tester", task="once more")
+        assert round(tools.CTX["called_usd"], 2) == 0.36                          # what the calls spent is counted
+    finally:
+        tools.CTX.clear()
+
+
+def test_requests_written_for_a_run_are_told_from_the_projects_own(tmp_path):
+    project = _repo(tmp_path)
+    (project / "examples.txt").write_text("Where is my order ORD-2024-0042?\nreset password\n", encoding="utf-8")
+    tools.begin(project, tmp_path / "out", entry_file=tmp_path / "out" / "e.json")
+    try:
+        plan = {"graph": "agent.py:graph", "inputs_from": "examples.txt, and the tester",
+                "inputs": ["Where is my order ORD-2024-0042?", "What is the warranty on a laptop bought abroad?",
+                           {"question": "Cancel the order I placed yesterday, please"}]}
+        entry = tools._entry(plan)
+        assert entry["written"] == 2                                              # found by looking, not by its say-so
+        assert tools.source(entry) == "from examples.txt, and the tester (2 of 3 written for this run, not found in the project)"
+        tools.CTX["entry"] = entry
+        assert "(2 of 3 written for this run, not found in the project), answers compared with the original's" in tools.proof()
+        assert tools._entry({**plan, "inputs": ["reset password"]})["written"] == 0
+    finally:
+        tools.CTX.clear()
+
+
+def test_a_list_of_checks_is_made_over_the_rows_an_expert_asks_for(tmp_path):
+    folder = tmp_path / "walker"
+    folder.mkdir()
+    (folder / "GUIDE.md").write_text("---\nreview: Look.\n---\n\n# Walks every branch\n", encoding="utf-8")
+    (folder / "CHECKS.md").write_text("---\nrows: branches\n---\n\nFor every branch:\n\n- taken: the count of runs that took it.\n"
+                                      "- **needed**: a request that needs it, or n/a.\n", encoding="utf-8")
+    walker = experts.read(folder)
+    assert (walker.rows, walker.checks) == ("branches", ("taken", "needed")) and "## What you check" in walker.system()
+    (folder / "CHECKS.md").write_text("---\nrows: moods\n---\n- a: b\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="`rows: moods` is not something fleetopt can list"):
+        experts.read(folder)
+
+    assert _captured(tmp_path, "nested.py:graph", inputs=("sum of 2 and 3", "check the history of rail"))[1] == 0
+    tools.CTX.clear()
+    tools.CTX.update(out=tmp_path / "out", project=_fixture(tmp_path), base="x", run_dir=tmp_path / "out" / "runs" / "r")
+    try:
+        tools.CTX.update(reach=tools._reach("x"), bill=tools.bill("x"))
+        assert tools._rows("nodes") == ["math:model", "research:model", "research:tools", "math:tools"]   # run or not
+        assert tools._rows("branches") == ["__start__ -> math:model", "__start__ -> research:model", "math:model -> math:tools",
+                                           "research:model -> research:tools"]
+        assert tools._rows("spenders") == ["research:model", "math:model"]         # where the tokens are
+        tools.CTX["expert"] = experts.EXPERTS["tester"]
+        tools._open_checks()
+        assert list(tools.CTX["checks"]) == [(n, "covered") for n in tools._rows("nodes")]
+    finally:
+        tools.CTX.clear()
+
+
 def test_one_change_is_dropped_by_name_and_the_rest_stay_saved(tmp_path, monkeypatch):
     project = _repo(tmp_path)
     _fake_runs(monkeypatch)

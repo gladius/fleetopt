@@ -32,10 +32,18 @@ fleetopt review <project> --expert design     # look only: does the design fit t
 |---|---|---|---|
 | `cost` (default) | Where the agent wastes tokens and money | yes | yes: changes it and proves each change |
 | `design` | Whether the design fits the job: the patterns it is built from by what ran, what is broken, and where a simpler design would do the same | yes | not yet |
+| `tester` | The requests that would check the agent: those the project holds, and those written to reach every route and tool. Never an expected answer | yes | no |
+
+One session is one expert, with only its own guide and skills. An expert may hand a task to
+another through `call`: the other works in its own session, reads the project, changes
+nothing, and its answer comes back before the caller goes on. The cost expert calls the
+tester when a project has nothing to check its agent against; the report then says how many
+of the requests were written for the run and not found in the project.
 
 An expert is a folder of prose, with no code in it: `GUIDE.md`, whose header says what it is
-asked, which shared tools it uses, what a change of its must earn and what it checks, and
-`skills/<name>/SKILL.md`. No expert lives in fleetopt's code. Where one is found, first hit wins:
+asked, which shared tools it uses, what a change of its must earn and which experts it may
+call; `CHECKS.md`, what it tracks (the rows: the nodes that carry the money, every node, or
+every branch; and what settles each check); and `skills/<name>/SKILL.md`. No expert lives in fleetopt's code. Where one is found, first hit wins:
 
 1. a directory named in `FLEETOPT_EXPERTS`;
 2. `experts/` in this repo, when fleetopt runs from a checkout: the catalogue itself;
