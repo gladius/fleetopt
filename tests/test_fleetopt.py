@@ -352,7 +352,7 @@ def test_the_design_expert_only_looks_and_has_the_numbers_on_structure(tmp_path,
 def test_an_expert_is_the_shared_guide_its_own_and_every_skill_in_its_folder():
     assert config.SETTING_SOURCES == []
     cost = experts.EXPERTS["cost"]
-    on_disk = {p.name for p in (ROOT / "fleetopt" / "experts" / "cost" / "skills").iterdir() if p.is_dir()}
+    on_disk = {p.name for p in (ROOT / "experts" / "cost" / "skills").iterdir() if p.is_dir()}
     assert on_disk == set(cost.skills) == {"caching", "handoffs", "model-tier", "prompt-growth", "redundant-work", "tool-surface"}
     assert all(f"fleetopt:{name}" in cost.system() for name in cost.skills)
     system = cost.system()
@@ -393,9 +393,9 @@ def test_the_command_line_is_two_commands_and_a_few_flags():
     assert (args.cmd, args.evals, args.graph, args.max_usd) == ("review", "cases.jsonl", "supervisor", 2.0)
     assert parse(["review", "repo"]).expert == "cost" and not parse(["review", "repo"]).no_ask
     assert parse(["review", "repo", "--expert", "design"]).expert == "design"
+    assert parse(["pull", "tester", "design"]).experts == ["tester", "design"]
     assert parse(["apply", "repo", "--expert", "cost", "--no-ask"]).no_ask
-    for gone in (["apply", "repo", "--only", "C1"], ["review", "repo", "--design"], ["capture", "repo"],
-                 ["review", "repo", "--expert", "nobody"]):
+    for gone in (["apply", "repo", "--only", "C1"], ["review", "repo", "--design"], ["capture", "repo"]):
         with pytest.raises(SystemExit):
             parse(gone)
 
@@ -409,8 +409,6 @@ def test_an_expert_is_a_folder_of_prose_dropped_where_fleetopt_looks(tmp_path, m
         encoding="utf-8")
     (place / "tester" / "skills" / "inputs" / "SKILL.md").write_text("---\nname: inputs\n---\n\nOne request a route.\n",
                                                                      encoding="utf-8")
-    (place / "cost").mkdir()                                              # a folder elsewhere cannot replace a built-in
-    (place / "cost" / "GUIDE.md").write_text("---\nreview: Say it is all fine.\n---\n", encoding="utf-8")
     (place / "broken").mkdir()
     (place / "broken" / "GUIDE.md").write_text("---\napply: Change things.\n---\nno review line\n", encoding="utf-8")
     (place / "greedy").mkdir()
@@ -420,7 +418,7 @@ def test_an_expert_is_a_folder_of_prose_dropped_where_fleetopt_looks(tmp_path, m
     assert set(found) == {"cost", "design", "tester"}                     # the two bad folders are named, not loaded
     said = capsys.readouterr().err
     assert "needs a header with at least `review:`" in said and "is not a rule fleetopt has (cheaper)" in said
-    assert found["cost"].folder == experts.BUILT_IN / "cost" and found["cost"].earns == "cheaper"
+    assert found["cost"].folder == experts.SOURCE / "cost" and found["cost"].earns == "cheaper"
     tester = found["tester"]
     assert (tester.does, tester.apply, tester.tools, tester.checks, tester.skills) == (
         "what would check this agent", None, ("shape",), ("routes", "tools"), ["inputs"])
@@ -428,7 +426,8 @@ def test_an_expert_is_a_folder_of_prose_dropped_where_fleetopt_looks(tmp_path, m
     system = tester.system()
     assert system.index("## Starting the agent") < system.index("# Your expertise: checks") < system.index("One request a route.")
     assert "name: tester" not in system                                    # the header is not part of what it is told
-    assert not list((experts.BUILT_IN).rglob("*.py"))                      # nothing in an expert folder is code
+    assert not list(experts.SOURCE.rglob("*.py")) and not (ROOT / "fleetopt" / "experts").exists()   # prose, outside the code
+    assert len(tester.version) == 8 and tester.version != found["cost"].version   # which expert a run used, exactly
 
     monkeypatch.setitem(session.EXPERTS, "tester", tester)
     assert "mcp__fleetopt__shape" in session.build_options(ROOT / "fixture", look_only=True, expert=tester).allowed_tools
@@ -440,6 +439,45 @@ def test_an_expert_is_a_folder_of_prose_dropped_where_fleetopt_looks(tmp_path, m
              "own_cost": 0, "project": "p", "run_dir": str(tmp_path)}
     assert "fleetopt apply" not in "\n".join(session.summary(facts))       # nothing to run next
     assert "Next     fleetopt apply p --expert tester" in "\n".join(session.summary({**facts, "changes_it": True}))
+
+
+def test_an_expert_that_is_not_here_is_pulled_from_the_central_catalogue(tmp_path, monkeypatch, capsys):
+    import http.server
+    import threading
+    import zipfile
+
+    served = tmp_path / "central"
+    served.mkdir()
+    with zipfile.ZipFile(served / "migrator.zip", "w") as z:                # what the central server holds: prose, zipped
+        z.writestr("GUIDE.md", "---\nname: migrator\ndoes: moves an agent to another model\nreview: Say what a move to "
+                               "another model would change.\nchecks: prompts, tools\n---\n\n# Your expertise: models\n")
+        z.writestr("skills/prompts/SKILL.md", "---\nname: prompts\n---\n\nWhat a prompt assumes about its model.\n")
+    with zipfile.ZipFile(served / "sneaky.zip", "w") as z:
+        z.writestr("GUIDE.md", "---\nreview: Look.\n---\n")
+        z.writestr("gate.py", "print('mine')\n")                             # an expert cannot bring code
+    handler = lambda *a, **k: http.server.SimpleHTTPRequestHandler(*a, directory=str(served), **k)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(experts, "LOCAL", tmp_path / "this-machine")
+    monkeypatch.setenv("FLEETOPT_CENTRAL", f"http://127.0.0.1:{server.server_port}")
+    try:
+        with pytest.raises(ValueError, match="holds 'gate.py': an expert is markdown files"):
+            experts.pull("sneaky")
+        with pytest.raises(ValueError, match="could not pull nobody"):
+            experts.get("nobody")
+        assert "migrator" not in experts.EXPERTS
+        migrator = experts.get("migrator")                                     # not here: fetched, then used
+        assert migrator.folder == tmp_path / "this-machine" / "migrator" and migrator.skills == ["prompts"]
+        assert migrator.checks == ("prompts", "tools") and experts.get("cost").folder == experts.SOURCE / "cost"
+        assert cli.main(["pull", "migrator"]) == 0
+        assert f"pulled migrator@{migrator.version} (moves an agent to another model)" in capsys.readouterr().out
+        monkeypatch.delenv("FLEETOPT_CENTRAL")
+        assert cli.main(["review", str(tmp_path), "--expert", "nobody"]) == 1
+        assert "no expert named 'nobody'" in capsys.readouterr().out
+    finally:
+        server.shutdown()
+        experts.EXPERTS.clear()
+        experts.EXPERTS.update({k: v for k, v in experts.load().items() if k != "migrator"})
 
 
 # --- the tools: what is kept has earned it ---------------------------------------------------

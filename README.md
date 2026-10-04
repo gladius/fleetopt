@@ -34,11 +34,22 @@ fleetopt review <project> --expert design     # look only: does the design fit t
 | `design` | Whether the design fits the job: the patterns it is built from by what ran, what is broken, and where a simpler design would do the same | yes | not yet |
 
 An expert is a folder of prose, with no code in it: `GUIDE.md`, whose header says what it is
-asked, which shared tools it uses and what a change of its must earn, and `skills/<name>/SKILL.md`.
-fleetopt loads every such folder in its own `fleetopt/experts/`, in the directories named in
-`FLEETOPT_EXPERTS`, and in `~/.config/fleetopt/experts`: put a folder there and `--expert <its name>`
-runs it. A header can name a tool or a rule fleetopt has; it cannot bring its own, so an expert
-cannot loosen its own proof. `PLAN.md` says where this is going.
+asked, which shared tools it uses, what a change of its must earn and what it checks, and
+`skills/<name>/SKILL.md`. No expert lives in fleetopt's code. Where one is found, first hit wins:
+
+1. a directory named in `FLEETOPT_EXPERTS`;
+2. `experts/` in this repo, when fleetopt runs from a checkout: the catalogue itself;
+3. `~/.config/fleetopt/experts`: what this machine has pulled;
+4. the central catalogue at `FLEETOPT_CENTRAL`, an http address serving `<name>.zip`:
+   `--expert <name>` pulls one that is not here, and `fleetopt pull <name>` refreshes it.
+
+A header can name a tool or a rule fleetopt has; it cannot bring its own, and a pulled expert
+that holds anything but markdown is refused, so an expert cannot loosen its own proof. Every
+run prints and records which expert it used and its fingerprint (`cost@158adedf`).
+`PLAN.md` says where this is going.
+
+To serve the catalogue: zip each folder of `experts/` as `<name>.zip`, its files at the top
+level, and put the zips behind any web server.
 
 The design expert's findings rest on numbers too: branches never taken, a supervisor that
 always dispatches in the same order, a review loop that never changes the draft, counted on
@@ -129,7 +140,7 @@ Enforced, not asked; each is a test in `tests/test_invariants.py`.
 |---|---|
 | `--evals WHAT` | What to check the agent with: your eval command (`pytest tests/evals`) or a file of test cases, expected answers or example requests. Found in the project otherwise |
 | `--graph NAME` | Which agent, when a project has several |
-| `--expert NAME` | Which expert looks at it (default `cost`) |
+| `--expert NAME` | Which expert looks at it (default `cost`); pulled from the central catalogue when it is not here |
 | `--no-ask` | Never ask a question at the terminal |
 | `--max-usd N` | Cap on fleetopt's own spend |
 | `--out DIR` | Where records go (default `./.fleetopt`) |

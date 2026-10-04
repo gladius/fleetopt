@@ -1,24 +1,34 @@
-"""An expert, loaded from a folder of prose.
+"""An expert, loaded from a folder of prose, fetched from the central catalogue when needed.
 
 An expert is a folder: GUIDE.md, whose header says what it is asked to do and what its
 changes must earn, and skills/<name>/SKILL.md. Nothing in the folder is code, so it can be
-written, reviewed, zipped and handed over like any document. fleetopt looks for expert
-folders in its own experts/ directory, then in every directory named in FLEETOPT_EXPERTS,
-then in ~/.config/fleetopt/experts: put a folder there and it is an expert.
+written, reviewed, zipped and served like any document. No expert lives in fleetopt's code.
 
-What stays here, shared and in code, is what a central team owns: experts/GUIDE.md (how to
-start a team's agent and work with the tools), the tools themselves (tools.py), and the
+Where an expert is found, first hit wins:
+1. a directory named in FLEETOPT_EXPERTS (someone's deliberate choice);
+2. `experts/` beside the code, when fleetopt runs from a checkout: the catalogue itself;
+3. ~/.config/fleetopt/experts: what this machine has pulled;
+4. the central catalogue at FLEETOPT_CENTRAL (http): `<address>/<name>.zip` is pulled into 3.
+
+What stays in the code, shared, is what a central team owns: GUIDE.md beside this file (how
+to start a team's agent and work with the tools), the tools themselves (tools.py), and the
 rules below for what a change must earn. A header names a rule or a tool; it cannot define
 one, so no expert can loosen its own proof.
 """
 
 import dataclasses
+import hashlib
+import io
 import os
 import pathlib
+import shutil
 import sys
+import urllib.request
+import zipfile
 
-BUILT_IN = pathlib.Path(__file__).parent / "experts"
-HOME = pathlib.Path.home() / ".config" / "fleetopt" / "experts"
+SHARED = pathlib.Path(__file__).parent / "GUIDE.md"
+SOURCE = pathlib.Path(__file__).parent.parent / "experts"
+LOCAL = pathlib.Path.home() / ".config" / "fleetopt" / "experts"
 
 
 # --- the rules a header may name: what a measured change must show to be kept ----------------
@@ -90,13 +100,21 @@ class Expert:
         return RULES[self.earns][1] if self.earns else "this expert only reviews"
 
     @property
+    def version(self):
+        """A fingerprint of everything in the folder: which expert a run used, exactly."""
+        digest = hashlib.sha1()
+        for path in sorted(p for p in self.folder.rglob("*") if p.is_file()):
+            digest.update(path.relative_to(self.folder).as_posix().encode() + b"\0" + path.read_bytes())
+        return digest.hexdigest()[:8]
+
+    @property
     def skills(self):
         return sorted(p.name for p in (self.folder / "skills").glob("*") if (p / "SKILL.md").is_file())
 
     def system(self):
         """The shared guide, this expert's, then the mechanics of each skill it has: all in
         the prompt, cached after the first turn, so it never works without the one it needs."""
-        return ((BUILT_IN / "GUIDE.md").read_text(encoding="utf-8").strip() + "\n\n" + header(self.folder / "GUIDE.md")[1]
+        return (SHARED.read_text(encoding="utf-8").strip() + "\n\n" + header(self.folder / "GUIDE.md")[1]
                 + "\n\n## The mechanics each pattern refers to\n\n"
                 + "\n\n".join(f"<!-- fleetopt:{n} -->\n" + header(self.folder / "skills" / n / "SKILL.md")[1]
                               for n in self.skills))
@@ -119,10 +137,9 @@ def read(folder):
 
 
 def places():
-    """Where expert folders are looked for, fleetopt's own first: a folder elsewhere cannot
-    replace a built-in expert."""
+    """Where expert folders are looked for, in order: the first one with a name wins."""
     named = [pathlib.Path(p).expanduser() for p in (os.environ.get("FLEETOPT_EXPERTS") or "").split(os.pathsep) if p]
-    return [BUILT_IN, *named, HOME]
+    return [*named, SOURCE, LOCAL]
 
 
 def load():
@@ -138,5 +155,50 @@ def load():
     return found
 
 
+def pull(name, central=None):
+    """Fetch an expert from the central catalogue into this machine's folder, replacing the one
+    there. The catalogue serves `<address>/<name>.zip`, the folder's files at its top level."""
+    central = (central or os.environ.get("FLEETOPT_CENTRAL") or "").rstrip("/")
+    if not central:
+        raise ValueError("no central catalogue is set (FLEETOPT_CENTRAL)")
+    if not name.replace("-", "").replace("_", "").isalnum():
+        raise ValueError(f"{name!r} is not an expert's name")
+    try:
+        with urllib.request.urlopen(f"{central}/{name}.zip", timeout=60) as response:
+            archive = zipfile.ZipFile(io.BytesIO(response.read()))
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ValueError(f"could not pull {name} from {central}: {exc}") from None
+    staging = LOCAL / f".{name}.pulling"
+    shutil.rmtree(staging, ignore_errors=True)
+    for item in archive.infolist():
+        target = (staging / item.filename).resolve()
+        if not target.is_relative_to(staging.resolve()) or not item.filename.endswith((".md", "/")):
+            shutil.rmtree(staging, ignore_errors=True)  # prose only, and only inside its own folder
+            raise ValueError(f"{name} from {central} holds {item.filename!r}: an expert is markdown files in its own folder")
+    archive.extractall(staging)
+    try:
+        read(staging)
+    except (ValueError, OSError) as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise ValueError(f"{name} from {central} is not an expert: {exc}") from None
+    shutil.rmtree(LOCAL / name, ignore_errors=True)
+    staging.rename(LOCAL / name)
+    EXPERTS.clear()
+    EXPERTS.update(load())
+    return read(LOCAL / name)
+
+
+def get(name):
+    """The expert of that name: one found here, else pulled from the central catalogue."""
+    if name in EXPERTS:
+        return EXPERTS[name]
+    if os.environ.get("FLEETOPT_CENTRAL"):
+        pull(name)
+        if name in EXPERTS:
+            return EXPERTS[name]
+    raise ValueError(f"no expert named {name!r} (here: {', '.join(sorted(EXPERTS)) or 'none'}"
+                     + ("" if os.environ.get("FLEETOPT_CENTRAL") else "; no central catalogue is set (FLEETOPT_CENTRAL)") + ")")
+
+
 EXPERTS = load()
-COST, DESIGN = EXPERTS["cost"], EXPERTS["design"]
+COST, DESIGN = EXPERTS.get("cost"), EXPERTS.get("design")

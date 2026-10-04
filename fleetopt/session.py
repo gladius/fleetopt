@@ -24,6 +24,7 @@ from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
 from fleetopt import config, tools
 from fleetopt.evidence import measure as measure_mod
+from fleetopt import expert as experts
 from fleetopt.expert import COST, EXPERTS
 from fleetopt.probe import store
 
@@ -227,7 +228,7 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
 
     from fleetopt.progress import ticking
 
-    expert = EXPERTS[expert]
+    expert = experts.get(expert)
     if not look_only and not expert.apply:
         raise ValueError(f"the {expert.name} expert only reviews: fleetopt review --expert {expert.name}")
     project, out = pathlib.Path(project).resolve(), pathlib.Path(out).resolve()
@@ -315,7 +316,8 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         review.write_text(account + "\n", encoding="utf-8")
     runs, team_cost = measure_mod.spent(out, project, first)
     facts = {
-        "mode": "review" if look_only else "apply", "expert": expert.name, "changes_it": bool(expert.apply),
+        "mode": "review" if look_only else "apply", "expert": expert.name, "expert_version": expert.version,
+        "expert_from": str(expert.folder), "changes_it": bool(expert.apply),
         "project": str(project), "started": bool(ctx.get("run_cmd")),
         "agent": (ctx.get("entry") or {}).get("name"), "measured": bool(ctx.get("baseline")),
         "baseline": ctx.get("baseline"), "proof": tools.proof() if ctx.get("entry") else None, "reach": tools.reached(),

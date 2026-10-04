@@ -2,6 +2,7 @@
 
     fleetopt review <project>    look only: what is worth changing, with the numbers
     fleetopt apply  <project>    look, change it on a new branch, and prove each change
+    fleetopt pull   <expert>     fetch an expert from the central catalogue to this machine
 
 One Claude session does the work as the expert asked for (--expert, cost by default): it
 works out how to start the project's agent, measures it, finds what its expertise looks
@@ -30,9 +31,10 @@ def _parser():
                             ("apply", 5.0, "look, change the agent on a new branch, and prove each change")):
         p = sub.add_parser(name, help=text)
         p.add_argument("project")
-        p.add_argument("--expert", choices=sorted(EXPERTS), default="cost",
-                       help="which expert looks at it: " + "; ".join(f"{e.name}: {e.does}" for e in EXPERTS.values())
-                            + " (default cost)")
+        p.add_argument("--expert", default="cost",
+                       help="which expert looks at it (default cost). Here: " + "; ".join(
+                           f"{e.name}: {e.does}" for e in EXPERTS.values()) + ". One that is not here is pulled "
+                           "from the central catalogue (FLEETOPT_CENTRAL)")
         p.add_argument("--no-ask", action="store_true",
                        help="never ask a question at the terminal. Otherwise, while getting the agent started, it may "
                             "ask up to 3 things only the team knows; with no terminal it never asks")
@@ -45,6 +47,8 @@ def _parser():
                        help=f"the most fleetopt's own work may spend on your Claude login (default {usd:g}). "
                             "The agent's runs stop at $2 on its own API key (FLEETOPT_TEAM_USD)")
         p.add_argument("--out", default=argparse.SUPPRESS, help="where records go (default ./.fleetopt)")
+    p = sub.add_parser("pull", help="fetch experts from the central catalogue (FLEETOPT_CENTRAL) to this machine")
+    p.add_argument("experts", nargs="+", metavar="expert")
     return parser
 
 
@@ -66,12 +70,27 @@ def main(argv=None):
     config.load_env()
     args = _parser().parse_args(argv)
     signal.signal(signal.SIGTERM, _stop)
-    from fleetopt import session, tools
+    from fleetopt import expert as experts, session, tools
+
+    if args.cmd == "pull":
+        for name in args.experts:
+            try:
+                pulled = experts.pull(name)
+            except ValueError as exc:
+                print(f"  can't pull: {exc}")
+                return 1
+            print(f"  pulled {pulled.name}@{pulled.version} ({pulled.does}) into {pulled.folder}")
+        return 0
+    try:
+        chosen = experts.get(args.expert)
+    except ValueError as exc:
+        print(f"  can't run: {exc}")
+        return 1
 
     project = pathlib.Path(args.project).resolve()
     team = float(os.environ.get("FLEETOPT_TEAM_USD") or tools.TEAM_USD)
     minutes = float(os.environ.get("FLEETOPT_MAX_MINUTES") or tools.MAX_MINUTES)
-    print(f"fleetopt {args.cmd} · {args.expert} · {project.name}\n  stops at: {minutes:g} min · ${team:.2f} spent by the agent on its "
+    print(f"fleetopt {args.cmd} · {chosen.name}@{chosen.version} · {project.name}\n  stops at: {minutes:g} min · ${team:.2f} spent by the agent on its "
           f"own API key · ${args.max_usd:.2f} spent by fleetopt on your Claude login", flush=True)
     try:
         facts = asyncio.run(session.run(project, args.out, look_only=args.cmd == "review", evals=args.evals,
