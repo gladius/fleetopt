@@ -64,3 +64,11 @@ The same day, the interactive path ran for the first time, in a real terminal se
 script typing the developer's reply: nothing to check against, the tester said it could write
 eight requests and needed nothing, one question was put, the answer taken, the run went on,
 and the requests were saved as a file with the agent's own answers.
+
+Also 2026-10-05, the cost expert on the workshop supervisor again, with the bill-first method
+and the newer skills: one change kept, the supervisor forwards a single specialist's answer
+instead of restating it. Output tokens -30%, time -65%, cost inside the noise. The team's own
+eval suite ran before and after against a real model: 83% to 100% passing. A cap on the
+database specialist's retries measured cost -35% and was not kept: inside the noise of three
+runs on five requests. The new "under the caching minimum" section produced no change, and
+the report does not show whether stable content to move was looked for: still untried.
