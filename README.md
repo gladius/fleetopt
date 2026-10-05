@@ -83,6 +83,21 @@ python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\a
 pip install -e ".[dev]"
 ```
 
+`pip` brings fleetopt's own copy of Claude Code, inside `claude-agent-sdk`; nothing else has
+to be installed. That package is pinned in `pyproject.toml`, because some of its releases were
+published without the Windows copy and a run then ends "Claude Code not found". After pulling
+a newer fleetopt, run the `pip install` line again.
+
+If a run stops with "Claude Code could not be started", the `claude-agent-sdk` in fleetopt's
+environment came without Claude Code inside. Put the full build back, in that environment:
+
+```bash
+pip install --force-reinstall --only-binary claude-agent-sdk -e .
+```
+
+If `pip` finds no build, your package index does not carry the one for your platform (about
+100 MB). Install Claude Code itself instead; on Windows use its native installer, not npm.
+
 Try `review` on a copy of the bundled fixture (a fake model, nothing spent on any key):
 
 ```bash

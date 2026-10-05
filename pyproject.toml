@@ -5,7 +5,12 @@ description = "Find and prove cost savings in a LangGraph project without editin
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=1.7",
-    "claude-agent-sdk>=0.2",
+    # Pinned on purpose. The SDK carries Claude Code inside it, one build per platform, and
+    # 0.2.157 and 0.2.160 to 0.2.163 were published without the Windows one (over PyPI's size
+    # limit): pip then installs a build with no Claude Code and a run ends "Claude Code not
+    # found". Before moving this, check pypi.org/project/claude-agent-sdk/<version>/#files
+    # lists win_amd64, both macosx and both manylinux.
+    "claude-agent-sdk==0.2.159",
 ]
 
 # The capture hook runs inside the target's interpreter and imports the target's

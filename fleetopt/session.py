@@ -263,10 +263,11 @@ def _prompt(expert, look_only, entry, evals, graph, team, minutes, max_usd, bran
 async def run(project, out, *, look_only=False, evals=None, graph=None, model=None, max_usd=5.0, expert="cost",
               ask=False):
     """One run of one expert. Returns the facts the summary is computed from. Raises
-    RuntimeError when it cannot begin (the project is not under git), ValueError when the
-    expert cannot do what was asked. `ask`: someone is at the terminal to answer a question."""
-    from claude_agent_sdk import (AssistantMessage, ClaudeSDKError, ResultMessage, SystemMessage, TextBlock,
-                                  ToolResultBlock, ToolUseBlock, UserMessage, query)
+    RuntimeError when it cannot begin (the project is not under git, Claude Code does not
+    start), ValueError when the expert cannot do what was asked. `ask`: someone is at the
+    terminal to answer a question."""
+    from claude_agent_sdk import (AssistantMessage, CLIConnectionError, ClaudeSDKError, ResultMessage, SystemMessage,
+                                  TextBlock, ToolResultBlock, ToolUseBlock, UserMessage, query)
 
     from fleetopt.progress import ticking
 
@@ -307,10 +308,11 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         log_file.flush()
 
     tools.say(f"  full log, live: {_shown(run_dir / 'log.txt')}")
-    account, own, shown, said, stopped = "", 0.0, {}, None, True
+    account, own, shown, said, stopped, heard = "", 0.0, {}, None, True, False
     try:
         async with ticking("working", said_at=lambda: ctx.get("said_at", 0)):
             async for message in query(prompt=prompt, options=options):
+                heard = True
                 if isinstance(message, SystemMessage) and message.subtype == "init":
                     tools.say(f"  model: {(message.data or {}).get('model') or options.model}")  # what this setup gave
                 elif isinstance(message, AssistantMessage):
@@ -336,6 +338,10 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
                     account = _report_only(message.result or "")
         stopped = False
     except ClaudeSDKError as exc:  # out of turns or budget: what the tools recorded still stands
+        if isinstance(exc, CLIConnectionError) and not heard:  # it never started: nothing to sum up, and all of why
+            log(f"session never started: {exc}")           # (observed: only "Claude Code not found" was shown)
+            raise RuntimeError("Claude Code could not be started, so nothing was run. The SDK said:\n"
+                               + "\n".join(f"    {line}" for line in str(exc).splitlines())) from exc
         log(f"session ended: {str(exc).splitlines()[0][:200]}")
         tools.say(f"  the session ended early: {str(exc).splitlines()[0][:120]}")
         stopped = False

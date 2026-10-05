@@ -1047,6 +1047,28 @@ def test_a_stopped_run_puts_the_teams_copy_back(tmp_path, monkeypatch, capsys):
     assert "your copy is back on main" in capsys.readouterr().out
 
 
+def test_claude_code_that_never_starts_says_all_of_it_and_runs_nothing(tmp_path, monkeypatch):
+    import claude_agent_sdk
+
+    project = _repo(tmp_path)
+
+    async def never_starts(prompt, options):  # observed on Windows: an SDK build with no Claude Code inside
+        raise claude_agent_sdk.CLINotFoundError("Claude Code not found. Install the native claude.exe with (PowerShell):\n"
+                                                "  irm https://claude.ai/install.ps1 | iex")
+        yield
+
+    monkeypatch.setattr(claude_agent_sdk, "query", never_starts)
+    try:
+        with pytest.raises(RuntimeError) as told:
+            asyncio.run(session.run(project, tmp_path / "out"))
+    finally:
+        tools.CTX.clear()
+    assert "nothing was run" in str(told.value)
+    assert "irm https://claude.ai/install.ps1" in str(told.value)       # every line the SDK said, not the first
+    git = lambda *a: subprocess.run(["git", "-C", str(project), *a], capture_output=True, text=True).stdout.strip()
+    assert git("rev-parse", "--abbrev-ref", "HEAD") == "main" and "fleetopt" not in git("branch")
+
+
 def test_a_saved_start_is_used_again_even_with_one_input(tmp_path, monkeypatch):
     import claude_agent_sdk
 
