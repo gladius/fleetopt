@@ -30,7 +30,7 @@ tracks what it checked, and reports. Experts are written centrally, as prose.
 | 2 | Tracking: a matrix of rows x checks, opened by code, closed by the expert with its number. `CHECKS.md` in the expert's folder names the rows (spenders, nodes, branches) and the checks | A real cost run prints the `Checks` line | done: closed in full on three real agents |
 | 3 | Pre-run the three demo agents and keep the outputs | Outputs saved | before the demo |
 | 4 | An expert calls another through a tool (`calls:` in its header); the tester is the first called expert | A cost run on an agent with no checks proceeds on generated requests, labelled so | built; see "Where it stands" |
-| 5 | Ask later in a run ("this cut changes one answer: keep it?") | Used once with a person at the terminal | after |
+| 5 | Ask the developer: before writing requests (built: the tester says what it can write and what it lacks, then one question); later in a run ("this cut changes one answer: keep it?", not built) | Used once with a person at the terminal | the first kind ran end to end in a real terminal session, answered by a script; no person yet |
 | 6 | Fetch an expert from the central catalogue over http, its fingerprint recorded with the run | `--expert name` works on a machine that never saw it | built and tried against a local web server; no real central server yet, and nothing decides when a pulled copy is refreshed except `fleetopt pull` |
 | 7 | See model calls made outside LangChain | An agent with its own HTTP client measures | after |
 | 8 | Runs report back to the centre | One table of runs across machines | after |
@@ -59,3 +59,8 @@ expert called the tester, which read the graph and wrote four requests reaching 
 nodes; the run went on with them and its report says "4 of 4 written for this run, not
 found in the project". Not yet shown: the same on a real agent with a real model, and a
 change kept on written requests.
+
+The same day, the interactive path ran for the first time, in a real terminal session with a
+script typing the developer's reply: nothing to check against, the tester said it could write
+eight requests and needed nothing, one question was put, the answer taken, the run went on,
+and the requests were saved as a file with the agent's own answers.

@@ -34,6 +34,14 @@ fleetopt review <project> --expert design     # look only: does the design fit t
 | `design` | Whether the design fits the job: the patterns it is built from by what ran, what is broken, and where a simpler design would do the same | yes | not yet |
 | `tester` | The requests that would check the agent: those the project holds, and those written to reach every route and tool. Never an expected answer | yes | no |
 
+When a project has nothing to check its agent against, the cost expert calls the tester to
+learn what it can write alone and what it would need, then asks you once, at the terminal:
+use requests of your own, give what the tester lacks, or go on with what it can write. With
+no one there it goes on with what the tester could write. Requests written for a run are
+saved in fleetopt's records with what each exercises and the agent's own answer (not an
+expected answer); the summary says where. Copy that file into your project and it is your
+team's: the next run finds it there.
+
 One session is one expert, with only its own guide and skills. An expert may hand a task to
 another through `call`: the other works in its own session, reads the project, changes
 nothing, and its answer comes back before the caller goes on. The cost expert calls the

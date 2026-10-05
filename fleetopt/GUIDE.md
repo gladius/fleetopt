@@ -132,6 +132,7 @@ The entry:
  "interpreter": "only if its environment is not .venv or venv in the project: the path to its python",
  "cwd": "the folder it starts from, or .", "env_file": [".env"], "env": {}, "config": {}, "context": {}, "store": null,
  "input_template": null, "inputs": ["text, or a JSON object"], "inputs_from": "the file or place",
+ "about": ["for each input, in order: what it exercises, when you know"],
  "expected": null, "expected_from": null}
 ```
 

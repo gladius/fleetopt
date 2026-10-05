@@ -247,7 +247,7 @@ def _entry(plan):
     if not cases:
         raise ValueError("no input given: give what the agent is sent, from the project, as text or a JSON object "
                          f"each (up to {MAX_INPUTS})")
-    golden = plan.get("expected_from")
+    golden, about = plan.get("expected_from"), plan.get("about")
     if any(e for _, e in cases):
         _copied(golden, [e for _, e in cases if e])
     cases = spread(cases, MAX_INPUTS)
@@ -258,6 +258,7 @@ def _entry(plan):
             "context": plan.get("context") or {}, "store": plan.get("store"), "input_template": template,
             "inputs": [t for t, _ in cases], "inputs_from": plan.get("inputs_from"),
             "written": _written([t for t, _ in cases]),
+            "about": [str(a)[:200] for a in about] if isinstance(about, list) and len(about) == len(cases) else None,
             "expected": [e for _, e in cases] if any(e for _, e in cases) else None,
             "expected_from": golden if any(e for _, e in cases) else None}
 
@@ -282,23 +283,54 @@ def _copied(source, answers):
 
 
 def _written(inputs):
-    """How many of the inputs are not in the project's files: written for this run, by this
-    expert or one it called. The opening of each is looked for, as text."""
+    """For each input, whether it is absent from the project's files: written for this run, by
+    this expert or one it called. The opening of each is looked for, as text."""
     def missing(item):
         if isinstance(item, dict):
             item = max((v for v in item.values() if isinstance(v, str)), key=len, default="")
         needle = next((line.strip() for line in str(item).splitlines() if line.strip()), "")[:80]
         if len(needle) < 8:
-            return False  # too short to tell
+            return True  # too short to find: it cannot be shown to be the project's (observed: an empty request)
         return subprocess.run(["git", "-C", str(CTX["project"]), "grep", "--untracked", "-F", "-q", "--", needle],
                               capture_output=True).returncode != 0
-    return sum(missing(item) for item in inputs)
+    return [missing(item) for item in inputs]
+
+
+def written_count(entry):
+    """How many of an entry's inputs were written for the run. An entry saved by an earlier
+    version holds the count; now it holds one yes or no an input."""
+    written = (entry or {}).get("written") or 0
+    return sum(written) if isinstance(written, list) else int(written)
+
+
+def _keep_requests():
+    """The requests written for this run, as a file the team can keep: each with what it
+    exercises and what the agent as it is answered. In fleetopt's records, never in the project:
+    copied into the project it becomes the team's own, and the next run finds it there."""
+    entry = CTX.get("entry") or {}
+    written = entry.get("written")
+    if not isinstance(written, list) or not any(written):
+        return None
+    answers = _answers(CTX["base"])
+    path = CTX["entry_path"].parent.parent / "requests" / CTX["entry_path"].with_suffix(".jsonl").name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    when = datetime.date.today().isoformat()
+    with path.open("w", encoding="utf-8") as out:
+        for i, item in enumerate(entry["inputs"]):
+            line = {"input": item, "exercises": (entry.get("about") or [None] * len(written))[i],
+                    "written_for_this_run": bool(written[i])}
+            if i < len(answers) and len(answers) == len(entry["inputs"]):
+                line["the_agents_answer"] = {"on": when, "code": CTX.get("start_state"), "answer": answers[i][1],
+                                             "note": "what the agent answered then, not an expected answer"}
+            out.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
+    CTX["requests_file"] = path
+    return path
 
 
 def source(entry):
     """Where the inputs came from, in words: what the entry says, and what the project's files bear out."""
     told = f"from {entry['inputs_from']}" if entry.get("inputs_from") else "written by fleetopt"
-    n, written = len(entry.get("inputs") or []), entry.get("written") or 0
+    n, written = len(entry.get("inputs") or []), written_count(entry)
     return told + (f" ({written} of {n} written for this run, not found in the project)" if written and entry.get("inputs_from") else "")
 
 
@@ -765,6 +797,7 @@ async def _baseline():
     CTX.update(baseline=stats, max_steps=max(MIN_STEPS, factor * stats["steps"]), untracked=_untracked(),
                reach=_reach(CTX["base"]), bill=bill(CTX["base"]))
     _open_checks()
+    _keep_requests()
     say(f"  as it is: {brief(stats)}")
     missed = CTX["reach"][1]
     if reached():

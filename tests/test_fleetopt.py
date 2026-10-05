@@ -790,11 +790,34 @@ def test_requests_written_for_a_run_are_told_from_the_projects_own(tmp_path):
                 "inputs": ["Where is my order ORD-2024-0042?", "What is the warranty on a laptop bought abroad?",
                            {"question": "Cancel the order I placed yesterday, please"}]}
         entry = tools._entry(plan)
-        assert entry["written"] == 2                                              # found by looking, not by its say-so
+        assert entry["written"] == [False, True, True]                           # found by looking, not by its say-so
+        assert tools.written_count(entry) == 2 and tools.written_count({"written": 4}) == 4   # an entry saved before this
         assert tools.source(entry) == "from examples.txt, and the tester (2 of 3 written for this run, not found in the project)"
         tools.CTX["entry"] = entry
         assert "(2 of 3 written for this run, not found in the project), answers compared with the original's" in tools.proof()
-        assert tools._entry({**plan, "inputs": ["reset password"]})["written"] == 0
+        assert tools._entry({**plan, "inputs": ["reset password"]})["written"] == [False]
+        about = ["a real order", "the docs route, abroad", "a write: cancels an order"]
+        entry = tools._entry({**plan, "about": about})
+        assert entry["about"] == about and tools._entry({**plan, "about": ["one too few"]})["about"] is None
+
+        # after the first measurement the written requests are a file the team can keep, with the agent's own answers
+        tools.CTX.update(entry=entry, base="baseline-x", start_state="v1", entry_path=tmp_path / "out" / "entries" / "p-1-agent.json")
+        with store.connect(tmp_path / "out" / "fleetopt.db") as conn:
+            sid = _session(conn, project=str(project), label="baseline-x", code_state="v1", exit_code=0)
+            for i, answer in enumerate(("It shipped on Monday.", "One year, wherever it was bought.", "Cancelled.")):
+                conn.execute("INSERT INTO runs (session_id, inputs, outputs, start_time) VALUES (?, ?, ?, ?)", (sid, f"q{i}", answer, f"t{i}"))
+        kept = tools._keep_requests()
+        assert kept == tmp_path / "out" / "requests" / "p-1-agent.jsonl" and not list(project.glob("*.jsonl"))   # never in the project
+        rows = [json.loads(line) for line in kept.read_text(encoding="utf-8").splitlines()]
+        assert [r["written_for_this_run"] for r in rows] == [False, True, True] and rows[2]["exercises"] == "a write: cancels an order"
+        assert rows[1]["the_agents_answer"]["answer"] == "One year, wherever it was bought."
+        assert "not an expected answer" in rows[1]["the_agents_answer"]["note"]
+        facts = {"mode": "review", "measured": True, "written": 2, "requests_file": str(kept), "team_cost": 0, "team_runs": 3,
+                 "own_cost": 0, "project": "p", "run_dir": str(tmp_path)}
+        text = "\n".join(session.summary(facts))
+        assert "Requests 2 written for this run, with the agent's own answers:" in text and "copy the file into the project" in text
+        tools.CTX["entry"] = {**entry, "written": [False, False, False]}
+        assert tools._keep_requests() is None                                     # all the team's own: nothing to hand over
     finally:
         tools.CTX.clear()
 

@@ -364,7 +364,8 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         "agent": (ctx.get("entry") or {}).get("name"), "measured": bool(ctx.get("baseline")),
         "baseline": ctx.get("baseline"), "proof": tools.proof() if ctx.get("entry") else None, "reach": tools.reached(),
         "bill": ctx.get("bill") or [], "unaccounted": tools.unaccounted(account, ctx.get("bill") or []) if account else None,
-        "checks": tools.check_facts(),
+        "checks": tools.check_facts(), "written": tools.written_count(ctx.get("entry")),
+        "requests_file": str(ctx["requests_file"]) if ctx.get("requests_file") else None,
         "changes": [{"name": n, "outcome": o, "detail": d} for n, (o, d) in ctx["changes"].items()],
         "kept": kept, "whole": whole, "branch": branch if kept else None,
         "team_runs": runs, "team_cost": team_cost, "own_cost": own + ctx.get("called_usd", 0.0), "account": account,
@@ -408,6 +409,10 @@ def summary(facts):
                      "in the report" + (f"; not accounted for: {', '.join(missing[:6])}" if missing else ""))
     lines.append(f"  Spent    {money(facts['team_cost'])} by the agent on its API key ({facts['team_runs']} runs) · "
                  f"{money(facts['own_cost'])} by fleetopt on your Claude login")
+    if facts.get("requests_file"):  # written for this run: the team's to review, and theirs once it is in the project
+        lines.append(f"  Requests {facts['written']} written for this run, with the agent's own answers: "
+                     f"{_shown(pathlib.Path(facts['requests_file']))}")
+        lines.append("           review them and copy the file into the project to make them the team's")
     checks = facts.get("checks") or {}
     if checks.get("total"):  # the expert's own list, made by code from the recordings, closed by it with its numbers
         lines.append(f"  Checks   {checks['closed']} of {checks['total']} closed (node x check)"

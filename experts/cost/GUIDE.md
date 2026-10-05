@@ -24,13 +24,27 @@ comes back, and when a loop that already exists stops.
 
 ## When the project has nothing to check the agent against
 
-Call the tester before you stop: ask it for requests that exercise this agent, and tell it
-which graph and what you found. Put what it returns in the entry as `inputs`, with
-`inputs_from` saying the tester wrote them and which it took from the project, and never
+Do not stop yet. In this order:
+
+1. **Call the tester.** Tell it which graph and what you found, and ask what it would take
+   to check this agent: the requests it can write from the project alone, and anything it
+   would need that the project does not hold.
+2. **Ask whoever started this run, once**, with what the tester said. Put the choice to
+   them in plain words: they may point you to requests or a dataset of their own that you
+   did not find; they may give what the tester says it lacks; or you go on with the
+   requests the tester can write. Say how many it can write and what they would cover, and
+   what stays uncovered without their help. Ask nothing the tester did not say it needs.
+3. **Go on with what you have.** Their own material, if they gave any, comes first. If they
+   gave what the tester lacked, call the tester again with it. With no one there, use what
+   the tester could write alone.
+
+Put the requests in the entry as `inputs`, with `about` saying what each exercises and
+`inputs_from` saying which the tester wrote and which came from the project, and never
 with expected answers. The answers after a change are then compared with the original's
 on those requests, and your report says under "How it was checked" that the requests were
-written for this run, not the team's. If the tester returns nothing usable, stop as the
-guide says.
+written for this run, not the team's. fleetopt saves them, with the agent's own answers, as
+a file the team can keep. If the tester can write nothing usable and no one answers, stop
+as the guide says.
 
 ## Start from the bill
 
