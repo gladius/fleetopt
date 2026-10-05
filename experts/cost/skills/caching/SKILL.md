@@ -26,8 +26,44 @@ Below the minimum nothing caches - no error, just zero cache tokens.
 | Gemini 3.x Flash, 3.1 Pro | 4,096 | none (implicit) | 0.1x | none |
 
 Not monotonic across generations - a 3K prompt caches on Sonnet 4.5 and silently
-won't on Haiku 4.5 or Gemini 3.x. If the largest stable prefix is under the minimum:
-pattern 2 is not exploitable at this prompt size. Say so, cite the number, stop.
+won't on Haiku 4.5 or Gemini 3.x. If the largest stable prefix is under the minimum,
+nothing caches as it stands: go to "Under the minimum" before you clear it.
+
+## Under the minimum - can the stable part be made to reach it?
+
+A prefix just under the minimum is billed in full on every call, while one just over it
+is billed at the read price. So a larger prompt can cost less. With P the stable prefix
+now, N its size once it reaches the minimum, and r the read price from the table:
+
+- every cached call costs `N x r` for that part, where it cost `P` before;
+- it pays when `P > N x r`: with a 1,024 minimum, a prefix over about 100 tokens at a
+  0.1x read price, or over about 260 at 0.25x. Observed: a 725-token prefix on a model
+  with a 1,024 minimum and a 0.25x read price, reported as "nothing to do";
+- where writes carry a premium (the table's last column), the first call costs
+  `N x 1.25`: count the calls. With k calls sharing the prefix inside the cache's
+  lifetime it pays when `N x 1.25 + (k - 1) x N x r < k x P`;
+- a node called once a request, minutes apart, never reads its own cache: nothing to gain.
+
+What may fill the gap, in this order, because it is content the model is sent anyway or
+should be:
+
+1. **Stable content that sits after volatile content.** Move it up: instructions,
+   tool guidance, output format, examples that are the same on every call but come
+   after a date, a name or a retrieved passage. Nothing is added; the stable run just
+   gets longer.
+2. **Stable content sent in a later message.** A fixed preamble built into the first
+   user turn belongs in the system prompt.
+3. **Tool definitions.** They render before the system prompt and count toward the
+   prefix: a stable, sorted tool list is part of it.
+4. **Content the agent fetches on every request and that never changes** (a policy, a
+   schema, a glossary): placed in the prefix once, it replaces a fetch as well.
+
+Do not pad with text the agent has no use for. It changes what the model reads, and a
+saving that depends on filler is the first thing a team will remove.
+
+The proof is in the next measurement and nowhere else: `cache_read_tokens` above zero
+on that node, cost down, and the answers as before. If cached tokens stay at zero, the
+prefix is still not stable or still too short: undo it.
 
 ## Step 2 - what voids a hit (all providers)
 
@@ -74,7 +110,7 @@ across many requests over a long window. Cached tokens appear as
 ## Do not flag
 
 - Dynamic content in the user turn.
-- Prefixes under the minimum for that model - the most common correct answer.
+- Prefixes far under the minimum, where no stable content exists to bring them to it.
 - Single-shot scripts, or loops that make one call per run - nothing to amortize.
 - A node that already shows `cache_read_tokens > 0` at a high share.
 

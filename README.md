@@ -103,9 +103,12 @@ working with the same tools and under the same rules as every other.
    environment and cloud logins are what the agent runs with.
 2. **Check it as it is** (apply): your eval suite, or its answers to your golden dataset or examples.
 3. **Measure it** as it is: 3 runs, every model call, token and step recorded.
-4. **Find the waste**: prompts that grow, caching not used, a bigger model than a step
-   needs, output with no limit, loops that do not stop early, repeated calls, oversized
-   tool lists.
+4. **Find the waste**, starting from where the tokens go, node by node: prompts that grow,
+   caching not used or a prefix just short of the provider's minimum, a bigger model than
+   a step needs, output with no limit, loops that do not stop early, repeated calls,
+   oversized tool lists, retrieval that brings more than the answers use, and calls
+   between agents that only reword. Work nobody waits for, paid at interactive prices, is
+   reported, not changed.
 5. **Change it** (apply only): every change the evidence supports, each its own commit,
    named in plain words, measured together.
 6. **Prove it**: kept only if it is cheaper past the noise and nothing broke on your
