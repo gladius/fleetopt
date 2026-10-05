@@ -19,6 +19,9 @@ supervisor's final answer say the same thing; the worker's last call follows its
 result with no further tool call. Mechanics: return the tool's raw result from the worker
 (`messages[-1].content` of a nested agent is the reworded one; the tool message before it is
 the data), or let the worker's answer be the final answer instead of restating it.
+Measure before you believe it: a worker's summary can be shorter than the raw result it
+replaces, and then the call is compression, not waste (observed: returning the raw
+search result raised input tokens by 70%).
 
 ## The transcript re-sent at every layer
 

@@ -24,7 +24,8 @@ step that costs more than it saves. This is the most common correct answer.
   built-in deferral - select tools per node in code.
 - **MCP servers bound wholesale** - filter to the tools the node uses.
 - **Same tools bound to every node** - in LangGraph, `bind_tools` per node; a node
-  that cannot call a tool should not pay for its schema.
+  that cannot call a tool should not pay for its schema. Choose per node, not per call:
+  a tool list that changes between calls of one node breaks that node's cache (caching).
 - **Verbose descriptions** - paragraph-long field docs, long enums, nested objects,
   duplicated boilerplate across tools.
 
@@ -37,4 +38,4 @@ step that costs more than it saves. This is the most common correct answer.
 ## Evidence required
 
 Tool count, estimated schema tokens, top offenders, `file:line` of the binding,
-and - after the change - `compare` on input tokens for the affected node.
+and - after the change - input tokens for the affected node from `measure`.

@@ -85,8 +85,8 @@ each sits in when the graph nests them.
 
 ## What to look for
 
-These are priors, not a checklist. Most will not apply to a given agent: dismiss them in
-one glance at the traces. Finding something not listed is a good outcome.
+These are priors for where to look. Most will not apply to a given agent: clear each
+with its number and move on. Finding something not listed is a good outcome.
 
 Rule out first, each has cost a real run before:
 - Caching has a per-provider, per-model **minimum prefix** (512 to 4,096 tokens). Under
@@ -95,7 +95,8 @@ Rule out first, each has cost a real run before:
 - Dynamic content in the **user turn is fine**; only the prefix must be stable.
 - Tool deferral pays only **above ~10K schema tokens**.
 - A **single-shot** agent (one call per run) has nothing to amortize.
-- **Stable literals under ~50 lines** are not a target.
+- **Trimming a stable text under ~50 lines** saves nothing worth a change. (Moving one, to
+  lengthen a prefix that can then be cached, is another matter: caching.)
 
 | Pattern | Trace signature | Mechanics |
 |---|---|---|
@@ -103,7 +104,6 @@ Rule out first, each has cost a real run before:
 | Caching not used | `cache_read_tokens = 0` while the same prefix repeats | caching |
 | Prefix just under the minimum | a stable prefix over a quarter of the provider's minimum, on a node called twice or more a request | caching |
 | Retrieval oversized | retrieved text a large share of `prompt_chars`, the same query fetched again, passages no answer uses | retrieval |
-| Nobody waits for the answer | started by a schedule, a queue or a script over records, at interactive prices | offline-pricing (report only) |
 | Model over-tiered | a frontier model on a node whose output is a label, boolean or route | model-tier |
 | Output not bounded | `output_tokens` near the cap, or long outputs cut downstream | model-tier |
 | No early exit | a loop runs to its cap every trace, later rounds adding little | redundant-work |

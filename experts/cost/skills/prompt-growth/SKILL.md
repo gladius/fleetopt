@@ -7,9 +7,9 @@ description: Diagnose prompts that grow or carry dead weight. Use when prompt_ch
 
 Open this when `prompt_chars` rises across `step` for the same node inside one trace,
 when one node's `prompt_chars` floor is large on every call, or when root `inputs`
-carry big fields. Patterns 1, 7 and 10, plus the input-compression checks.
+carry big fields.
 
-## Growing re-sent context (pattern 1)
+## Growing re-sent context
 
 Signature: same node, same `trace_id`, `prompt_chars` climbing monotonically with
 `step`. The node joins the whole history (`"\n".join(state["notes"])`,
@@ -21,11 +21,11 @@ Fixes, cheapest first:
 - LangChain: `trim_messages(messages, max_tokens=N, strategy="last", token_counter=llm)`.
 - Prune tool results at phase boundaries instead of carrying every verbatim result.
 
-This changes what the model sees. The judge decides whether it changed what the model
-*says*. Trimming that drops a fact the agent needed will fail `judge` - report that as
-a failed candidate, not a tradeoff.
+This changes what the model sees. `keep` decides whether it changed what the model
+*says*: a separate reader compares the answers. Trimming that drops a fact the agent
+needed is refused there - report that as a change that failed, not a tradeoff.
 
-## Oversized constant prompt (pattern 7)
+## Oversized constant prompt
 
 Signature: large `prompt_chars` floor on every call to a node, cache_read = 0.
 Look for reference docs, schemas, style guides or long few-shot blocks inlined
@@ -33,8 +33,10 @@ Look for reference docs, schemas, style guides or long few-shot blocks inlined
 describing tools that are already in the `tools` array (pure duplication - delete).
 
 Fix order: if the prefix is stable and above the provider's cache minimum, cache it
-(see caching.md) before trimming - a cached doc is cheap and deferring it costs
-discovery turns. Trim only what no call uses.
+(caching) before trimming - a cached doc is cheap and deferring it costs discovery
+turns. Trim only what no call uses, and check which side of the minimum the trimmed
+prefix is left on: one cut to just under it stops caching and costs more than before.
+A prefix not far under the minimum is the opposite case (caching: "Under the minimum").
 
 ## Unbounded external input
 
@@ -43,7 +45,7 @@ file contents, DB rows, API responses concatenated with no length gate, truncati
 token count. Fix: gate at the source (`[:N]`, `max_chars`, a summarize step), and log
 what was cut.
 
-## Dead state (pattern 10)
+## Dead state
 
 Signature: fields present in root `inputs` (and threaded through every node's state)
 that never appear in any `prompt`. Query: compare root `inputs` keys against the
@@ -52,7 +54,7 @@ prompts. Fix: stop threading them; state serialisation is not free with a checkp
 ## Do not flag
 
 - A doc that most calls consult end-to-end and that sits in a cached prefix.
-- Literals under ~50 lines.
+- Trimming literals under ~50 lines: nothing worth a change.
 - Dynamic content in the *user* turn - that is where it belongs (only the prefix must
   be stable).
 

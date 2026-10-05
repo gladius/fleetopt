@@ -5,8 +5,8 @@ description: Decide whether prompt caching is exploitable for a node and how to 
 
 # Is caching exploitable here?
 
-Open this when `cache_read_tokens = 0` while a node's prefix repeats across calls
-(pattern 2), or before proposing to cache anything. Decide with two facts from the
+Open this when `cache_read_tokens = 0` while a node's prefix repeats across calls, or
+before proposing to cache anything. Decide with two facts from the
 traces: the **provider/model** of the node, and the **largest stable prefix** it sends.
 
 ## Step 1 - the minimum, per provider (docs checked 2026-09-23; they move)
@@ -118,4 +118,4 @@ across many requests over a long window. Cached tokens appear as
 
 Node, provider, model, largest stable prefix (tokens, from `prompt_chars / 4` or the
 provider's count), breaker type and `file:line`, and after the change the
-`cache_read_tokens` share plus `compare` in dollars.
+`cache_read_tokens` share and the cost from `measure`.

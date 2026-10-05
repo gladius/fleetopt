@@ -7,7 +7,7 @@ description: Decide whether a node's model tier, effort setting or output length
 
 Open this when `SELECT DISTINCT node, model, provider` shows a frontier model on a
 node whose completions are short, structured or low-entropy, or when `output_tokens`
-sits near a cap. Patterns 3 and 9. Order matters: try the cheaper lever first.
+sits near a cap. Order matters: try the cheaper lever first.
 
 ## Effort before tier (Anthropic, OpenAI reasoning models, Gemini thinking)
 
@@ -21,17 +21,17 @@ model at high effort on routine work.
 - OpenAI reasoning models: `reasoning_effort` (`low`/`medium`/`high`).
 - Gemini 2.5+: `thinking_budget` / thinking level; `0` disables on Flash.
 
-## Model over-tiered (pattern 3)
+## Model over-tiered
 
 Signature: a top-tier model on a node whose output is a label, boolean, route, or
 a short extraction (`LENGTH(completion)` small and stable). Fix: a smaller model for
-*that node only* (`ChatX(model=...)` per node, not globally). Must pass `judge`; a
+*that node only* (`ChatX(model=...)` per node, not globally). `keep` must hold it; a
 router that starts routing differently is a regression, not a saving.
 
 Do not flag: nodes whose completions are long, varied, or where the project's tests
 or README say the model choice is deliberate.
 
-## Output not bounded (pattern 9)
+## Output not bounded
 
 Signature: `output_tokens` at or near the cap on many calls, or long completions that
 a downstream node truncates or parses only the head of. Fix: set `max_tokens` to what
@@ -41,10 +41,11 @@ instead of prose plus parsing.
 ## Provider notes
 
 - Caches are per model. Swapping models mid-conversation forfeits the cache.
-- Batch / flex endpoints (OpenAI Batch, Gemini Batch, Anthropic Batches) halve the
-  price for anything not latency-sensitive - relevant for offline nodes only.
+- Batch interfaces and slower service tiers are cheaper for work nobody waits on. That
+  is a decision about how the agent is used: the design review reports it, and it is not
+  a change to make here.
 
 ## Evidence required
 
 Node, model, provider, `output_tokens` distribution, completion shape, `file:line`
-of the model binding, and the `judge` result for the change.
+of the model binding, and what `keep` said of the change.

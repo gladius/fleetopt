@@ -37,22 +37,24 @@ pattern that fits is worth a line too: "supervisor justified: 4 distinct worker 
    against what it did: for the graph that ran and for each graph nested in it. `query`
    has the rest (`SELECT mermaid FROM graphs WHERE driven = 1` is the declared shape).
    Read source to confirm what a number says, not in place of one.
-4. **Name the patterns by what ran, not by what nodes are called.** A node named
+4. **Ask first whether each model call is needed at all.** A step that a function, a
+   rule or a lookup would do is a larger finding than the pattern it sits in.
+5. **Name the patterns by what ran, not by what nodes are called.** A node named
    `supervisor` that never calls a model is a rule, not a supervisor: check the `model`
    column before naming anything. Then check each pattern's "warranted when" against the
    evidence (the table is below).
-5. **Say how wide the evidence is.** A branch never taken on these requests may be
+6. **Say how wide the evidence is.** A branch never taken on these requests may be
    over-built, or may never have been asked. `shape` says how many distinct inputs the
    runs cover, and `measure` names the nodes they never reached: 6 runs of 2 inputs is 2
    inputs. Write "on the requests run", and name the kind of request that would settle it.
-6. **Broken comes first.** A node that raises on every request, or swallows an error and
+7. **Broken comes first.** A node that raises on every request, or swallows an error and
    carries on without that step's result, matters more than any pattern. Report it before
    anything else.
-7. **Give the effect** on cost, latency and reliability, separately, from the recorded
+8. **Give the effect** on cost, latency and reliability, separately, from the recorded
    numbers (model calls saved a request, hops removed, errors avoided). Simplicity is a
    note, never a headline, and you measured one version, so it is what the recordings say
    a change would remove, never a measured saving.
-8. **Step back once.** After the per-pattern findings, ask what the team did not: would a
+9. **Step back once.** After the per-pattern findings, ask what the team did not: would a
    standard construct (one model call, a fixed pipeline, a tool-calling agent) do this
    whole job? Answer in one finding, sized as a redesign, with the number that supports it,
    or say in one line why the structure earns its keep. Defects are no reason to skip

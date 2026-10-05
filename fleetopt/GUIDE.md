@@ -168,8 +168,9 @@ is a result, not a failure.
 
 ## Your report
 
-Your last message is the report and nothing else, in plain words for the team, no ids,
-no tool names. It starts with `What it is for:` and has the shape your expertise gives
+Your last message is the report and nothing else, in plain words for the team: none of
+fleetopt's own ids (run or session numbers) and none of its tool names. Nodes are named
+as the graph names them, by their path where graphs are nested. It starts with `What it is for:` and has the shape your expertise gives
 below.
 
 Say only what the tools reported and what you read in the code. If something did not go

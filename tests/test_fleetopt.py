@@ -356,8 +356,13 @@ def test_an_expert_is_the_shared_guide_its_own_and_every_skill_in_its_folder():
     assert config.SETTING_SOURCES == []
     cost = experts.EXPERTS["cost"]
     on_disk = {p.name for p in (ROOT / "experts" / "cost" / "skills").iterdir() if p.is_dir()}
-    assert on_disk == set(cost.skills) == {"caching", "handoffs", "model-tier", "offline-pricing", "prompt-growth",
-                                           "redundant-work", "retrieval", "tool-surface"}
+    assert on_disk == set(cost.skills) == {"caching", "handoffs", "model-tier", "prompt-growth", "redundant-work",
+                                           "retrieval", "tool-surface"}
+    design = experts.EXPERTS["design"]
+    assert design.skills == ["langgraph", "needs-a-model", "offline-pricing", "patterns"]   # how it is used is design's
+    assert design.checks == ("needs-a-model", "pattern", "warranted", "failures")
+    for stale in ("`judge`", "`compare`", "(pattern ", "caching.md"):       # tools and numbering that no longer exist
+        assert stale not in cost.system() and stale not in design.system(), stale
     assert cost.checks == ("caching", "handoffs", "model-tier", "prompt-growth", "redundant-work", "tool-surface")   # skills may outnumber checks
     assert all(f"fleetopt:{name}" in cost.system() for name in cost.skills)
     system = cost.system()

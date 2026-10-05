@@ -1,6 +1,6 @@
 ---
 name: offline-pricing
-description: Work nobody is waiting for, paid at the price of an instant answer. Report it; do not change it.
+description: Work nobody is waiting for, paid at the price of an instant answer - batch interfaces and slower service tiers. A decision about how the agent is used.
 ---
 
 # Is this work paid for at interactive prices when nobody is waiting?
@@ -20,17 +20,14 @@ Whether that fits is a fact about how the agent is used, not about its code.
 Find out from how it is started (a scheduler, a queue consumer, a notebook, a script
 over a dataset, an endpoint) and what consumes the result.
 
-## Report it, do not make it
+## Why it is a design finding
 
-This one is not yours to change or to prove here:
+- A batch interface returns results hours later and changes how the caller is written.
+- Only the team knows whether an hour's wait is acceptable.
+- fleetopt prices every call at the model's list rate, so a cheaper tier would show no
+  saving in any measurement: nothing here can prove it.
 
-- fleetopt prices every call at the model's list rate, so a cheaper tier shows no saving
-  in its measurements;
-- a batch interface returns results hours later and changes how the caller is written,
-  which is a design change;
-- only the team knows whether an hour's wait is acceptable.
-
-Put it under "Worth changing" with what you found: how the agent is started, which
-calls nobody waits on, their share of the tokens from the bill, and the provider's
-discount for that way of calling. Name the interface for the provider in use, and say
-it is a list price you read, not a measured saving.
+Report it under "A simpler design would do", size `redesign`, with what you found: how
+the agent is started, which calls nobody waits on, their share of the tokens (`query`,
+by node), and the provider's discount for that way of calling. Name the interface for
+the provider in use, and say it is a list price you read, not a measured saving.

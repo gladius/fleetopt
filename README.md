@@ -31,7 +31,7 @@ fleetopt review <project> --expert design     # look only: does the design fit t
 | `--expert` | What it looks for | `review` | `apply` |
 |---|---|---|---|
 | `cost` (default) | Where the agent wastes tokens and money | yes | yes: changes it and proves each change |
-| `design` | Whether the design fits the job: the patterns it is built from by what ran, what is broken, and where a simpler design would do the same | yes | not yet |
+| `design` | Whether the design fits the job: whether each model call is needed at all, the patterns it is built from by what ran, what is broken, where a simpler design would do the same, and work nobody waits for that is paid at interactive prices | yes | not yet |
 | `tester` | The requests that would check the agent: those the project holds, and those written to reach every route and tool. Never an expected answer | yes | no |
 
 When a project has nothing to check its agent against, the cost expert calls the tester to
@@ -107,8 +107,7 @@ working with the same tools and under the same rules as every other.
    caching not used or a prefix just short of the provider's minimum, a bigger model than
    a step needs, output with no limit, loops that do not stop early, repeated calls,
    oversized tool lists, retrieval that brings more than the answers use, and calls
-   between agents that only reword. Work nobody waits for, paid at interactive prices, is
-   reported, not changed.
+   between agents that only reword.
 5. **Change it** (apply only): every change the evidence supports, each its own commit,
    named in plain words, measured together.
 6. **Prove it**: kept only if it is cheaper past the noise and nothing broke on your
