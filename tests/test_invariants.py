@@ -7,6 +7,7 @@ An experiment that breaks one of these broke the product, however good its numbe
 
 import asyncio
 import pathlib
+import subprocess
 import sys
 
 import pytest
@@ -57,6 +58,27 @@ def test_a_review_can_only_look():
     assert set(o.tools) == {"Read", "Grep", "Glob"} and o.hooks is None
     assert set(o.allowed_tools) == {"Read", "Grep", "Glob", "mcp__fleetopt__ask", "mcp__fleetopt__start",
                                     "mcp__fleetopt__measure", "mcp__fleetopt__query", "mcp__fleetopt__checked", "mcp__fleetopt__call"}
+
+
+# --- a run starts on every platform fleetopt claims ----------------------------------
+
+def test_no_experts_prose_reaches_the_command_line(tmp_path):
+    """Windows refuses a command line over 32767 characters, so nothing an expert says may travel
+    on one: the cost expert's prose alone is about 40000, and passing it as `--system-prompt`
+    meant no run ever started on Windows. It goes in a file the session reads, which also keeps
+    the command line from growing when an expert gains a skill."""
+    # The SDK builds the command line, so only the SDK can be asked how long it is. Reaching into
+    # it is sound here: `claude-agent-sdk` is pinned to an exact version in pyproject.toml.
+    from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
+
+    for name, expert in experts.EXPERTS.items():
+        o = options(look_only=True, expert=expert, prompt_dir=tmp_path)
+        assert o.system_prompt["type"] == "file", f"{name}: prose passed as an argument, not a file"
+        assert pathlib.Path(o.system_prompt["path"]).read_text(encoding="utf-8") == expert.system()  # all of it, unchanged
+        transport = SubprocessCLITransport(options=o, prompt="x")
+        transport._cli_path = str(tmp_path / "claude.exe")   # connect() would look for a real one
+        built = len(subprocess.list2cmdline(transport._build_command()))
+        assert built < 8192, f"{name}: {built} characters of command line (cmd.exe's own limit is 8191)"
 
 
 # --- what touches the target is enforced, not asked ----------------------------------

@@ -19,6 +19,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 
 from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
@@ -109,7 +110,25 @@ def guard_bash():
     return hook
 
 
-def build_options(project, model=None, max_usd=None, start_branch=None, look_only=False, max_turns=150, expert=COST):
+def _system_file(expert, where=None):
+    """The expert's prose in a file for the session to read, never in the command line. Windows
+    caps a whole command line at 32767 characters and the cost expert's prose is about 40000, so
+    no run started on Windows at all - and said nothing true about why, since the SDK reports
+    whatever makes spawning raise `FileNotFoundError` as "Claude Code not found", including the
+    WinError CreateProcess raises here (206, "the filename or extension is too long"). Linux
+    allows about 2MB (ARG_MAX) and never showed it. Same prose either way, and what the command
+    line carries no longer grows with an expert. `where`: with the run's other records."""
+    text = expert.system()
+    where = pathlib.Path(where) if where else pathlib.Path(tempfile.gettempdir()) / "fleetopt-prompts"
+    where.mkdir(parents=True, exist_ok=True)
+    # Named by what is in it: runs of one expert share a file, a changed expert gets its own.
+    path = where / f"system-{expert.name}-{hashlib.sha1(text.encode('utf-8')).hexdigest()[:8]}.md"
+    path.write_text(text, encoding="utf-8")
+    return {"type": "file", "path": str(path)}
+
+
+def build_options(project, model=None, max_usd=None, start_branch=None, look_only=False, max_turns=150, expert=COST,
+                  prompt_dir=None):
     """Everything the session is allowed to be. `look_only`: no Bash, Edit, Write, save_change,
     keep or undo at all."""
     reads = ["Read", "Grep", "Glob"]
@@ -122,7 +141,7 @@ def build_options(project, model=None, max_usd=None, start_branch=None, look_onl
     return ClaudeAgentOptions(
         cwd=str(project), model=model or expert.model or MODEL,
         fallback_model=FALLBACK if (model or expert.model or MODEL) != FALLBACK else MODEL,
-        system_prompt=expert.system(),
+        system_prompt=_system_file(expert, prompt_dir),
         mcp_servers={"fleetopt": tools.server(look_only, expert)},
         # Built-ins by allowlist: no web, no scheduler, no subagents. Nothing is asked;
         # what keeps each tool safe is enforced by the hooks and inside fleetopt's tools.
@@ -148,7 +167,8 @@ async def consult(expert, task, project, *, asked_by, usd=1.0, minutes=15, model
     chosen = model or os.environ.get("FLEETOPT_MODEL") or expert.model or MODEL
     options = ClaudeAgentOptions(
         cwd=str(project), model=chosen, fallback_model=FALLBACK if chosen != FALLBACK else MODEL,
-        system_prompt=expert.system(), mcp_servers={"fleetopt": tools.server(True, expert, called=True)},
+        system_prompt=_system_file(expert, tools.CTX.get("run_dir")),
+        mcp_servers={"fleetopt": tools.server(True, expert, called=True)},
         tools=["Read", "Grep", "Glob"], allowed_tools=[*tools.names(True, expert, called=True), "Read", "Grep", "Glob"],
         disallowed_tools=["AskUserQuestion", *config.DENY_READS], setting_sources=config.SETTING_SOURCES,
         extra_args=config.sdk_args(), strict_mcp_config=True, skills=[], env=config.SDK_ENV, max_turns=60,
@@ -299,8 +319,8 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
 
     prompt = _prompt(expert, look_only, entry, evals, graph, team, minutes, max_usd, branch, earlier,
                      _told(tools.told_path(path)))
-    options = build_options(project, model, max_usd, start_branch, look_only, expert=expert)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir.mkdir(parents=True, exist_ok=True)   # before the options: the expert's prose is written into it
+    options = build_options(project, model, max_usd, start_branch, look_only, expert=expert, prompt_dir=run_dir)
     log_file = (run_dir / "log.txt").open("w", encoding="utf-8")
 
     def log(line):  # everything, as it happens: `tail -f` it to follow a run in full
@@ -341,7 +361,8 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         if isinstance(exc, CLIConnectionError) and not heard:  # it never started: nothing to sum up, and all of why
             log(f"session never started: {exc}")           # (observed: only "Claude Code not found" was shown)
             raise RuntimeError("Claude Code could not be started, so nothing was run. The SDK said:\n"
-                               + "\n".join(f"    {line}" for line in str(exc).splitlines())) from exc
+                               + "\n".join(f"    {line}" for line in str(exc).splitlines())
+                               + _also(exc)) from exc
         log(f"session ended: {str(exc).splitlines()[0][:200]}")
         tools.say(f"  the session ended early: {str(exc).splitlines()[0][:120]}")
         stopped = False
@@ -439,6 +460,20 @@ def _sentence(text):
     """The first sentence of what the agent said, for a line on screen."""
     first = re.split(r"(?<=[.!?:])\s|\n", text.strip(), maxsplit=1)[0].strip().lstrip("#*- ").rstrip(":")
     return first[:157] + "..." if len(first) > 160 else first
+
+
+def _also(exc):
+    """What the SDK's message leaves out, when it blames a binary that is there. It reports
+    anything that makes spawning raise `FileNotFoundError` as "Claude Code not found", so a
+    command line Windows refuses for its length reads as a broken install (observed: a day lost
+    to reinstalling an SDK that was fine). Empty when the binary really is missing."""
+    named = re.search(r"not found at: (.+)", str(exc))
+    if not (named and pathlib.Path(named.group(1).strip()).exists()):
+        return ""
+    if getattr(exc.__cause__, "winerror", None) == 206:
+        return ("\n  That file is there. Windows refused the command line instead, for being longer than "
+                "32767\n  characters; keeping it short is fleetopt's own job, so this is a bug in fleetopt.")
+    return f"\n  That file is there, so nothing is missing. What actually failed: {exc.__cause__!r}"
 
 
 def _report_only(text):
