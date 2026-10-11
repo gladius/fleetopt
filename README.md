@@ -33,6 +33,7 @@ fleetopt review <project> --expert design     # look only: does the design fit t
 | `cost` (default) | Where the agent wastes tokens and money | yes | yes: changes it and proves each change |
 | `design` | Whether the design fits the job: whether each model call is needed at all, the patterns it is built from by what ran, what is broken, where a simpler design would do the same, and work nobody waits for that is paid at interactive prices | yes | not yet |
 | `tester` | The requests that would check the agent: those the project holds, and those written to reach every route and tool. Never an expected answer | yes | no |
+| `redteam` | What a hostile request makes it do: an instruction hidden in a request or a record, a request for its own instructions or settings, one outside its job, arguments planted for a tool, work that never ends. Judged by what it did in the recordings, never by what it said | yes | no |
 
 When a project has nothing to check its agent against, the cost expert calls the tester to
 learn what it can write alone and what it would need, then asks you once, at the terminal:

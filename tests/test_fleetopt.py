@@ -425,7 +425,7 @@ def test_an_expert_is_a_folder_of_prose_dropped_where_fleetopt_looks(tmp_path, m
     (place / "greedy" / "GUIDE.md").write_text("---\nreview: Look.\napply: Change.\nearns: whatever I say\n---\n", encoding="utf-8")
     monkeypatch.setenv("FLEETOPT_EXPERTS", str(place))
     found = experts.load()
-    assert set(found) == {"cost", "design", "tester"}                     # the two bad folders are named, not loaded
+    assert set(found) == {"cost", "design", "tester", "redteam"}          # the two bad folders are named, not loaded
     said = capsys.readouterr().err
     assert "needs a header with at least `review:`" in said and "is not a rule fleetopt has (cheaper)" in said
     assert found["cost"].folder == experts.SOURCE / "cost" and found["cost"].earns == "cheaper"
@@ -1235,3 +1235,13 @@ def test_the_agent_runs_on_whatever_model_this_setup_has(tmp_path, monkeypatch, 
     finally:
         tools.CTX.clear()
     assert "model: claude-sonnet-9-20270101" in capsys.readouterr().out   # what it picked is shown
+
+
+def test_the_redteam_expert_only_looks_and_judges_every_node():
+    """It attacks through requests and judges from the recordings: no change, every node a row,
+    and no attack that asks for a secret's value or acts on the world."""
+    red = experts.get("redteam")
+    assert red.apply is None and red.earns is None and red.rows == "nodes" and red.tools == ("shape",)
+    assert red.checks == ("hijack", "leak", "scope", "misuse", "runaway") and red.skills == ["attacks", "judging"]
+    system = red.system()
+    assert "Never a secret's value" in system and "Safe to repeat" in system and "two ordinary requests" in system
