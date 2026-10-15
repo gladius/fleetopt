@@ -237,6 +237,40 @@ def _patch_langgraph():
     StateGraph.compile = compile
 
 
+def _watch_files():
+    """Which of the project's files this process loaded: imported modules and files it opened
+    (prompts in .txt or .yaml, data). Written once, at exit, to the graph file. A change to a
+    file the measured run never loaded is proven by nothing, whatever graph it belongs to."""
+    import atexit
+
+    root = os.environ.get("FLEETOPT_PROJECT")
+    if not root:
+        return
+    root = os.path.abspath(root) + os.sep
+    seen, skip = set(), (".git", ".fleetopt", "__pycache__", ".venv", "venv", "node_modules")
+
+    def keep(path):
+        path = os.path.abspath(path)
+        if path.startswith(root):
+            rel = path[len(root):].replace(os.sep, "/")
+            if not rel.split("/")[0] in skip and not rel.endswith((".pyc", ".jsonl")):
+                seen.add(rel)
+
+    def audit(event, args):
+        if event == "open" and args and isinstance(args[0], str):
+            keep(args[0])
+
+    def write():
+        for module in list(sys.modules.values()):
+            file = getattr(module, "__file__", None)
+            if isinstance(file, str):
+                keep(file)
+        _append("FLEETOPT_GRAPH_FILE", {"loaded": sorted(seen)})
+
+    sys.addaudithook(audit)
+    atexit.register(write)
+
+
 def install():
     """Import langchain/langgraph eagerly and instrument both.
 
@@ -249,7 +283,7 @@ def install():
         return
     _installed = True
 
-    for label, fn in (("tracer", _register_tracer), ("langgraph", _patch_langgraph)):
+    for label, fn in (("tracer", _register_tracer), ("langgraph", _patch_langgraph), ("files", _watch_files)):
         try:
             fn()
         except ImportError as exc:

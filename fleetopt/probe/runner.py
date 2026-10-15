@@ -88,6 +88,7 @@ def execute(project, run_cmd, out_dir, with_io=False, timeout=None, max_steps=No
         [str(HOOKS_DIR)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
     )
     env["FLEETOPT_CAPTURE"] = "1"
+    env["FLEETOPT_PROJECT"] = str(pathlib.Path(project).resolve())
     env["FLEETOPT_TRACE_FILE"] = str(traces)
     env["FLEETOPT_GRAPH_FILE"] = str(graphs)
     if with_io:

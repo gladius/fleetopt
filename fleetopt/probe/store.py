@@ -76,7 +76,8 @@ CREATE TABLE IF NOT EXISTS checks (
 );
 """
 # Columns added since the first release, last in their table: a db made before them gets them.
-ADDED = (("runs", "path", "TEXT"), ("graphs", "driven", "INTEGER"), ("graphs", "sources", "TEXT"))
+ADDED = (("runs", "path", "TEXT"), ("graphs", "driven", "INTEGER"), ("graphs", "sources", "TEXT"),
+         ("sessions", "loaded", "TEXT"))
 
 
 def connect(path):
@@ -187,6 +188,9 @@ def ingest_graphs(conn, session_id, path):
         if not line.strip():
             continue
         g = json.loads(line)
+        if "loaded" in g:  # the project's files the run loaded, one record a process
+            conn.execute("UPDATE sessions SET loaded = ? WHERE id = ?", (json.dumps(g["loaded"]), session_id))
+            continue
         key = (g.get("name"), json.dumps(g.get("nodes")), json.dumps(g.get("edges")))
         driven = bool(g.get("driven")) or (key in rows and rows[key][5])
         rows[key] = (session_id, *key, g.get("mermaid"), int(driven), json.dumps(g.get("sources") or {}))

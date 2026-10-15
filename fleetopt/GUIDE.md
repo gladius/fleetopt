@@ -150,8 +150,9 @@ The entry:
   keep the rest. If it does not say which, `undo` half of them by name, measure, and keep
   what passes; go on splitting only the half that fails.
 - **Change only what the inputs reach.** The first `measure` names the nodes they never
-  ran, and the other graphs the project compiles. A change there saves nothing here and is
-  proven by nothing, and `keep` refuses a bundle that edits such a node's code: report it as worth changing, with the kind of
+  ran, and the other graphs the project compiles. A change there, or to any file the
+  measured runs never loaded (another agent's module, a prompt file nothing read), saves
+  nothing here and is proven by nothing, and `keep` refuses a bundle that makes it: report it as worth changing, with the kind of
   request that would reach it, and leave the code as it is.
 - **Never touch the team's tests, evals or eval data.** They are how the team knows the
   agent works; `keep` refuses a change to them.

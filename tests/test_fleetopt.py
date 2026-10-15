@@ -272,6 +272,35 @@ def test_a_change_to_another_graph_the_project_compiles_is_refused(tmp_path):
                          "team_cost": 0, "team_runs": 3, "own_cost": 0, "project": "p", "run_dir": str(tmp_path)}))
 
 
+def test_a_change_to_a_file_the_measured_run_never_loaded_is_refused(tmp_path):
+    project = _fixture(tmp_path)
+    (project / "prompt.txt").write_text("Plan research on", encoding="utf-8")
+    (project / "other_agent.py").write_text("GRAPH = None\n", encoding="utf-8")
+    git = lambda *a: subprocess.run(["git", "-C", str(project), "-c", "user.email=t@t", "-c", "user.name=t", *a],
+                                    check=True, capture_output=True, text=True).stdout.strip()
+    git("init", "-q", "-b", "main"), git("add", "-A"), git("commit", "-qm", "base")
+    assert _captured(tmp_path, "agent.py:graph")[1] == 0
+    conn = store.connect(tmp_path / "out" / "fleetopt.db")
+    loaded = json.loads(conn.execute("SELECT loaded FROM sessions").fetchone()[0])
+    assert "agent.py" in loaded and "fake_model.py" in loaded and "other_agent.py" not in loaded   # imports
+    assert not any(f.startswith((".git", ".fleetopt")) or f.endswith(".pyc") for f in loaded)
+    tools.CTX.clear()
+    tools.CTX.update(out=tmp_path / "out", project=project, start_sha=git("rev-parse", "HEAD"))
+    try:
+        for file, text in (("other_agent.py", "GRAPH = 1\n"), ("prompt.txt", "Plan\n")):   # never imported, never opened
+            (project / file).write_text(text, encoding="utf-8")
+        git("commit", "-qam", "a change")
+        assert tools._unloaded("x") == ["other_agent.py", "prompt.txt"]
+        git("reset", "-q", "--hard", tools.CTX["start_sha"])
+        (project / "agent.py").write_text((project / "agent.py").read_text(encoding="utf-8").replace("Summarize:", "Sum up:"),
+                                          encoding="utf-8")
+        git("commit", "-qam", "a change")
+        assert tools._unloaded("x") == []
+        assert tools._unloaded("never-measured") == []
+    finally:
+        tools.CTX.clear()
+
+
 def test_a_change_to_a_node_the_requests_never_ran_is_refused(tmp_path):
     project = _fixture(tmp_path)
     git = lambda *a: subprocess.run(["git", "-C", str(project), "-c", "user.email=t@t", "-c", "user.name=t", *a],

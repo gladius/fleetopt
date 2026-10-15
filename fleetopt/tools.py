@@ -743,6 +743,22 @@ def _unproven():
     return found
 
 
+def _unloaded(label):
+    """Files the changes since the original edit that the runs under `label` never loaded:
+    imported or opened. A project ships what it likes (20 graphs in 20 modules, prompts in
+    files); a change the measured run never touched is proven by nothing, whatever it is in.
+    Empty when a run did not record its files (an older recording)."""
+    ids = _ids(label)
+    with _conn() as conn:
+        rows = [r["loaded"] for r in conn.execute(
+            f"SELECT loaded FROM sessions WHERE id IN ({','.join('?' * len(ids))})", ids)] if ids else []
+    if not rows or not all(rows):
+        return []
+    loaded = set().union(*(json.loads(r) for r in rows))
+    changed = _git("diff", "--relative", "--name-only", CTX["start_sha"], "HEAD").splitlines()
+    return sorted(f for f in changed if f and f not in loaded)
+
+
 def _unproven_words(found):
     return ("it changes " + ", ".join(f"{node} ({file})" for node, file in found[:3])
             + ", which the requests never ran: nothing here proves that change")
@@ -950,6 +966,10 @@ async def keep(args):
     unproven = _unproven()
     if unproven:
         return _refuse(_unproven_words(unproven))
+    unloaded = _unloaded(label)
+    if unloaded:
+        return _refuse(f"it changes {', '.join(unloaded[:3])}, which the measured runs never loaded: nothing here "
+                       "proves that change")
     stop = over()
     if stop:
         return _ok(f"Refused: {stop}. Undo what is not kept, and report.")
