@@ -6,15 +6,17 @@ fleetopt ever executes in a target: a named graph, called with given inputs. Nev
 command somebody guessed.
 
     <the project's python> driver.py <entry.json> [--limit N]
+    <the project's python> driver.py --env < entry.json     what its env files add, as JSON
 
-Exit 0 once every input was put to the agent, whatever became of them; 2 when the graph
-could not be loaded at all.
+Exit 0 once every input was put to the agent, whatever became of them; 2 when the graph or
+its env files could not be loaded at all.
 """
 
 import asyncio
 import importlib
 import importlib.util
 import inspect
+import io
 import json
 import os
 import pathlib
@@ -25,21 +27,52 @@ import uuid
 BLANK = {"string": "", "array": [], "integer": 0, "number": 0, "boolean": False, "object": {}}
 
 
+def env_values(path):
+    """An env file's names and values, read as the team's own tooling reads it: with their
+    python-dotenv when the project has it (what `langgraph dev` loads an env file with), else as
+    KEY=VALUE lines. A BOM (Windows editors write one) is not part of the first name."""
+    try:
+        text = pathlib.Path(path).read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        raise ValueError(f"{path} is not UTF-8 text (Windows PowerShell 5.1's `>` writes UTF-16): "
+                         "the team's tools cannot read it either") from None
+    try:
+        from dotenv import dotenv_values
+        values = dotenv_values(stream=io.StringIO(text))
+    except ImportError:
+        values = {}
+        for line in text.splitlines():
+            line = line.strip().removeprefix("export ").strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            value = value.strip()
+            if value[:1] not in ("'", '"'):
+                value = value.split(" #")[0].strip()  # an inline comment
+            values[key.strip()] = value.strip("'\"")
+    ran = [k for k, v in values.items() if v and v.startswith(("$(", "`"))]
+    if ran:  # observed in .envrc files: `export KEY=$(op read ...)`; a file gives the command, not the key
+        raise ValueError(f"{path} sets {', '.join(ran)} by running a command, which fleetopt never does: set "
+                         "them in this terminal before running fleetopt (a name already set is kept)")
+    return {k: v for k, v in values.items() if v is not None}
+
+
 def load_env(path, env=os.environ):
-    """KEY=VALUE lines into the environment, the way the project's own tooling would.
-    What is already set wins."""
-    for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
-        line = line.strip().removeprefix("export ").strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        env.setdefault(key.strip(), value.strip().strip("'\""))
+    """An env file into the environment. What is already set wins, as with the team's own tooling."""
+    for key, value in env_values(path).items():
+        env.setdefault(key, value)
 
 
 def env_files(entry, root):
-    """The entry's env files that exist, in the order it names them."""
+    """The entry's env files, named from the project folder, in the order it names them. One that
+    is not there stops the run: started without it, the agent fails later on a key and the
+    failure looks like the agent's."""
     named = entry.get("env_file") or []
-    return [root / f for f in ([named] if isinstance(named, str) else named) if (root / f).is_file()]
+    files = [root / pathlib.Path(f).expanduser() for f in ([named] if isinstance(named, str) else named)]
+    gone = [str(f) for f in files if not f.is_file()]
+    if gone:
+        raise ValueError(f"env file not there: {', '.join(gone)} (an env file is named from the project folder)")
+    return files
 
 
 def resolve(spec, root, paths):
@@ -142,6 +175,17 @@ def platform(graph, entry):
 
 
 def main(argv):
+    if argv[0] == "--env":  # what the env files add, for a command fleetopt runs in their place (the team's evals)
+        entry = json.loads(sys.stdin.read())
+        before = dict(os.environ)
+        try:
+            for path in env_files(entry, pathlib.Path(entry["project"])):
+                load_env(path)
+        except (OSError, ValueError) as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        print(json.dumps({k: v for k, v in os.environ.items() if before.get(k) != v}))
+        return 0
     entry = json.loads(pathlib.Path(argv[0]).read_text(encoding="utf-8"))
     limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else None
     root = pathlib.Path(entry["project"])
@@ -151,8 +195,12 @@ def main(argv):
     # `import services...` in their own code failed.
     paths = list(dict.fromkeys(str((root / p).resolve()) for p in [*entry.get("paths", ["."]), entry.get("cwd") or ".", "."]))
     sys.path[:0] = [p for p in paths if p not in sys.path]
-    for path in env_files(entry, root):
-        load_env(path)
+    try:
+        for path in env_files(entry, root):
+            load_env(path)
+    except (OSError, ValueError) as exc:
+        print(f"[driver] could not load the env files: {exc}")
+        return 2
     os.environ.update(entry.get("env") or {})
 
     try:

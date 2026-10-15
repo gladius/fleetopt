@@ -237,9 +237,39 @@ def test_a_project_with_several_graphs_is_judged_by_the_one_that_ran(tmp_path):
         assert tools._reach("before-paths")[:2] == (["guard", "model", "tools"], ["block"])
         # with them: exact, though 'model' and 'tools' both ran somewhere and 'team' and 'solo' both ran
         assert tools._reach("with-paths")[:2] == (["team:model", "solo:tools"], ["team:tools", "solo:model"])
-        assert tools._reach("never-measured") == ([], [], {}) and tools.reached() == ""
+        assert tools._reach("never-measured") == ([], [], {}, []) and tools.reached() == ""
     finally:
         tools.CTX.clear()
+
+
+def test_a_change_to_another_graph_the_project_compiles_is_refused(tmp_path):
+    project = _fixture(tmp_path)
+    (project / "both.py").write_text("import nested  # noqa: F401\nfrom agent import graph  # noqa: F401\n", encoding="utf-8")
+    git = lambda *a: subprocess.run(["git", "-C", str(project), "-c", "user.email=t@t", "-c", "user.name=t", *a],
+                                    check=True, capture_output=True, text=True).stdout.strip()
+    git("init", "-q", "-b", "main"), git("add", "-A"), git("commit", "-qm", "base")
+    assert _captured(tmp_path, "both.py:graph")[1] == 0   # one run compiles both; only agent's graph is run
+
+    def changed(file, old, new):
+        git("reset", "-q", "--hard", tools.CTX["start_sha"])
+        path = project / file
+        path.write_text(path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
+        git("commit", "-qam", "a change")
+        return tools._unproven()
+
+    tools.CTX.clear()
+    tools.CTX.update(out=tmp_path / "out", project=project, start_sha=git("rev-parse", "HEAD"))
+    try:
+        tools.CTX["reach"] = tools._reach("x")
+        assert tools.CTX["reach"][1] == []                                      # the graph that ran: all reached
+        assert changed("nested.py", "(checked with the calculator)", "(checked)") == [
+            ("math:tools of another graph", "nested.py")]   # before: nothing had measured it, and keep let it through
+        assert changed("agent.py", "Summarize:", "Sum up:") == []               # the graph that ran
+    finally:
+        tools.CTX.clear()
+    assert "Graphs   the project ships 2 (agent, other); this run measured one: agent.py:graph" in "\n".join(
+        session.summary({"mode": "review", "measured": True, "declared": ["agent", "other"], "graph": "agent.py:graph",
+                         "team_cost": 0, "team_runs": 3, "own_cost": 0, "project": "p", "run_dir": str(tmp_path)}))
 
 
 def test_a_change_to_a_node_the_requests_never_ran_is_refused(tmp_path):

@@ -14,7 +14,7 @@ import tempfile
 import time
 
 from fleetopt import config
-from fleetopt.probe import driver, store
+from fleetopt.probe import store
 
 HOOKS_DIR = pathlib.Path(__file__).parent / "hooks"
 TIMED_OUT = 124  # the exit code of a run that was stopped for not ending
@@ -65,7 +65,7 @@ def code_state(project):
     return f"{head[:12]}+{hashlib.sha1(diff.encode()).hexdigest()[:8]}"
 
 
-def execute(project, run_cmd, out_dir, with_io=False, timeout=None, max_steps=None, path_first=None, env_files=()):
+def execute(project, run_cmd, out_dir, with_io=False, timeout=None, max_steps=None, path_first=None, env_extra=None):
     """Run run_cmd under instrumentation. Touches no database, so several can run
     at once. Returns (raw_dir, traces_path, graphs_path, returncode). A run that has
     not ended after `timeout` seconds is stopped and returns TIMED_OUT: an agent
@@ -82,8 +82,8 @@ def execute(project, run_cmd, out_dir, with_io=False, timeout=None, max_steps=No
     env = config.child_env()
     if path_first:  # the project's own environment first, so `pytest` or `python` in a command are its own
         env["PATH"] = os.pathsep.join([str(path_first), env.get("PATH", "")])
-    for path in env_files:  # the project's env files, into its process only, as the driver loads them
-        driver.load_env(path, env)
+    for key, value in (env_extra or {}).items():  # the project's env files, into its process only
+        env.setdefault(key, value)
     env["PYTHONPATH"] = os.pathsep.join(
         [str(HOOKS_DIR)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
     )

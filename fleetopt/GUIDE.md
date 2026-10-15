@@ -81,8 +81,9 @@ their launcher adds (`langgraph dev` loading the env file `langgraph.json` names
 Makefile or compose file loading one, a start from a subfolder), so the entry says that.
 
 What the driver does with an entry: it starts in `cwd`, and for each input it puts the
-project directory and `paths` on `sys.path`, loads each `env_file` in order inside the
-agent's process (a name already set is kept), sets `env`, imports `graph`, and calls
+project directory and `paths` on `sys.path`, loads each `env_file` (named from the project
+folder) in order inside the agent's process, read as the team's python-dotenv reads it (a
+name already set is kept), sets `env`, imports `graph`, and calls
 
     graph.ainvoke(input, config={"configurable": {"thread_id": ..., **config}}, context=context)
 
@@ -101,7 +102,8 @@ without a store an empty in-memory one, as a hosting platform would.
 - **Run it as it runs here**: find how the team starts it (`langgraph.json`, the README, a
   Makefile, a compose file, `.envrc`, the code's own `load_dotenv` or settings class) and
   name the env files it loads and the folder it starts from. You never see an env file's
-  values; its names are listed for you, with the credential names set in this terminal.
+  values; its names are listed for you, with the credential names set in this terminal,
+  each marked when it is empty or set by a command.
   Plain settings that are not secrets go in `env`. If it supports several providers,
   choose one whose key is set. Never put a key, token or password in an entry.
 - **Inputs**: what you found to check it against, as the agent is sent it: all of it up
@@ -118,7 +120,9 @@ without a store an empty in-memory one, as a hosting platform would.
   one is there; then decide from what the project shows, or stop and list what is
   missing. Never ask for a key, token or password.
 - **Reading a failed try**: a key or file reported missing is first a question of
-  `env_file` and `cwd`: check them against how the team starts it and try again. A
+  `env_file` and `cwd`: check them against how the team starts it and try again. A key the
+  driver cannot load from a file (set by a command, a vault, a shell script) is set in this
+  terminal by the person running fleetopt: stop and say which. A
   missing module, a refused key, a service that cannot be reached, a file the project
   does not have: that is the team's to provide. Stop and list it. An
   input that did not fit: fix the entry. The model answered and the agent's own code then
@@ -146,8 +150,8 @@ The entry:
   keep the rest. If it does not say which, `undo` half of them by name, measure, and keep
   what passes; go on splitting only the half that fails.
 - **Change only what the inputs reach.** The first `measure` names the nodes they never
-  ran. A change there saves nothing here and is proven by nothing, and `keep` refuses a
-  bundle that edits such a node's code: report it as worth changing, with the kind of
+  ran, and the other graphs the project compiles. A change there saves nothing here and is
+  proven by nothing, and `keep` refuses a bundle that edits such a node's code: report it as worth changing, with the kind of
   request that would reach it, and leave the code as it is.
 - **Never touch the team's tests, evals or eval data.** They are how the team knows the
   agent works; `keep` refuses a change to them.

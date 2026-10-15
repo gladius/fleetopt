@@ -143,14 +143,17 @@ def test_the_projects_python_is_used_as_named_wherever_it_lives(project, tmp_pat
 
 def test_every_env_file_is_shown_by_its_names_never_its_values(project, monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "from-a-login")
-    (project / ".env").write_text("export AZURE_OPENAI_KEY=sk-secret\n# OLD=1\nMODEL=x\n", encoding="utf-8")
+    monkeypatch.setenv("OPENAI_API_KEY", "")                       # set empty here: it hides the file's
+    (project / ".env").write_text("\ufeffexport AZURE_OPENAI_KEY=sk-secret\n# OLD=1\nMODEL=x\nEMPTY_KEY=\n"
+                                  "VAULT_TOKEN=$(op read x)\n", encoding="utf-8")   # a Windows editor's BOM
     (project / "app").mkdir()
     (project / "app" / ".env.local").write_text("GOOGLE_APPLICATION_CREDENTIALS=./sa.json\n", encoding="utf-8")
     (project / ".venv").mkdir()
     (project / ".venv" / ".env").write_text("NOT_THE_PROJECTS=1\n", encoding="utf-8")
     files, shell = tools.env_names(project)
-    assert files == {".env": ["AZURE_OPENAI_KEY", "MODEL"], "app/.env.local": ["GOOGLE_APPLICATION_CREDENTIALS"]}
-    assert "AWS_SECRET_ACCESS_KEY" in shell
+    assert files == {".env": ["AZURE_OPENAI_KEY", "MODEL", "EMPTY_KEY (empty)", "VAULT_TOKEN (set by a command)"],
+                     "app/.env.local": ["GOOGLE_APPLICATION_CREDENTIALS"]}
+    assert "AWS_SECRET_ACCESS_KEY" in shell and "OPENAI_API_KEY (empty)" in shell
     assert "sk-secret" not in str(files) and "from-a-login" not in str(shell)
 
 
@@ -173,12 +176,27 @@ def test_the_driver_runs_it_from_its_folder_with_its_env_files(tmp_path):
     assert "SEEN from-app from-root app" in out          # in order, a name already set is kept; started in its folder
 
 
+def test_an_env_file_is_read_as_the_teams_tools_read_it(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text('\ufeffKEY=k1\nURL=http://x # prod\nQUOTED="a # b"\n', encoding="utf-8")   # BOM, inline comment
+    assert driver.env_values(env) == {"KEY": "k1", "URL": "http://x", "QUOTED": "a # b"}
+    env.write_text("export TOKEN=$(op read vault/x)\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="TOKEN by running a command"):
+        driver.env_values(env)
+    env.write_text("KEY=k1\n", encoding="utf-16")
+    with pytest.raises(ValueError, match="not UTF-8"):
+        driver.env_values(env)
+
+
 def test_an_entry_says_where_it_starts_and_which_env_files(project, tmp_path):
     _trying(project, tmp_path)
     try:
         (project / "app").mkdir()
+        (project / ".env").write_text("A=1\n", encoding="utf-8")
         entry = tools._entry({**ENTRY, "cwd": "app", "env_file": ".env"})
         assert (entry["cwd"], entry["env_file"]) == ("app", [".env"])
+        with pytest.raises(ValueError, match="env file not there"):   # not skipped, to fail later on a key
+            tools._entry({**ENTRY, "cwd": "app", "env_file": "app/.env"})
         with pytest.raises(ValueError, match="cwd must be a folder in the project"):
             tools._entry({**ENTRY, "cwd": ".."})
     finally:

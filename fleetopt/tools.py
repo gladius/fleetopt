@@ -41,6 +41,7 @@ import time
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from fleetopt import config
 from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
 from fleetopt.evidence import shape as shape_mod
@@ -173,16 +174,35 @@ def spread(items, n):
 
 def env_names(project):
     """({env file: the names it sets}, credential names set in this terminal), for every env
-    file in the project. Names only: a value is never kept or shown."""
+    file in the project, each name marked when it is empty or set by a command. Names only: a
+    value is never kept or shown."""
+    def state(name, value):
+        value = value.strip().strip("'\"")
+        return name + (" (empty)" if not value else " (set by a command)" if value.startswith(("$(", "`")) else "")
+
     files = {}
     for folder, dirs, found in os.walk(project):
         dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in ("node_modules", "venv", "__pycache__"))
         for name in sorted(n for n in found if n == ".env" or n.startswith(".env.") or n.endswith(".env")):
-            lines = (pathlib.Path(folder) / name).read_text(encoding="utf-8", errors="replace").splitlines()
+            lines = (pathlib.Path(folder) / name).read_text(encoding="utf-8-sig", errors="replace").splitlines()
             files[(pathlib.Path(folder) / name).relative_to(project).as_posix()] = [
-                key for line in lines if "=" in line and not line.strip().startswith("#")
-                if (key := line.strip().removeprefix("export ").partition("=")[0].strip())]
-    return files, sorted(k for k in os.environ if SECRET.search(k) and not k.startswith("FLEETOPT_"))
+                state(key, value) for line in lines if "=" in line and not line.strip().startswith("#")
+                for key, _, value in [line.strip().removeprefix("export ").partition("=")] if key.strip()]
+    return files, sorted(state(k, v) for k, v in os.environ.items() if SECRET.search(k) and not k.startswith("FLEETOPT_"))
+
+
+def declared(project):
+    """The names of the graphs the project ships: every langgraph.json in it, wherever it is."""
+    names = []
+    for folder, dirs, found in os.walk(project):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in ("node_modules", "venv", "__pycache__"))
+        if "langgraph.json" in found:
+            try:
+                names += list(json.loads((pathlib.Path(folder) / "langgraph.json").read_text(encoding="utf-8-sig"))
+                              .get("graphs") or {})
+            except (OSError, ValueError, AttributeError):
+                pass
+    return names
 
 
 def trial(path, entry, timeout=600):
@@ -223,6 +243,7 @@ def _entry(plan):
         raise ValueError(f"cwd must be a folder in the project; {cwd} is not")
     env_file = plan.get("env_file") or None
     env_file = [env_file] if isinstance(env_file, str) else env_file and [str(f) for f in env_file]
+    driver.env_files({"env_file": env_file}, project)  # one that is not there: said now, not as a missing key later
     python = interpreter(project)
     if plan.get("interpreter"):
         # Not resolved: a venv's python is a symlink, and following it leaves the venv behind.
@@ -561,12 +582,13 @@ def _pairs(label):
 
 
 def _reach(label):
-    """(the graph's nodes that ran, those that never did, {node: [file, first line, last line]})
-    over the runs under a label: what the inputs reached, and where each node's code is. A
-    change in a node they never reached is proven by nothing here."""
+    """(the graph's nodes that ran, those that never did, {node: [file, first line, last line]},
+    [(node, source)] of the other graphs the process compiled) over the runs under a label: what
+    the inputs reached, and where each node's code is. A change in a node they never reached, or
+    in another graph's, is proven by nothing here."""
     ids = _ids(label)
     if not ids:
-        return [], [], {}
+        return [], [], {}, []
     marks = ",".join("?" * len(ids))
     with _conn() as conn:
         ran = lambda column: {r[0] for r in conn.execute(
@@ -580,8 +602,13 @@ def _reach(label):
     # ponytail: without them (an older LangGraph, a baseline measured before this) a nested node
     # counts when each of its names ran, and the graph is the one with the most nodes that ran.
     hit = (lambda node: node in paths) if paths else (lambda node: all(part in names for part in node.split(":")))
-    _, nodes, sources = max(graphs, key=lambda g: (g[0], sum(map(hit, g[1])), -len(g[1])), default=(False, [], {}))
-    return [n for n in nodes if hit(n)], [n for n in nodes if not hit(n)], sources
+    chosen = max(graphs, key=lambda g: (g[0], sum(map(hit, g[1])), -len(g[1])), default=(False, [], {}))
+    _, nodes, sources = chosen
+    # Observed: a project whose package imports every agent it ships, so one run compiles them all.
+    # A graph compiled twice, or a sub-graph compiled on its own, shares its code with this one.
+    mine = {tuple(v) for v in sources.values()}
+    others = {tuple(v): (n, v) for g in graphs if g is not chosen for n, v in g[2].items() if tuple(v) not in mine}
+    return [n for n in nodes if hit(n)], [n for n in nodes if not hit(n)], sources, list(others.values())
 
 
 def bill(label):
@@ -626,7 +653,7 @@ VERDICTS = ("fine", "cut", "n/a")
 def _rows(kind):
     """What a list of checks is made over, from what was recorded (expert.ROWS)."""
     if kind == "nodes":  # every node of the graph, run or not
-        ran, missed, _ = CTX.get("reach") or ([], [], {})
+        ran, missed = (CTX.get("reach") or ([], []))[:2]
         return [*ran, *missed]
     if kind == "branches":  # every branch a branch point declares
         ids = _ids(CTX["base"])
@@ -689,10 +716,12 @@ def reached():
 
 
 def _unproven():
-    """[(node, file)]: nodes the requests never ran whose own code the changes since the
-    original edit. Code shared with a node that did run is proven through that one."""
-    _, missed, sources = CTX.get("reach") or ([], [], {})
-    if not missed:
+    """[(node, file)]: nodes the requests never ran, in the graph that ran or in another graph the
+    project compiles, whose own code the changes since the original edit. Code shared with a node
+    that did run is proven through that one."""
+    _, missed, sources, others = CTX.get("reach") or ([], [], {}, [])
+    candidates = [(n, sources.get(n)) for n in missed] + [(f"{n} of another graph", v) for n, v in others]
+    if not candidates:
         return []
     ran_code = {tuple(v) for node, v in sources.items() if node not in missed}
     hunks, file = {}, None  # {file: [(first, last)]} in the original's line numbers, as the sources are
@@ -703,9 +732,9 @@ def _unproven():
             first, _, count = line.split()[1][1:].partition(",")
             hunks.setdefault(file, []).append((int(first), int(first) + max(int(count or 1), 1) - 1))
     found = []
-    for node in missed:
-        path, first, last = sources.get(node) or (None, 0, 0)
-        if not path or tuple(sources[node]) in ran_code:
+    for node, source in candidates:
+        path, first, last = source or (None, 0, 0)
+        if not path or tuple(source) in ran_code:
             continue
         where = pathlib.Path(path).resolve()
         rel = where.relative_to(CTX["project"]).as_posix() if where.is_relative_to(CTX["project"]) else None
@@ -757,9 +786,16 @@ def _run_evals(command):
     entry = CTX.get("entry") or {}
     python = pathlib.Path(entry.get("interpreter") or interpreter(CTX["project"]))
     minutes = float(os.environ.get("FLEETOPT_EVAL_MINUTES") or EVAL_MINUTES)
+    added = {}
+    if entry.get("env_file"):  # read by the driver in the project's interpreter, as the agent's own run reads them
+        done = subprocess.run([str(python), str(DRIVER), "--env"], input=json.dumps(entry), capture_output=True,
+                              text=True, env=config.child_env())
+        if done.returncode:
+            raise ValueError(done.stderr.strip()[-400:] or f"exit {done.returncode}")
+        added = json.loads(done.stdout)
     began = time.time()
     raw, traces, graphs, code = runner.execute(CTX["project"], command, CTX["out"], timeout=60 * minutes,
-                                               path_first=python.parent, env_files=driver.env_files(entry, CTX["project"]))
+                                               path_first=python.parent, env_extra=added)
     text = runner.output_tail(raw, lines=100_000)
     CTX["n_evals"] += 1
     runner.ingest(CTX["project"], command, CTX["out"], f"evals-{CTX['n_evals']}", raw, traces, graphs, code)
@@ -806,6 +842,9 @@ async def _baseline():
                f"finished, {stats['steps']} steps a run." + ("" if CTX["look_only"] else " Edits are allowed now.")
                + (f"\n\nThese inputs never reached: {', '.join(missed)}. A change there is proven by nothing here, and "
                   "keep refuses it: report it, do not make it." if missed else "")
+               + (f"\n\nThe project compiles other graphs too ({len(CTX['reach'][3])} nodes with code of their own, e.g. "
+                  f"{', '.join(n for n, _ in CTX['reach'][3][:6])}): this run proves nothing about them, and keep refuses "
+                  "a change to their code." if CTX["reach"][3] else "")
                + (f"\n\nWhere the tokens go, a run (every node above {ACCOUNT_FLOOR:.0%} must be in your report, with a "
                   f"cut or the number that clears it):\n{bill_words(CTX['bill'])}" if CTX["bill"] else "")
                + (f"\n\nYour checks, all open ({len(CTX['checks'])}). Close each with `checked` as you settle it: "
@@ -977,7 +1016,10 @@ async def run_evals(args):
         return _ok(f"Refused: run the same command as on the original, so the two can be compared: {before['command']}")
     original = _git("rev-parse", "HEAD") == CTX["start_sha"]
     say(f"  running the team's evals{' on the code as it is' if original else ''}: {command}")
-    code, seconds, text = await asyncio.to_thread(_run_evals, command)
+    try:
+        code, seconds, text = await asyncio.to_thread(_run_evals, command)
+    except ValueError as exc:
+        return _ok(f"Not run: the env files could not be loaded: {exc}")
     CTX["untracked"] = _untracked()  # results files an eval run writes are not edits
     if code in NOT_RUN:  # observed: `pytest` not installed, "command not found" before and after, and the change kept
         say(f"    did not run (exit {code})")

@@ -388,7 +388,8 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         "mode": "review" if look_only else "apply", "expert": expert.name, "expert_version": expert.version,
         "expert_from": str(expert.folder), "changes_it": bool(expert.apply),
         "project": str(project), "started": bool(ctx.get("run_cmd")),
-        "agent": (ctx.get("entry") or {}).get("name"), "measured": bool(ctx.get("baseline")),
+        "agent": (ctx.get("entry") or {}).get("name"), "graph": (ctx.get("entry") or {}).get("graph"),
+        "declared": tools.declared(project), "measured": bool(ctx.get("baseline")),
         "baseline": ctx.get("baseline"), "proof": tools.proof() if ctx.get("entry") else None, "reach": tools.reached(),
         "bill": ctx.get("bill") or [], "unaccounted": tools.unaccounted(account, ctx.get("bill") or []) if account else None,
         "checks": tools.check_facts(), "written": tools.written_count(ctx.get("entry")),
@@ -427,6 +428,9 @@ def summary(facts):
     if facts["measured"] and (facts.get("baseline") or {}).get("completed") == 0:
         lines.append("  Broken   the agent as it is finished none of its requests"
                      + (": what was kept makes a broken agent cheaper, not a working one" if facts.get("kept") else ""))
+    if len(facts.get("declared") or []) > 1 and facts.get("graph"):  # the others are not measured, so not proven
+        lines.append(f"  Graphs   the project ships {len(facts['declared'])} ({', '.join(facts['declared'][:8])}); "
+                     f"this run measured one: {facts['graph']}")
     if facts.get("reach"):  # a change in a node the requests never ran is proven by nothing
         lines.append(f"  Reached  {facts['reach']}, by the requests it was run on")
     if facts.get("bill") and facts.get("unaccounted") is not None:  # did the expert account for where the money goes
