@@ -34,6 +34,7 @@ fleetopt review <project> --expert design     # look only: does the design fit t
 | `design` | Whether the design fits the job: whether each model call is needed at all, the patterns it is built from by what ran, what is broken, where a simpler design would do the same, and work nobody waits for that is paid at interactive prices | yes | not yet |
 | `tester` | The requests that would check the agent: those the project holds, and those written to reach every route and tool. Never an expected answer | yes | no |
 | `redteam` | What a hostile request makes it do: an instruction hidden in a request or a record, a request for its own instructions or settings, one outside its job, arguments planted for a tool, work that never ends. Judged by what it did in the recordings, never by what it said | yes | no |
+| `surveyor` | What the project holds: every agent it ships, how each starts (proven), what checks it, what it reaches outside. Runs by itself the first time fleetopt sees a project, and again when its files change; every other expert starts from its survey | yes | no |
 
 When a project has nothing to check its agent against, the cost expert calls the tester to
 learn what it can write alone and what it would need, then asks you once, at the terminal:
@@ -177,7 +178,7 @@ Enforced, not asked; each is a test in `tests/test_invariants.py`.
 | `--expert NAME` | Which expert looks at it (default `cost`); pulled from the central catalogue when it is not here |
 | `--no-ask` | Never ask a question at the terminal |
 | `--max-usd N` | Cap on fleetopt's own spend |
-| `--out DIR` | Where records go (default `./.fleetopt`) |
+| `--out DIR` | Where records go (default `<project>/.fleetopt`, with the agent, so the team sees what fleetopt knows and CI checks it out) |
 
 Models: a session runs on the model its expert's header names (`model: opus` for design),
 else on `sonnet`, falling back to `opus`; the reader runs on `haiku`, falling back to `sonnet`.
@@ -185,10 +186,11 @@ These are names, not versions: whatever they give in your Claude setup, login, g
 or Vertex. The model used is printed at the start. `FLEETOPT_MODEL` overrides the expert's choice
 for a run, and `FLEETOPT_JUDGE_MODEL` the reader's.
 
-Each run leaves `.fleetopt/runs/<time>-<project>/`: `report.md`, `run.json`, `log.txt` (the
+Each run leaves `<project>/.fleetopt/runs/<time>-<project>/`: `report.md`, `run.json`, `log.txt` (the
 whole session, live), `evals-N.log` (each eval run's output), and `patch.diff` when something
-was kept. The log, the eval output and `.fleetopt/fleetopt.db` contain the agent's prompts and
-answers: treat them like the project's own logs.
+was kept. The log, the eval output and `<project>/.fleetopt/fleetopt.db` contain the agent's prompts and
+answers: treat them like the project's own logs. `.fleetopt/survey/` holds the surveyor's report and
+`.fleetopt/entries/` how each agent is started, once proven; the team may commit the folder or ignore it.
 
 ## Known limits
 

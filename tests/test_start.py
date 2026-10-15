@@ -119,7 +119,7 @@ def test_start_proves_an_entry_by_running_it_and_says_what_it_saw(project, tmp_p
         assert json.loads(tools.CTX["entry_path"].read_text(encoding="utf-8"))["inputs"] == ["cold chain", "last mile"]
         tools.CTX["baseline"] = {"steps": 1}
         assert "started and measured already" in trying(ENTRY)
-        tools.CTX.update(run_cmd=None, tries=tools.TRIES)
+        tools.CTX.update(run_cmd=None, tries=tools.TRIES, tried={ENTRY["graph"]: tools.TRIES})
         assert "Refused" in trying(ENTRY)                                               # four tries on the team's key
     finally:
         tools.CTX.clear()

@@ -18,12 +18,11 @@ import os
 import pathlib
 import re
 import subprocess
-import sys
 import tempfile
 
 from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
-from fleetopt import config, tools
+from fleetopt import census, config, tools
 from fleetopt.evidence import measure as measure_mod
 from fleetopt import expert as experts
 from fleetopt.expert import COST, EXPERTS
@@ -82,6 +81,8 @@ def guard_edit(project, start_branch):
         target = (pathlib.Path(raw) if pathlib.Path(raw).is_absolute() else root / raw).resolve()
         if not target.is_relative_to(root) or ".git" in target.relative_to(root).parts:
             return _deny(f"fleetopt changes files only inside the project ({root}).")
+        if ".fleetopt" in target.relative_to(root).parts:
+            return _deny("That is fleetopt's own record of the project, written by its tools, never by hand.")
         if _git(root, "rev-parse", "--abbrev-ref", "HEAD") == start_branch:
             return _deny(f"This is {start_branch!r}, the branch the run started from; changes go only on "
                          "fleetopt's branch. Stop and say so in your report.")
@@ -237,6 +238,36 @@ def _review_path(out, project, state, expert):
     return out / "reviews" / f"{project.name}-{hashlib.sha1(str(project).encode()).hexdigest()[:8]}-{state}-{expert.name}.md"
 
 
+def _survey_path(out, project):
+    return out / "survey" / f"{project.name}-{hashlib.sha1(str(project).encode()).hexdigest()[:8]}.md"
+
+
+def _survey(out, project, taken):
+    """The surveyor's report of this project, when it was made on this same map; else None."""
+    path = _survey_path(out, project)
+    if not path.exists():
+        return None
+    head, _, body = path.read_text(encoding="utf-8").partition("\n")
+    return body.strip() if head == f"fingerprint: {census.fingerprint(taken)}" else None
+
+
+def _entry_for(out, project, graph, taken):
+    """The proven entry of the agent to work on: the one asked for, else the one the project
+    ships first, else the only one the survey proved."""
+    if graph:
+        return tools.entry_path(out, project, graph), _saved_entry(tools.entry_path(out, project, graph))
+    proven = {p: e for p in sorted(tools.entry_path(out, project, "x").parent.glob(
+        f"{project.name}-{hashlib.sha1(str(project).encode()).hexdigest()[:8]}-*.json")) if (e := _saved_entry(p))}
+    shipped = [spec.removeprefix("./") for g in taken["graphs"].values() for spec in g.values()]
+    for spec in shipped:
+        for path, entry in proven.items():
+            if entry["graph"] == spec:
+                return path, entry
+    if len(proven) == 1:
+        return next(iter(proven.items()))
+    return tools.entry_path(out, project, "agent"), _saved_entry(tools.entry_path(out, project, "agent"))
+
+
 def _told(path):
     """What the team answered when asked, on this run or an earlier one."""
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
@@ -249,20 +280,20 @@ def _newest(out):
         return conn.execute("SELECT COALESCE(MAX(id), 0) FROM sessions").fetchone()[0]
 
 
-def _prompt(expert, look_only, entry, evals, graph, team, minutes, max_usd, branch, earlier, told=()):
-    ctx = tools.CTX
+def _prompt(expert, look_only, entry, evals, graph, team, minutes, max_usd, branch, earlier, told=(), taken=None,
+            survey=None):
     lines = [expert.review if look_only else expert.apply, ""]
+    if taken:
+        lines.append(f"The census of the project, taken by code over the whole tree:\n{census.render(taken)}\n")
+    if survey:
+        lines.append(f"The surveyor's report of this project:\n{survey}\n")
     if entry:
         lines.append(f"How to start it is known, from an earlier try: {entry['name']} ({entry['graph']}), "
                      f"{len(entry['inputs'])} input(s) {tools.source(entry)}. It is started: measure it.")
     else:
-        python, (files, shell) = tools.interpreter(ctx["project"]), tools.env_names(ctx["project"])
-        listed = "; ".join(f"{f}: {', '.join(n[:40]) or 'nothing'}" for f, n in list(files.items())[:20]) or "none"
-        lines.append(f"How to start it is not known yet: start it (see the guide). Env files in the project and the "
-                     f"names each sets (never the values): {listed}. Credential names set in this terminal: "
-                     f"{', '.join(shell[:40]) or 'none'}. "
-                     + (f"The project's interpreter: {python}." if python != sys.executable else
-                        "No .venv or venv in the project: if its environment is elsewhere (poetry, conda, a path in "
+        lines.append("How to start it is not known yet: start it (see the guide)."
+                     + ("" if (taken or {}).get("interpreters") else
+                        " No .venv or venv in the project: if its environment is elsewhere (poetry, conda, a path in "
                         "its README), name that python as `interpreter`."))
         if graph:
             lines.append(f"The person running fleetopt asked for this agent: {graph}.")
@@ -296,10 +327,16 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         raise ValueError(f"the {expert.name} expert only reviews: fleetopt review --expert {expert.name}")
     project, out = pathlib.Path(project).resolve(), pathlib.Path(out).resolve()
     out.mkdir(parents=True, exist_ok=True)
+    taken = census.take(project)
+    survey = _survey(out, project, taken)
+    if survey is None and expert.name != "surveyor":  # a project not seen before, or changed since: surveyed first
+        tools.say("  surveying the project first: every agent, how each starts, what checks it")
+        await run(project, out, look_only=True, graph=graph, model=model, max_usd=min(max_usd, 2.0), expert="surveyor",
+                  ask=ask)
+        survey = _survey(out, project, taken) or "(the survey did not finish: see its run)"
     began = datetime.datetime.now()
     run_dir = out / "runs" / f"{began:%Y%m%d-%H%M%S}-{project.name}"
-    path = tools.entry_path(out, project, graph or "agent")
-    entry = _saved_entry(path)
+    path, entry = _entry_for(out, project, graph, taken)
     team = float(os.environ.get("FLEETOPT_TEAM_USD") or tools.TEAM_USD)
     minutes = float(os.environ.get("FLEETOPT_MAX_MINUTES") or tools.MAX_MINUTES)
     first = _newest(out)
@@ -318,7 +355,7 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         earlier = "\n\n".join(texts) or None
 
     prompt = _prompt(expert, look_only, entry, evals, graph, team, minutes, max_usd, branch, earlier,
-                     _told(tools.told_path(path)))
+                     _told(tools.told_path(path)), taken, survey)
     run_dir.mkdir(parents=True, exist_ok=True)   # before the options: the expert's prose is written into it
     options = build_options(project, model, max_usd, start_branch, look_only, expert=expert, prompt_dir=run_dir)
     log_file = (run_dir / "log.txt").open("w", encoding="utf-8")
@@ -379,10 +416,14 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         tools._git("checkout", "-q", start_branch)
         if not kept:
             tools._git("branch", "-q", "-D", branch)
-    if look_only and ctx.get("baseline") and account:
+    if look_only and ctx.get("baseline") and account and expert.name != "surveyor":
         review = _review_path(out, project, ctx["start_state"], expert)
         review.parent.mkdir(parents=True, exist_ok=True)
         review.write_text(account + "\n", encoding="utf-8")
+    if expert.name == "surveyor" and account:  # the record every later run starts from, good while the map is the same
+        record = _survey_path(out, project)
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(f"fingerprint: {census.fingerprint(taken)}\n{account}\n", encoding="utf-8")
     runs, team_cost = measure_mod.spent(out, project, first)
     facts = {
         "mode": "review" if look_only else "apply", "expert": expert.name, "expert_version": expert.version,

@@ -92,20 +92,11 @@ text. With no template the text goes in as a user message if the graph's input h
 `messages`, else into its first text field. `"store": "memory"` gives a graph compiled
 without a store an empty in-memory one, as a hosting platform would.
 
-- **Find the agent** where the team says: `langgraph.json`, the README, the entry point
-  their app or tests use. With several, take the one the team ships, not a building block.
-  Name the compiled graph, or the builder or function their service compiles at start-up:
-  the driver calls the function and compiles the builder with an in-memory checkpointer.
-  Never change their code to get it started.
-- **How it is called**: the state class and the first node. Copy what the project's own
-  entry point passes.
-- **Run it as it runs here**: find how the team starts it (`langgraph.json`, the README, a
-  Makefile, a compose file, `.envrc`, the code's own `load_dotenv` or settings class) and
-  name the env files it loads and the folder it starts from. You never see an env file's
-  values; its names are listed for you, with the credential names set in this terminal,
-  each marked when it is empty or set by a command.
-  Plain settings that are not secrets go in `env`. If it supports several providers,
-  choose one whose key is set. Never put a key, token or password in an entry.
+- **The survey says what is what.** The surveyor went through this project before you:
+  every agent, where it is, how it starts (interpreter, folder, env files), what checks it,
+  what it reaches outside. It is in your prompt, with the census code took of the whole
+  tree. Start from its entry; search only for what it marks unknown. Never change their
+  code to get it started. Never put a key, token or password in an entry.
 - **Inputs**: what you found to check it against, as the agent is sent it: all of it up
   to eight, picking ones that differ in kind; one is enough when that is all there is.
   Several average out the variation in a model's answers, so a smaller saving clears the

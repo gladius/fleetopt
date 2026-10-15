@@ -23,7 +23,7 @@ from fleetopt import config
 def _parser():
     parser = argparse.ArgumentParser(prog="fleetopt", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--out", default=".fleetopt", help=argparse.SUPPRESS)  # also accepted before the command
+    parser.add_argument("--out", default=None, help=argparse.SUPPRESS)  # also accepted before the command
     sub = parser.add_subparsers(dest="cmd", required=True)
     from fleetopt.expert import EXPERTS
 
@@ -46,7 +46,7 @@ def _parser():
         p.add_argument("--max-usd", type=float, default=usd,
                        help=f"the most fleetopt's own work may spend on your Claude login (default {usd:g}). "
                             "The agent's runs stop at $2 on its own API key (FLEETOPT_TEAM_USD)")
-        p.add_argument("--out", default=argparse.SUPPRESS, help="where records go (default ./.fleetopt)")
+        p.add_argument("--out", default=argparse.SUPPRESS, help="where records go (default <project>/.fleetopt)")
     p = sub.add_parser("pull", help="fetch experts from the central catalogue (FLEETOPT_CENTRAL) to this machine")
     p.add_argument("experts", nargs="+", metavar="expert")
     return parser
@@ -88,12 +88,13 @@ def main(argv=None):
         return 1
 
     project = pathlib.Path(args.project).resolve()
+    out = args.out or project / ".fleetopt"  # with the agent: the team sees what fleetopt knows, and CI checks it out
     team = float(os.environ.get("FLEETOPT_TEAM_USD") or tools.TEAM_USD)
     minutes = float(os.environ.get("FLEETOPT_MAX_MINUTES") or tools.MAX_MINUTES)
     print(f"fleetopt {args.cmd} · {chosen.name}@{chosen.version} · {project.name}\n  stops at: {minutes:g} min · ${team:.2f} spent by the agent on its "
           f"own API key · ${args.max_usd:.2f} spent by fleetopt on your Claude login", flush=True)
     try:
-        facts = asyncio.run(session.run(project, args.out, look_only=args.cmd == "review", evals=args.evals,
+        facts = asyncio.run(session.run(project, out, look_only=args.cmd == "review", evals=args.evals,
                                         graph=args.graph, model=os.environ.get("FLEETOPT_MODEL") or None,
                                         max_usd=args.max_usd, expert=args.expert,
                                         ask=not args.no_ask and sys.stdin.isatty() and sys.stdout.isatty()))

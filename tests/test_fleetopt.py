@@ -455,7 +455,7 @@ def test_the_report_is_what_is_printed_and_nothing_said_before_it():
 
 def test_the_command_line_is_two_commands_and_a_few_flags():
     parse = cli._parser().parse_args
-    assert parse(["apply", "repo"]).out == ".fleetopt" and parse(["apply", "repo"]).max_usd == 5.0
+    assert parse(["apply", "repo"]).out is None and parse(["apply", "repo"]).max_usd == 5.0
     assert parse(["apply", "repo", "--out", "after"]).out == "after"
     assert parse(["--out", "before", "review", "repo"]).out == "before"
     args = parse(["review", "repo", "--evals", "cases.jsonl", "--graph", "supervisor"])
@@ -484,7 +484,7 @@ def test_an_expert_is_a_folder_of_prose_dropped_where_fleetopt_looks(tmp_path, m
     (place / "greedy" / "GUIDE.md").write_text("---\nreview: Look.\napply: Change.\nearns: whatever I say\n---\n", encoding="utf-8")
     monkeypatch.setenv("FLEETOPT_EXPERTS", str(place))
     found = experts.load()
-    assert set(found) == {"cost", "design", "tester", "redteam"}          # the two bad folders are named, not loaded
+    assert set(found) == {"cost", "design", "tester", "redteam", "surveyor"}          # the two bad folders are named, not loaded
     said = capsys.readouterr().err
     assert "needs a header with at least `review:`" in said and "is not a rule fleetopt has (cheaper)" in said
     assert found["cost"].folder == experts.SOURCE / "cost" and found["cost"].earns == "cheaper"
@@ -559,7 +559,16 @@ def _repo(tmp_path):
                  ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"]):
         subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True)
     (tmp_path / "out").mkdir()
+    _surveyed(project.resolve(), tmp_path / "out")
     return project.resolve()
+
+
+def _surveyed(project, out):
+    """A survey of the project as it is, so a run goes straight to the expert's work."""
+    record = session._survey_path(out, project)
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(f"fingerprint: {session.census.fingerprint(session.census.take(project))}\n"
+                      "What it is for: a test\nAgents: 1 shipped\n", encoding="utf-8")
 
 
 ENTRY = {"name": "agent", "graph": "agent.py:graph", "inputs": ["x"], "interpreter": sys.executable,
@@ -1304,3 +1313,82 @@ def test_the_redteam_expert_only_looks_and_judges_every_node():
     assert red.checks == ("hijack", "leak", "scope", "misuse", "runaway") and red.skills == ["attacks", "judging"]
     system = red.system()
     assert "Never a secret's value" in system and "Safe to repeat" in system and "two ordinary requests" in system
+
+
+def test_the_census_finds_an_agent_and_its_setup_in_a_sub_folder(tmp_path):
+    from fleetopt import census
+
+    project = tmp_path / "repo"
+    deep = project / "services" / "agent"
+    (deep / "evals").mkdir(parents=True)
+    shutil.copy(ROOT / "fixture" / "agent.py", deep / "agent.py")
+    shutil.copy(ROOT / "fixture" / "fake_model.py", deep / "fake_model.py")
+    (deep / "langgraph.json").write_text('{"graphs": {"research": "./agent.py:graph"}}', encoding="utf-8")
+    (deep / ".env").write_text("OPENAI_API_KEY=sk-x\nTAVILY_API_KEY=\n", encoding="utf-8")
+    (deep / "tools.py").write_text("import httpx\nimport boto3\n", encoding="utf-8")
+    (deep / "evals" / "cases.jsonl").write_text('{"input": "x"}\n', encoding="utf-8")
+    (deep / ".venv" / "bin").mkdir(parents=True)
+    (deep / ".venv" / "bin" / "python").write_text("", encoding="utf-8")
+    (project / "README.md").write_text("# repo\n", encoding="utf-8")
+    (project / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    taken = census.take(project)
+    assert taken["graphs"] == {"services/agent/langgraph.json": {"research": "./agent.py:graph"}}
+    assert taken["builders"] == ["services/agent/agent.py"]
+    assert taken["env_files"] == {"services/agent/.env": ["OPENAI_API_KEY", "TAVILY_API_KEY (empty)"]}
+    assert taken["interpreters"] == [(deep / ".venv" / "bin" / "python").as_posix()]
+    assert taken["systems"] == {"AWS": ["services/agent/tools.py"], "HTTP calls": ["services/agent/tools.py"]}
+    assert taken["evals"] == ["services/agent/evals/cases.jsonl"]
+    assert "docker-compose.yml" in taken["launchers"] and "services/agent/langgraph.json" in taken["launchers"]
+    assert tools.interpreter(project) == str(deep / ".venv" / "bin" / "python")      # observed: missed, at the root only
+    text = census.render(taken)
+    assert "sk-x" not in text and "services/agent/.env: OPENAI_API_KEY, TAVILY_API_KEY (empty)" in text
+    before = census.fingerprint(taken)
+    (deep / ".env.local").write_text("X=1\n", encoding="utf-8")
+    assert census.fingerprint(census.take(project)) != before             # a changed map: the survey is stale
+
+
+def test_a_project_is_surveyed_once_and_every_expert_reads_the_survey(tmp_path, monkeypatch):
+    import claude_agent_sdk
+
+    project = _repo(tmp_path)
+    session._survey_path(tmp_path / "out", project).unlink()            # never seen before
+    _fake_runs(monkeypatch), _tried(monkeypatch)
+    prompts = []
+
+    async def the_agent(prompt, options):
+        prompts.append(prompt)
+        if "Survey this project" in prompt:   # the surveyor: proves two agents, reports
+            for graph in ("agent.py:graph", "other.py:graph"):
+                await tools.start.handler({"entry": json.dumps({"graph": "agent.py:graph", "inputs": ["x"], "agent": graph})})
+            yield claude_agent_sdk.ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
+                                                 num_turns=3, session_id="s", total_cost_usd=0.1,
+                                                 result="What it is for: tests\nAgents: 1 shipped\n## agent (agent.py:graph)\nStarts: proven")
+
+    monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
+    try:
+        asyncio.run(session.run(project, tmp_path / "out"))
+        assert len(prompts) == 2 and "Survey this project" in prompts[0] and "The census of the project" in prompts[0]
+        assert "The surveyor's report of this project:\nWhat it is for: tests" in prompts[1]
+        assert "How to start it is known, from an earlier try" in prompts[1]          # the entry the survey proved
+        asyncio.run(session.run(project, tmp_path / "out"))
+        assert len(prompts) == 3 and "Survey this project" not in prompts[2]          # same map: no second survey
+        (project / ".env").write_text("A=1\n", encoding="utf-8")
+        asyncio.run(session.run(project, tmp_path / "out"))
+        assert len(prompts) == 5 and "Survey this project" in prompts[3]              # the map changed: surveyed again
+    finally:
+        tools.CTX.clear()
+
+
+def test_the_agent_the_project_ships_is_the_one_worked_on(tmp_path):
+    project = _repo(tmp_path)
+    (project / "langgraph.json").write_text('{"graphs": {"main": "./shipped.py:graph"}}', encoding="utf-8")
+    out = tmp_path / "out"
+    for graph in ("helper.py:graph", "shipped.py:graph"):
+        path = tools.entry_path(out, project, graph)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({**ENTRY, "graph": graph, "proven": "now"}), encoding="utf-8")
+    taken = session.census.take(project)
+    assert session._entry_for(out, project, None, taken)[1]["graph"] == "shipped.py:graph"
+    assert session._entry_for(out, project, "helper.py:graph", taken)[1]["graph"] == "helper.py:graph"
+    (project / "langgraph.json").unlink()
+    assert session._entry_for(out, project, None, session.census.take(project))[1] is None   # two, none shipped: start

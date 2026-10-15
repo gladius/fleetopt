@@ -41,7 +41,7 @@ import time
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from fleetopt import config
+from fleetopt import census, config
 from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
 from fleetopt.evidence import shape as shape_mod
@@ -150,11 +150,10 @@ def _ids(label):
 # --- how the project's agent is started ---------------------------------------------------
 
 def interpreter(project):
-    """The project's own environment; fleetopt's only when it has none."""
-    for rel in (".venv/bin/python", "venv/bin/python", ".venv/Scripts/python.exe", "venv/Scripts/python.exe"):
-        if (project / rel).exists():
-            return str(project / rel)
-    return sys.executable
+    """The project's own environment, wherever in it (observed: the agent and its venv in a
+    sub-folder); fleetopt's only when it has none."""
+    found = census.interpreters(project)
+    return found[0] if found else sys.executable
 
 
 def entry_path(out, project, name="agent"):
@@ -172,23 +171,7 @@ def spread(items, n):
     return items if len(items) <= n else [items[i * len(items) // n] for i in range(n)]
 
 
-def env_names(project):
-    """({env file: the names it sets}, credential names set in this terminal), for every env
-    file in the project, each name marked when it is empty or set by a command. Names only: a
-    value is never kept or shown."""
-    def state(name, value):
-        value = value.strip().strip("'\"")
-        return name + (" (empty)" if not value else " (set by a command)" if value.startswith(("$(", "`")) else "")
-
-    files = {}
-    for folder, dirs, found in os.walk(project):
-        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in ("node_modules", "venv", "__pycache__"))
-        for name in sorted(n for n in found if n == ".env" or n.startswith(".env.") or n.endswith(".env")):
-            lines = (pathlib.Path(folder) / name).read_text(encoding="utf-8-sig", errors="replace").splitlines()
-            files[(pathlib.Path(folder) / name).relative_to(project).as_posix()] = [
-                state(key, value) for line in lines if "=" in line and not line.strip().startswith("#")
-                for key, _, value in [line.strip().removeprefix("export ").partition("=")] if key.strip()]
-    return files, sorted(state(k, v) for k, v in os.environ.items() if SECRET.search(k) and not k.startswith("FLEETOPT_"))
+env_names = census.env_names
 
 
 def declared(project):
@@ -426,13 +409,14 @@ async def start(args):
     if CTX.get("run_cmd") and CTX.get("baseline") is not None:
         return _ok("The agent is started and measured already: how it is started cannot change now.")
     before = CTX.get("entry") if CTX.get("run_cmd") else None  # observed: one input given, and no way to add the rest
-    if CTX["tries"] >= TRIES:
-        return _ok(f"Refused: {TRIES} tries, the most a start gets. Report what stops it.")
     try:
         entry = _entry(json.loads(args.get("entry") or ""))
     except ValueError as exc:  # JSONDecodeError included
         return _ok(f"Not tried: {exc}.")
+    if CTX.setdefault("tried", {}).get(entry["graph"], 0) >= TRIES:  # tries are an agent's: a survey starts each the project ships
+        return _ok(f"Refused: {TRIES} tries, the most a start of {entry['graph']} gets. Report what stops it.")
     CTX["tries"] += 1
+    CTX["tried"][entry["graph"]] = CTX["tried"].get(entry["graph"], 0) + 1
     path = CTX["entry_path"]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
@@ -446,6 +430,9 @@ async def start(args):
         entry["proven"] = datetime.datetime.now().isoformat(timespec="seconds")
         entry["broken"] = None if result["finished"] else result["error"]
         path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
+        own = entry_path(CTX["out"], CTX["project"], entry["graph"])  # the record of this agent, found by any later run
+        if own != path:
+            own.write_text(json.dumps(entry, indent=1), encoding="utf-8")
         started(entry)
         n = len(entry["inputs"])
         say(f"  started: {entry['name']} ({entry['graph'].rsplit('/', 1)[-1]}), {n} request{'s' * (n != 1)} "
@@ -462,7 +449,7 @@ async def start(args):
     if not ok and before:  # the entry that did start is still the one in use
         path.write_text(json.dumps(before, indent=1), encoding="utf-8")
         verdict += " The entry that started before is still the one in use."
-    return _ok(f"{verdict}\n{facts}\n\nLast lines it printed:\n{result['tail']}\n\n{TRIES - CTX['tries']} try(s) left.")
+    return _ok(f"{verdict}\n{facts}\n\nLast lines it printed:\n{result['tail']}\n\n{TRIES - CTX['tried'][entry['graph']]} try(s) left for {entry['graph']}.")
 
 
 # --- the run: git, measurement and the gate -----------------------------------------------
@@ -474,7 +461,7 @@ def begin(project, out, *, entry_file, entry=None, look_only=False, team_usd=TEA
     CTX.update(project=pathlib.Path(project).resolve(), out=pathlib.Path(out).resolve(), events=[], entry_path=entry_file,
                run_dir=pathlib.Path(run_dir or out), look_only=look_only, evals_before=None, evals_after={}, n_evals=0,
                max_team_usd=team_usd, max_minutes=minutes, deadline=time.time() + 60 * minutes,
-               first_session=first_session, said_at=time.time(), tries=0, run_cmd=None, job="answer the user's request",
+               first_session=first_session, said_at=time.time(), tries=0, tried={}, run_cmd=None, job="answer the user's request",
                baseline=None, saved=[], measured=None, results={}, changes={}, n=0, expert=expert, ask=ask, asked=0,
                calls=0, called_usd=0.0)
     if _git("status", "--porcelain", "--untracked-files=no"):  # undo and the final clean-up reset to the last commit
