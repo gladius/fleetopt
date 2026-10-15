@@ -153,7 +153,7 @@ def interpreter(project):
     """The project's own environment, wherever in it (observed: the agent and its venv in a
     sub-folder); fleetopt's only when it has none."""
     found = census.interpreters(project)
-    return found[0] if found else sys.executable
+    return str(pathlib.Path(project) / found[0]) if found else sys.executable
 
 
 def entry_path(out, project, name="agent"):
@@ -295,8 +295,8 @@ def _written(inputs):
         needle = next((line.strip() for line in str(item).splitlines() if line.strip()), "")[:80]
         if len(needle) < 8:
             return True  # too short to find: it cannot be shown to be the project's (observed: an empty request)
-        return subprocess.run(["git", "-C", str(CTX["project"]), "grep", "--untracked", "-F", "-q", "--", needle],
-                              capture_output=True).returncode != 0
+        return subprocess.run(["git", "-C", str(CTX["project"]), "grep", "--untracked", "-F", "-q", "--", needle,
+                               ".", *filter(None, [_records()])], capture_output=True).returncode != 0
     return [missing(item) for item in inputs]
 
 
@@ -481,8 +481,17 @@ def _git(*args):
     return done.stdout.strip()
 
 
+def _records():
+    """fleetopt's own records as a git pathspec to leave out, when they live in the project."""
+    out = CTX["out"]
+    return f":(exclude){out.relative_to(CTX['project']).as_posix()}" if out.is_relative_to(CTX["project"]) else None
+
+
 def _untracked():
-    return set(_git("ls-files", "--others", "--exclude-standard").splitlines())
+    """Files the team's copy has that git does not track; never fleetopt's own records, which
+    grow during a run (observed: a keep refused for 'edits since the measurement' that were
+    fleetopt's logs)."""
+    return set(_git("ls-files", "--others", "--exclude-standard", "--", ".", *filter(None, [_records()])).splitlines())
 
 
 def _dirty():

@@ -14,7 +14,6 @@ import json
 import os
 import pathlib
 import re
-import sys
 
 SKIP = {".git", ".fleetopt", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache", "dist", "build"}
 LAUNCHERS = ("Dockerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml", "Makefile",
@@ -87,7 +86,8 @@ def env_names(project):
 
 
 def interpreters(project):
-    """The python of every virtual environment in the project, nearest the root first."""
+    """The python of every virtual environment in the project, relative to it, nearest the
+    root first."""
     project = pathlib.Path(project)
     found = []
     for folder, dirs, _ in os.walk(project):
@@ -95,7 +95,7 @@ def interpreters(project):
             if d in ("venv", ".venv"):
                 for rel in ("bin/python", "Scripts/python.exe"):
                     if (pathlib.Path(folder) / d / rel).exists():
-                        found.append((pathlib.Path(folder) / d / rel).as_posix())
+                        found.append((pathlib.Path(folder) / d / rel).relative_to(project).as_posix())
         dirs[:] = [d for d in dirs if d not in SKIP and not d.startswith(".")]
     return sorted(found, key=lambda p: p.count("/"))
 
@@ -152,6 +152,8 @@ def render(census, cap=40):
 
 
 def fingerprint(census):
-    """What the survey depends on: the same map gives the same print, and a changed one says
-    the survey is stale."""
-    return hashlib.sha1(render(census, cap=sys.maxsize).encode("utf-8")).hexdigest()[:12]
+    """What the survey depends on: the project's files, nothing of the machine (its path, what
+    the terminal has set), so the survey holds on the next machine and goes stale when the
+    project changes."""
+    own = {k: v for k, v in census.items() if k not in ("project", "shell_credentials")}
+    return hashlib.sha1(json.dumps(own, sort_keys=True).encode("utf-8")).hexdigest()[:12]

@@ -1335,7 +1335,7 @@ def test_the_census_finds_an_agent_and_its_setup_in_a_sub_folder(tmp_path):
     assert taken["graphs"] == {"services/agent/langgraph.json": {"research": "./agent.py:graph"}}
     assert taken["builders"] == ["services/agent/agent.py"]
     assert taken["env_files"] == {"services/agent/.env": ["OPENAI_API_KEY", "TAVILY_API_KEY (empty)"]}
-    assert taken["interpreters"] == [(deep / ".venv" / "bin" / "python").as_posix()]
+    assert taken["interpreters"] == ["services/agent/.venv/bin/python"]
     assert taken["systems"] == {"AWS": ["services/agent/tools.py"], "HTTP calls": ["services/agent/tools.py"]}
     assert taken["evals"] == ["services/agent/evals/cases.jsonl"]
     assert "docker-compose.yml" in taken["launchers"] and "services/agent/langgraph.json" in taken["launchers"]
@@ -1343,6 +1343,7 @@ def test_the_census_finds_an_agent_and_its_setup_in_a_sub_folder(tmp_path):
     text = census.render(taken)
     assert "sk-x" not in text and "services/agent/.env: OPENAI_API_KEY, TAVILY_API_KEY (empty)" in text
     before = census.fingerprint(taken)
+    assert census.fingerprint(census.take(shutil.copytree(project, tmp_path / "elsewhere"))) == before   # the next machine
     (deep / ".env.local").write_text("X=1\n", encoding="utf-8")
     assert census.fingerprint(census.take(project)) != before             # a changed map: the survey is stale
 
@@ -1387,8 +1388,24 @@ def test_the_agent_the_project_ships_is_the_one_worked_on(tmp_path):
         path = tools.entry_path(out, project, graph)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({**ENTRY, "graph": graph, "proven": "now"}), encoding="utf-8")
+    tools.told_path(tools.entry_path(out, project, "shipped.py:graph")).write_text("[]", encoding="utf-8")  # not an entry
     taken = session.census.take(project)
     assert session._entry_for(out, project, None, taken)[1]["graph"] == "shipped.py:graph"
     assert session._entry_for(out, project, "helper.py:graph", taken)[1]["graph"] == "helper.py:graph"
     (project / "langgraph.json").unlink()
     assert session._entry_for(out, project, None, session.census.take(project))[1] is None   # two, none shipped: start
+
+
+def test_fleetopts_own_records_in_the_project_are_never_the_teams_edits(tmp_path):
+    project = _repo(tmp_path)
+    out = project / ".fleetopt"
+    tools.begin(project, out, entry_file=out / "e.json")
+    try:
+        (out / "runs").mkdir(parents=True)
+        (out / "runs" / "log.txt").write_text("the request: battery degradation and more\n", encoding="utf-8")
+        assert not tools._dirty() and not tools._untracked()                       # logs grow; that is not an edit
+        assert tools._written(["battery degradation and more"]) == [True]           # nor are they the project's inputs
+        (project / "new.py").write_text("x\n", encoding="utf-8")
+        assert tools._dirty() and tools._untracked() == {"new.py"}
+    finally:
+        tools.CTX.clear()

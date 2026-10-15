@@ -257,7 +257,8 @@ def _entry_for(out, project, graph, taken):
     if graph:
         return tools.entry_path(out, project, graph), _saved_entry(tools.entry_path(out, project, graph))
     proven = {p: e for p in sorted(tools.entry_path(out, project, "x").parent.glob(
-        f"{project.name}-{hashlib.sha1(str(project).encode()).hexdigest()[:8]}-*.json")) if (e := _saved_entry(p))}
+        f"{project.name}-{hashlib.sha1(str(project).encode()).hexdigest()[:8]}-*.json"))
+        if not p.name.endswith(".answers.json") and (e := _saved_entry(p))}
     shipped = [spec.removeprefix("./") for g in taken["graphs"].values() for spec in g.values()]
     for spec in shipped:
         for path, entry in proven.items():

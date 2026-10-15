@@ -72,8 +72,8 @@ lack something that expert makes, not to have your own work checked.
 
 fleetopt runs the agent with its own driver, in the project's own interpreter, under a
 probe that records every model call. You say how, as an entry, and try it with `start`:
-it runs the agent on one input and tells you what happened. Four tries; each runs the
-agent on the team's key, so read enough first that the first one has a fair chance.
+it runs the agent on one input and tells you what happened. Four tries an agent; each runs
+it on the team's key, so read enough first that the first one has a fair chance.
 
 You are in the team's own development setup: the driver runs in this terminal, with its
 environment, cloud logins and the project's own interpreter. What it does not get is what
