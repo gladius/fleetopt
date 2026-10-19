@@ -11,6 +11,8 @@ decided by `keep`, on the measurements and on the team's own evals, never on wha
 session wrote.
 """
 
+import asyncio
+import dataclasses
 import datetime
 import hashlib
 import json
@@ -22,7 +24,8 @@ import tempfile
 
 from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
-from fleetopt import census, config, tools
+from fleetopt import card, census, config, tools
+from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
 from fleetopt import expert as experts
 from fleetopt.expert import COST, EXPERTS
@@ -313,11 +316,11 @@ def _prompt(expert, look_only, entry, evals, graph, team, minutes, max_usd, bran
 
 
 async def run(project, out, *, look_only=False, evals=None, graph=None, model=None, max_usd=5.0, expert="cost",
-              ask=False):
+              ask=False, survey_usd=0.0):
     """One run of one expert. Returns the facts the summary is computed from. Raises
     RuntimeError when it cannot begin (the project is not under git, Claude Code does not
     start), ValueError when the expert cannot do what was asked. `ask`: someone is at the
-    terminal to answer a question."""
+    terminal to answer a question. `survey_usd`: what a survey run for this one by the caller spent."""
     from claude_agent_sdk import (AssistantMessage, CLIConnectionError, ClaudeSDKError, ResultMessage, SystemMessage,
                                   TextBlock, ToolResultBlock, ToolUseBlock, UserMessage, query)
 
@@ -329,18 +332,17 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     project, out = pathlib.Path(project).resolve(), pathlib.Path(out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     taken = census.take(project)
+    first = _newest(out)  # before the survey: its starts spend the team's key in this run too, and count toward its cap
     survey = _survey(out, project, taken)
     if survey is None and expert.name != "surveyor":  # a project not seen before, or changed since: surveyed first
-        tools.say("  surveying the project first: every agent, how each starts, what checks it")
-        await run(project, out, look_only=True, graph=graph, model=model, max_usd=min(max_usd, 2.0), expert="surveyor",
-                  ask=ask)
+        surveyed = await _survey_run(project, out, graph=graph, model=model, max_usd=max_usd, ask=ask)
+        survey_usd += surveyed["own_cost"]  # observed: a run's summary said $0.40 on the login with a $1 survey left out
         survey = _survey(out, project, taken) or "(the survey did not finish: see its run)"
     began = datetime.datetime.now()
-    run_dir = out / "runs" / f"{began:%Y%m%d-%H%M%S}-{project.name}"
+    run_dir = out / "runs" / f"{began:%Y%m%d-%H%M%S}-{project.name}-{expert.name}"  # experts at once: each its own
     path, entry = _entry_for(out, project, graph, taken)
     team = float(os.environ.get("FLEETOPT_TEAM_USD") or tools.TEAM_USD)
     minutes = float(os.environ.get("FLEETOPT_MAX_MINUTES") or tools.MAX_MINUTES)
-    first = _newest(out)
     tools.begin(project, out, entry_file=path, entry=entry, run_dir=run_dir, look_only=look_only, team_usd=team,
                 minutes=minutes, first_session=first, expert=expert, ask=ask)
     ctx = tools.CTX
@@ -361,19 +363,27 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     options = build_options(project, model, max_usd, start_branch, look_only, expert=expert, prompt_dir=run_dir)
     log_file = (run_dir / "log.txt").open("w", encoding="utf-8")
 
-    def log(line):  # everything, as it happens: `tail -f` it to follow a run in full
-        log_file.write(line + "\n")
-        log_file.flush()
+    def log(line):  # everything, whole, as it happens: what the expert saw and did is reconstructable from this
+        log_file.write(f"{datetime.datetime.now():%H:%M:%S} {line}\n")  # file alone (observed: a cut at 500 chars,
+        log_file.flush()                                                   # and no way to tell what a turn cost)
 
     tools.say(f"  full log, live: {_shown(run_dir / 'log.txt')}")
+    tape = (run_dir / "session.jsonl").open("w", encoding="utf-8")  # every SDK message, whole: a run can be replayed
     account, own, shown, said, stopped, heard = "", 0.0, {}, None, True, False
+    turns, usage = 0, {}  # the session's own turns and what each cost, for run.json
     try:
         async with ticking("working", said_at=lambda: ctx.get("said_at", 0)):
             async for message in query(prompt=prompt, options=options):
                 heard = True
+                tape.write(json.dumps({"type": type(message).__name__, **dataclasses.asdict(message)}, default=str) + "\n")
                 if isinstance(message, SystemMessage) and message.subtype == "init":
                     tools.say(f"  model: {(message.data or {}).get('model') or options.model}")  # what this setup gave
                 elif isinstance(message, AssistantMessage):
+                    turns += 1
+                    u = message.usage or {}
+                    log(f"# turn {turns} · {message.model} · in {u.get('input_tokens', 0)} out {u.get('output_tokens', 0)} "
+                        f"cache read {u.get('cache_read_input_tokens', 0)} write {u.get('cache_creation_input_tokens', 0)}"
+                        + (f" · {message.stop_reason}" if message.stop_reason else ""))
                     for block in message.content:
                         if isinstance(block, TextBlock) and block.text.strip():
                             log(block.text.strip())
@@ -382,16 +392,21 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
                             if said:
                                 tools.say(f"  › {_sentence(said)}")
                                 said = None
-                            log(f"> {block.name.removeprefix('mcp__fleetopt__')} {json.dumps(block.input)[:500]}")
+                            log(f"> {block.name.removeprefix('mcp__fleetopt__')} {json.dumps(block.input)}")
                             _activity(block, project, shown)
                 elif isinstance(message, UserMessage) and isinstance(message.content, list):
                     for block in message.content:
                         if isinstance(block, ToolResultBlock):
                             text = block.content if isinstance(block.content, str) else " ".join(
                                 c.get("text", "") for c in block.content or [] if isinstance(c, dict))
-                            log("< " + (text or "")[:2000])
+                            log("< " + (text or ""))
                 elif isinstance(message, ResultMessage):
                     own = getattr(message, "total_cost_usd", None) or 0.0
+                    usage = {m: {"in": v.get("inputTokens", 0), "out": v.get("outputTokens", 0),
+                                 "cache_read": v.get("cacheReadInputTokens", 0), "cache_write": v.get("cacheCreationInputTokens", 0),
+                                 "usd": v.get("costUSD")} for m, v in (getattr(message, "model_usage", None) or {}).items()}
+                    log(f"# end · {message.num_turns} turns · ${own:.4f} · " + (", ".join(
+                        f"{m}: in {v['in']} out {v['out']} cache read {v['cache_read']}" for m, v in usage.items()) or "no usage reported"))
                     log(message.result or "")
                     account = _report_only(message.result or "")
         stopped = False
@@ -406,6 +421,7 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         stopped = False
     finally:
         log_file.close()
+        tape.close()
         if stopped:  # Ctrl-C or a kill: observed, the team's copy left on fleetopt's branch
             _put_back(start_branch, branch)
     tools.finish()
@@ -438,8 +454,11 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
         "requests_file": str(ctx["requests_file"]) if ctx.get("requests_file") else None,
         "changes": [{"name": n, "outcome": o, "detail": d} for n, (o, d) in ctx["changes"].items()],
         "kept": kept, "whole": whole, "branch": branch if kept else None,
-        "team_runs": runs, "team_cost": team_cost, "own_cost": own + ctx.get("called_usd", 0.0), "account": account,
-        "run_dir": str(run_dir),
+        "team_runs": runs, "team_cost": team_cost,  # everything this command spent on the login: the session, the
+        "own_cost": own + ctx.get("called_usd", 0.0) + judge_mod.USED.get("usd", 0.0) + survey_usd,  # experts it called,
+        "survey_cost": survey_usd, "reader_cost": judge_mod.USED.get("usd", 0.0), "account": account,  # the reader, the survey
+        "session": {"turns": turns, "model": options.model, "usage": usage}, "run_dir": str(run_dir),
+        "code_state": ctx["start_state"],
     }
     (run_dir / "report.md").write_text("\n\n".join(filter(None, [account, "\n".join(summary(facts))])) + "\n",
                                        encoding="utf-8")
@@ -447,7 +466,32 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
                                       encoding="utf-8")
     if diff:
         (run_dir / "patch.diff").write_text(diff + "\n", encoding="utf-8")
+    card.write(out, project, _survey(out, project, taken))  # the records put together, after every run
     return facts
+
+
+async def _survey_run(project, out, *, graph, model, max_usd, ask):
+    tools.say("  surveying the project first: every agent, how each starts, what checks it")
+    return await run(project, out, look_only=True, graph=graph, model=model, max_usd=min(max_usd, 2.0), expert="surveyor", ask=ask)
+
+
+async def run_all(project, out, names, **kw):
+    """Several experts on one project in one process. A review surveys once, then runs them all at
+    once, each in a task of its own, the agent measured once (tools._baseline); apply runs them one
+    after another, since each works on the team's copy and its own branch. Returns their facts, in
+    order; the survey's spend is in the first's, as when one expert runs alone."""
+    names = list(dict.fromkeys(names))
+    if len(names) == 1 or not kw.get("look_only"):
+        return [await run(project, out, expert=name, **kw) for name in names]
+    project, out = pathlib.Path(project).resolve(), pathlib.Path(out).resolve()
+    survey_usd = 0.0
+    if _survey(out, project, census.take(project)) is None:
+        surveyed = await _survey_run(project, out, graph=kw.get("graph"), model=kw.get("model"), max_usd=kw.get("max_usd", 5.0),
+                                     ask=kw.get("ask", False))
+        survey_usd = surveyed["own_cost"]
+    quiet = {**kw, "ask": False}  # one terminal: the first may ask, the others never
+    return list(await asyncio.gather(run(project, out, expert=names[0], survey_usd=survey_usd, **kw),
+                                     *(run(project, out, expert=name, **quiet) for name in names[1:])))
 
 
 def summary(facts):
@@ -480,8 +524,10 @@ def summary(facts):
         missing = facts["unaccounted"]
         lines.append(f"  Account  {len(big) - len(missing)} of {len(big)} nodes above {tools.ACCOUNT_FLOOR:.0%} of the tokens are "
                      "in the report" + (f"; not accounted for: {', '.join(missing[:6])}" if missing else ""))
+    parts = [f"{money(facts[k])} {what}" for k, what in (("survey_cost", "the survey"), ("reader_cost", "the reader"))
+             if facts.get(k)]
     lines.append(f"  Spent    {money(facts['team_cost'])} by the agent on its API key ({facts['team_runs']} runs) · "
-                 f"{money(facts['own_cost'])} by fleetopt on your Claude login")
+                 f"{money(facts['own_cost'])} by fleetopt on your Claude login" + (f" (of which {', '.join(parts)})" if parts else ""))
     if facts.get("requests_file"):  # written for this run: the team's to review, and theirs once it is in the project
         lines.append(f"  Requests {facts['written']} written for this run, with the agent's own answers: "
                      f"{_shown(pathlib.Path(facts['requests_file']))}")

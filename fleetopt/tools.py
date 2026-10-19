@@ -41,7 +41,7 @@ import time
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from fleetopt import census, config
+from fleetopt import census, config, scope
 from fleetopt.evidence import judge as judge_mod
 from fleetopt.evidence import measure as measure_mod
 from fleetopt.evidence import shape as shape_mod
@@ -66,7 +66,7 @@ SECRET = re.compile(r"key|token|secret|password|credential", re.I)
 TESTS = re.compile(r"(^|/)(tests?|evals?|evaluations?|datasets?|eval_data|goldens?)(/|$)|(^|/)(test_[^/]*|[^/]*_test"
                    r"|conftest)\.py$", re.I)
 
-CTX = {}  # set by begin() for one run
+CTX = scope.Scoped("fleetopt.run")  # one run's state: begin() starts it, in this task and what it spawns
 
 
 def _ok(text):
@@ -402,62 +402,79 @@ async def ask(args):
 
 @tool("start", "Try the agent with this entry, under fleetopt's probe, on the first of its inputs, and say what "
       "happened: requests seen and finished, model calls seen, the first error, the last lines it printed. `entry`: "
-      "the entry as a JSON object (see the guide). Its `inputs` are every request each measurement will run, so list "
-      "them all: only the first is run here. At most 4 tries, each on the team's key. Until the first measurement "
-      "a started agent may be started again with a better entry.", {"entry": str})
+      "the entry as a JSON object (see the guide), or a JSON list of entries, one an agent, tried at the same time. "
+      "An entry's `inputs` are every request each measurement will run, so list them all: only the first is run "
+      "here. At most 4 tries an agent, each on the team's key. Until the first measurement a started agent may be "
+      "started again with a better entry.", {"entry": str})
 async def start(args):
     if CTX.get("run_cmd") and CTX.get("baseline") is not None:
         return _ok("The agent is started and measured already: how it is started cannot change now.")
-    before = CTX.get("entry") if CTX.get("run_cmd") else None  # observed: one input given, and no way to add the rest
     try:
-        entry = _entry(json.loads(args.get("entry") or ""))
+        plans = json.loads(args.get("entry") or "")
     except ValueError as exc:  # JSONDecodeError included
         return _ok(f"Not tried: {exc}.")
+    plans = plans if isinstance(plans, list) else [plans]
+    results = await asyncio.gather(*(_start_one(plan) for plan in plans))  # a survey's three agents: one wait, not three
+    return _ok("\n\n".join(results))
+
+
+async def _start_one(plan):
+    try:
+        entry = _entry(plan)
+    except ValueError as exc:
+        return f"Not tried: {exc}."
     if CTX.setdefault("tried", {}).get(entry["graph"], 0) >= TRIES:  # tries are an agent's: a survey starts each the project ships
-        return _ok(f"Refused: {TRIES} tries, the most a start of {entry['graph']} gets. Report what stops it.")
-    CTX["tries"] += 1
+        return f"Refused: {TRIES} tries, the most a start of {entry['graph']} gets. Report what stops it."
+    n_try = CTX["tries"] = CTX["tries"] + 1
     CTX["tried"][entry["graph"]] = CTX["tried"].get(entry["graph"], 0) + 1
-    path = CTX["entry_path"]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
-    result = await asyncio.to_thread(trial, path, entry)
+    # The record of an agent is its own file, written only once a try proved it: observed, a survey's
+    # last start (another graph) overwrote the shipped agent's record, and the next run reviewed the wrong graph.
+    own = entry_path(CTX["out"], CTX["project"], entry["graph"])
+    own.parent.mkdir(parents=True, exist_ok=True)
+    mine = (CTX.get("run_dir") or CTX["out"]).name
+    trying = own.with_name(f"{own.stem}.{mine}.try.json")  # this run's, this try's: never another run's
+    trying.write_text(json.dumps(entry, indent=1), encoding="utf-8")
+    try:
+        result = await asyncio.to_thread(trial, trying, entry)
+    finally:
+        trying.unlink(missing_ok=True)
     ok = bool(result["exit"] == 0 and result["requests"] and result["answered"])
-    with path.with_suffix(".log").open("a", encoding="utf-8") as log:
-        log.write(f"--- try {CTX['tries']}, {datetime.datetime.now():%H:%M:%S}\n{result['tail']}\n")
+    with own.with_suffix(".log").open("a", encoding="utf-8") as log:
+        log.write(f"--- try {n_try}, {datetime.datetime.now():%H:%M:%S}\n{result['tail']}\n")
     facts = (f"exit {result['exit']}; {result['requests']} request(s) seen, {result['finished']} finished; "
              f"{result['model_calls']} model call(s) seen; first error: {result['error'] or 'none'}")
     if ok:
         entry["proven"] = datetime.datetime.now().isoformat(timespec="seconds")
         entry["broken"] = None if result["finished"] else result["error"]
-        path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
-        own = entry_path(CTX["out"], CTX["project"], entry["graph"])  # the record of this agent, found by any later run
-        if own != path:
-            own.write_text(json.dumps(entry, indent=1), encoding="utf-8")
+        own.write_text(json.dumps(entry, indent=1), encoding="utf-8")
+        CTX["entry_path"] = own  # the run goes on with this agent: its answers and requests files sit beside it
         started(entry)
         n = len(entry["inputs"])
         say(f"  started: {entry['name']} ({entry['graph'].rsplit('/', 1)[-1]}), {n} request{'s' * (n != 1)} "
-            f"{source(entry)} each run" + (f" (try {CTX['tries']})" if CTX["tries"] > 1 else ""))
+            f"{source(entry)} each run" + (f" (try {n_try})" if n_try > 1 else ""))
         verdict = (f"It started. Every measurement will run the {n} input{'s' * (n != 1)} in this entry."
                    + ("" if result["finished"] else " No request finished: it is measured and reviewed as broken."))
     elif result["requests"] and not result["model_calls"]:
-        say(f"  try {CTX['tries']}: it ran, and no model call was seen")
+        say(f"  try {n_try}: it ran, and no model call was seen")
         verdict = "It ran, and fleetopt saw no model call: find out how it calls its model."
     else:
         why = result["error"] or next((x for x in reversed(result["tail"].splitlines()) if x.strip()), "no output")
-        say(f"  try {CTX['tries']}: did not start ({why.strip()[:140]})")  # observed: 'see its output', on screen
+        say(f"  try {n_try}: did not start ({why.strip()[:140]})")  # observed: 'see its output', on screen
         verdict = "It did not start."
-    if not ok and before:  # the entry that did start is still the one in use
-        path.write_text(json.dumps(before, indent=1), encoding="utf-8")
+    if not ok and CTX.get("run_cmd"):  # the entry that did start is still the one in use
         verdict += " The entry that started before is still the one in use."
-    return _ok(f"{verdict}\n{facts}\n\nLast lines it printed:\n{result['tail']}\n\n{TRIES - CTX['tried'][entry['graph']]} try(s) left for {entry['graph']}.")
+    return (f"{entry['graph']}: {verdict}\n{facts}\n\nLast lines it printed:\n{result['tail']}\n\n"
+            f"{TRIES - CTX['tried'][entry['graph']]} try(s) left for {entry['graph']}.")
 
 
 # --- the run: git, measurement and the gate -----------------------------------------------
 
 def begin(project, out, *, entry_file, entry=None, look_only=False, team_usd=TEAM_USD, minutes=MAX_MINUTES,
           first_session=0, run_dir=None, expert=COST, ask=False):
-    """Everything the tools share for one run, from the code as it stands."""
-    CTX.clear()
+    """Everything the tools share for one run, from the code as it stands. The run is this task's:
+    another run in the same process, in a task of its own, has state of its own."""
+    CTX.fresh()
+    judge_mod.USED.fresh()
     CTX.update(project=pathlib.Path(project).resolve(), out=pathlib.Path(out).resolve(), events=[], entry_path=entry_file,
                run_dir=pathlib.Path(run_dir or out), look_only=look_only, evals_before=None, evals_after={}, n_evals=0,
                max_team_usd=team_usd, max_minutes=minutes, deadline=time.time() + 60 * minutes,
@@ -824,7 +841,16 @@ def _mark(outcome, detail):
         CTX["changes"][name] = [outcome, detail]
 
 
+_MEASURING = {}  # one lock a project and loop: experts run at once measure the agent once, the rest reuse it
+
+
 async def _baseline():
+    lock = _MEASURING.setdefault((asyncio.get_running_loop(), str(CTX["project"])), asyncio.Lock())
+    async with lock:
+        return await _baseline_once()
+
+
+async def _baseline_once():
     ids = _ids(CTX["base"])
     if len(ids) >= RUNS and _state(ids) == CTX["start_state"]:
         say("  measuring it as it is: measured before on this same code, not run again")

@@ -12,6 +12,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import time
 import sys
 
 import pytest
@@ -484,7 +485,7 @@ def test_an_expert_is_a_folder_of_prose_dropped_where_fleetopt_looks(tmp_path, m
     (place / "greedy" / "GUIDE.md").write_text("---\nreview: Look.\napply: Change.\nearns: whatever I say\n---\n", encoding="utf-8")
     monkeypatch.setenv("FLEETOPT_EXPERTS", str(place))
     found = experts.load()
-    assert set(found) == {"cost", "design", "tester", "redteam", "surveyor"}          # the two bad folders are named, not loaded
+    assert set(found) == {"cost", "design", "tester", "redteam", "surveyor", "security"}          # the two bad folders are named, not loaded
     said = capsys.readouterr().err
     assert "needs a header with at least `review:`" in said and "is not a rule fleetopt has (cheaper)" in said
     assert found["cost"].folder == experts.SOURCE / "cost" and found["cost"].earns == "cheaper"
@@ -1052,8 +1053,8 @@ def test_one_agent_starts_measures_changes_and_leaves_nothing_unproven(tmp_path,
     assert git("show", f"{facts['branch']}:agent.py") == "x = 1"             # the branch holds what was kept
     text = "\n".join(session.summary(facts))
     assert "1 change(s) kept on branch fleetopt/" in text and "the team's evals (pytest evals), before and after" in text
-    entry = json.loads(tools.entry_path(tmp_path / "out", project).read_text(encoding="utf-8"))
-    assert entry["proven"] and entry["name"] == "researcher"                 # the next run knows how to start it
+    entry = json.loads(tools.entry_path(tmp_path / "out", project, "agent.py:graph").read_text(encoding="utf-8"))
+    assert entry["proven"] and entry["name"] == "researcher"                 # the next run knows how to start it, under its graph's name
 
 
 def test_review_is_the_same_agent_without_anything_that_changes_code(tmp_path, monkeypatch):
@@ -1361,13 +1362,17 @@ def test_a_project_is_surveyed_once_and_every_expert_reads_the_survey(tmp_path, 
         if "Survey this project" in prompt:   # the surveyor: proves two agents, reports
             for graph in ("agent.py:graph", "other.py:graph"):
                 await tools.start.handler({"entry": json.dumps({"graph": "agent.py:graph", "inputs": ["x"], "agent": graph})})
+            with session.store.connect(tmp_path / "out" / "fleetopt.db") as conn:  # what a real start records
+                conn.execute("INSERT INTO sessions (project, label, exit_code) VALUES (?, 'start', 0)", (str(project),))
             yield claude_agent_sdk.ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
                                                  num_turns=3, session_id="s", total_cost_usd=0.1,
                                                  result="What it is for: tests\nAgents: 1 shipped\n## agent (agent.py:graph)\nStarts: proven")
 
     monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
     try:
-        asyncio.run(session.run(project, tmp_path / "out"))
+        facts = asyncio.run(session.run(project, tmp_path / "out"))
+        assert (facts["survey_cost"], facts["own_cost"]) == (0.1, 0.1)                  # the survey's spend is in the total
+        assert facts["team_runs"] == 1 and "of which $0.10 the survey" in "\n".join(session.summary(facts))  # and its starts
         assert len(prompts) == 2 and "Survey this project" in prompts[0] and "The census of the project" in prompts[0]
         assert "The surveyor's report of this project:\nWhat it is for: tests" in prompts[1]
         assert "How to start it is known, from an earlier try" in prompts[1]          # the entry the survey proved
@@ -1407,5 +1412,180 @@ def test_fleetopts_own_records_in_the_project_are_never_the_teams_edits(tmp_path
         assert tools._written(["battery degradation and more"]) == [True]           # nor are they the project's inputs
         (project / "new.py").write_text("x\n", encoding="utf-8")
         assert tools._dirty() and tools._untracked() == {"new.py"}
+    finally:
+        tools.CTX.clear()
+
+
+def test_the_run_log_holds_every_turn_whole_with_what_it_cost(tmp_path, monkeypatch):
+    """Observed: tool inputs cut at 500 characters, and no way to tell what a turn cost."""
+    import claude_agent_sdk
+
+    project = _repo(tmp_path)
+    long = "x" * 3000
+
+    async def the_agent(prompt, options):
+        yield claude_agent_sdk.AssistantMessage(
+            content=[claude_agent_sdk.ToolUseBlock(id="1", name="mcp__fleetopt__query", input={"sql": long})],
+            model="claude-sonnet-5", usage={"input_tokens": 1200, "output_tokens": 30, "cache_read_input_tokens": 1000})
+        yield claude_agent_sdk.UserMessage(content=[claude_agent_sdk.ToolResultBlock(tool_use_id="1", content=long)])
+        yield claude_agent_sdk.ResultMessage(
+            subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1, session_id="s",
+            total_cost_usd=0.02, result="What it is for: tests",
+            model_usage={"claude-sonnet-5": {"inputTokens": 1200, "outputTokens": 30, "cacheReadInputTokens": 1000,
+                                             "cacheCreationInputTokens": 0, "webSearchRequests": 0, "costUSD": 0.02}})
+
+    monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
+    try:
+        facts = asyncio.run(session.run(project, tmp_path / "out"))
+    finally:
+        tools.CTX.clear()
+    log = (pathlib.Path(facts["run_dir"]) / "log.txt").read_text(encoding="utf-8")
+    assert log.count(long) == 2                                                  # the tool's input and its result, whole
+    assert "# turn 1 · claude-sonnet-5 · in 1200 out 30 cache read 1000" in log  # what the turn cost, as the SDK reported it
+    assert "# end · 1 turns · $0.0200 · claude-sonnet-5: in 1200" in log
+    assert facts["session"] == {"turns": 1, "model": "sonnet", "usage": {"claude-sonnet-5": {
+        "in": 1200, "out": 30, "cache_read": 1000, "cache_write": 0, "usd": 0.02}}}
+
+
+def test_a_run_is_taped_and_replays_with_the_tools_live(tmp_path, monkeypatch):
+    """The tape of one run drives a second one: the model's turns from the tape, every fleetopt
+    tool call made for real. Checked here on a fake run; a real expert's tape replays the same way."""
+    import claude_agent_sdk
+
+    from tests import replay
+
+    project = _repo(tmp_path)
+    _fake_runs(monkeypatch), _tried(monkeypatch)
+    entry = json.dumps({"graph": "agent.py:graph", "inputs": ["x"], "agent": "a"})
+
+    async def the_agent(prompt, options):  # as the SDK does it: the call, the tool run, its result
+        yield claude_agent_sdk.AssistantMessage(content=[claude_agent_sdk.ToolUseBlock(id="1", name="mcp__fleetopt__start", input={"entry": entry})], model="m")
+        await tools.start.handler({"entry": entry})
+        yield claude_agent_sdk.UserMessage(content=[claude_agent_sdk.ToolResultBlock(tool_use_id="1", content="(the model saw this)")])
+        yield claude_agent_sdk.AssistantMessage(content=[claude_agent_sdk.ToolUseBlock(id="2", name="mcp__fleetopt__measure", input={})], model="m")
+        await tools.measure.handler({})
+        yield claude_agent_sdk.UserMessage(content=[claude_agent_sdk.ToolResultBlock(tool_use_id="2", content="(and this)")])
+        yield claude_agent_sdk.ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=2,
+                                             session_id="s", total_cost_usd=0.01, result="What it is for: tests")
+
+    monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
+    try:
+        first = asyncio.run(session.run(project, tmp_path / "out"))
+        tape = pathlib.Path(first["run_dir"]) / "session.jsonl"
+        assert len(replay.load(tape)) == 5 and first["measured"]
+        seen = []
+        monkeypatch.setattr(claude_agent_sdk, "query", replay.player(tape, seen))
+        again = asyncio.run(session.run(project, tmp_path / "out"))
+    finally:
+        tools.CTX.clear()
+    assert again["measured"] and again["account"] == "What it is for: tests"
+    assert [s[0] for s in seen] == ["1", "2"] and "It started" in seen[0][1] and seen[0][2] == "(the model saw this)"
+    assert (tmp_path / "out" / "agent.md").exists()
+
+
+def test_the_agent_card_is_the_records_put_together(tmp_path):
+    from fleetopt import card
+
+    out, project = tmp_path / "out", tmp_path / "proj"
+    project.mkdir()
+    for folder, facts in (("20261001-120000-proj", {"expert": "cost", "expert_version": "3", "mode": "review", "measured": True,
+                                                    "baseline": {"cost_usd": 0.0123, "input_tokens": 5000, "output_tokens": 400, "llm_calls": 6, "completed": 2},
+                                                    "proof": "2 example requests from inputs.jsonl", "agent": "a", "graph": "agent.py:graph",
+                                                    "checks": {"total": 12, "closed": 12}, "code_state": "abc123def456789", "project": str(project), "run_dir": "x/r1"}),
+                          ("20261002-120000-proj", {"expert": "security", "expert_version": "1", "mode": "review", "measured": True,
+                                                    "baseline": {"cost_usd": None, "llm_calls": 6, "completed": 2}, "proof": "p", "agent": "a", "graph": "agent.py:graph",
+                                                    "checks": {"total": 30, "closed": 28}, "code_state": "abc123def456789", "project": str(project), "run_dir": "x/r2"}),
+                          ("20261003-120000-other", {"expert": "cost", "project": "/elsewhere", "run_dir": "x/r3"})):
+        (out / "runs" / folder).mkdir(parents=True)
+        (out / "runs" / folder / "run.json").write_text(json.dumps(facts), encoding="utf-8")
+    text = card.write(out, project, "What it is for: tests\nAgents: 1 shipped").read_text(encoding="utf-8")
+    assert text.startswith("# proj: agent card") and "never written by a model" in text
+    assert "What it is for: tests" in text
+    assert "a (agent.py:graph), 2026-10-02, code abc123def456: not priced a run" in text     # the newest measurement
+    assert "| cost@3 | 2026-10-01 | abc123def456 | reviewed | 12 of 12 closed | r1/report.md |" in text
+    assert "| security@1 | 2026-10-02 | abc123def456 | reviewed | 28 of 30 closed | r2/report.md |" in text
+    assert "elsewhere" not in text                                                            # another project's run
+
+
+def test_a_later_start_of_another_graph_leaves_the_first_agents_record_alone(tmp_path, monkeypatch):
+    """Observed: a survey's last start (supervisor.py) overwrote the shipped agent's entry file, and
+    the next run reviewed the wrong graph."""
+    project = _repo(tmp_path)
+    (project / "other.py").write_text("graph = None\n", encoding="utf-8")
+    out = tmp_path / "out"
+    tools.begin(project, out, entry_file=tools.entry_path(out, project, "agent.py:graph"))
+    _tried(monkeypatch)
+    try:
+        for graph in ("agent.py:graph", "other.py:graph"):
+            asyncio.run(tools.start.handler({"entry": json.dumps({"graph": graph, "inputs": ["x"], "agent": graph})}))
+        assert tools.CTX["entry_path"] == tools.entry_path(out, project, "other.py:graph")   # the run goes on with the last
+        saved = {p.name: json.loads(p.read_text(encoding="utf-8"))["graph"] for p in (out / "entries").glob("*.json")}
+        assert sorted(saved.values()) == ["agent.py:graph", "other.py:graph"]              # each agent its own record, intact
+        assert not list((out / "entries").glob("*.try.json"))                                # nothing half-tried left behind
+    finally:
+        tools.CTX.clear()
+
+
+def test_two_experts_review_at_once_each_in_its_own_run_and_the_agent_is_measured_once_at_a_time(tmp_path, monkeypatch):
+    """One process, two experts, one project: their sessions run at the same time, each with state of
+    its own; the measurement is taken one at a time, so the second finds the first's and reuses it."""
+    import claude_agent_sdk
+
+    project = _repo(tmp_path)
+    _fake_runs(monkeypatch), _tried(monkeypatch)
+    entry = json.dumps({"graph": "agent.py:graph", "inputs": ["x"], "agent": "a"})
+    inflight, most, measuring = {"n": 0}, {"n": 0}, []
+
+    def measure(label, max_steps=None, probe=False):  # slow, and says when it ran
+        measuring.append((time.time(), "in"))
+        time.sleep(0.2)
+        measuring.append((time.time(), "out"))
+        return {"steps": 40, "completed": 3, "cost_usd": 0.01, "llm_calls": 5}, None
+
+    monkeypatch.setattr(tools, "_measure", measure)
+
+    async def the_agent(prompt, options):
+        inflight["n"] += 1
+        most["n"] = max(most["n"], inflight["n"])
+        await asyncio.sleep(0.05)
+        yield claude_agent_sdk.AssistantMessage(content=[claude_agent_sdk.ToolUseBlock(id="1", name="mcp__fleetopt__start", input={"entry": entry})], model="m")
+        await tools.start.handler({"entry": entry})
+        await tools.measure.handler({})
+        mine = tools.CTX["expert"].name  # the run's own state, not the other's
+        inflight["n"] -= 1
+        yield claude_agent_sdk.ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=2,
+                                             session_id="s", total_cost_usd=0.01, result=f"What it is for: {mine}")
+
+    monkeypatch.setattr(claude_agent_sdk, "query", the_agent)
+    try:
+        both = asyncio.run(session.run_all(project, tmp_path / "out", ["cost", "security"], look_only=True))
+    finally:
+        tools.CTX.clear()
+    assert most["n"] == 2                                                                    # at the same time
+    assert [f["expert"] for f in both] == ["cost", "security"] and all(f["measured"] for f in both)
+    assert [f["account"] for f in both] == ["What it is for: cost", "What it is for: security"]  # each saw its own
+    assert len({f["run_dir"] for f in both}) == 2 and all(pathlib.Path(f["run_dir"], "run.json").exists() for f in both)
+    assert [kind for _, kind in sorted(measuring)] == ["in", "out", "in", "out"]              # never two measurements at once
+
+
+def test_a_start_of_several_agents_tries_them_at_the_same_time(tmp_path, monkeypatch):
+    project = _repo(tmp_path)
+    (project / "other.py").write_text("graph = None\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    def slow(path, entry, timeout=600):
+        time.sleep(0.2)
+        return {"exit": 0, "requests": 1, "finished": 1, "model_calls": 3, "answered": 3, "error": None, "tail": "ok"}
+
+    monkeypatch.setattr(tools, "trial", slow)
+    tools.begin(project, out, entry_file=tools.entry_path(out, project, "agent.py:graph"))
+    try:
+        began = time.time()
+        text = asyncio.run(tools.start.handler({"entry": json.dumps([
+            {"graph": "agent.py:graph", "inputs": ["x"], "agent": "a"}, {"graph": "other.py:graph", "inputs": ["y"], "agent": "b"}])}))["content"][0]["text"]
+        assert time.time() - began < 0.35                                                    # two tries, one wait
+        assert text.count("It started") == 2 and "agent.py:graph:" in text and "other.py:graph:" in text
+        assert tools.CTX["tried"] == {"agent.py:graph": 1, "other.py:graph": 1} and tools.CTX["tries"] == 2
+        assert sorted(json.loads(p.read_text(encoding="utf-8"))["graph"] for p in (out / "entries").glob("*.json")) == ["agent.py:graph", "other.py:graph"]
     finally:
         tools.CTX.clear()

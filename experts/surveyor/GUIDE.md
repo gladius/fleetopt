@@ -32,7 +32,8 @@ searching, so what you miss, they miss; what you get wrong, they trust. Two rule
    the folder it is started from, the env files its launcher loads (`langgraph.json`,
    compose, a Makefile, `.envrc`, a `load_dotenv` in its code, a settings class), the
    settings that are not secrets. Then prove it: `start` with an entry of one real request
-   from the project, or one you write in its users' words. Four tries an agent. A start that
+   from the project, or one you write in its users' words: every agent's entry in one `start`,
+   as a list, so they are tried at the same time. Four tries an agent. A start that
    fails on a key names which, and the survey says so with the env file that should hold it.
 3. **What checks it.** For each agent, the strongest the project has: an eval suite and the
    command that runs it; else a golden dataset; else examples of what it is sent (tests,

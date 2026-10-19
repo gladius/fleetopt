@@ -32,7 +32,7 @@ def _parser():
         p = sub.add_parser(name, help=text)
         p.add_argument("project")
         p.add_argument("--expert", default="cost",
-                       help="which expert looks at it (default cost). Here: " + "; ".join(
+                       help="which expert looks at it (default cost), or several at once with commas (cost,security). Here: " + "; ".join(
                            f"{e.name}: {e.does}" for e in EXPERTS.values()) + ". One that is not here is pulled "
                            "from the central catalogue (FLEETOPT_CENTRAL)")
         p.add_argument("--no-ask", action="store_true",
@@ -81,8 +81,9 @@ def main(argv=None):
                 return 1
             print(f"  pulled {pulled.name}@{pulled.version} ({pulled.does}) into {pulled.folder}")
         return 0
+    names = [n.strip() for n in args.expert.split(",") if n.strip()]
     try:
-        chosen = experts.get(args.expert)
+        chosen = [experts.get(n) for n in names]
     except ValueError as exc:
         print(f"  can't run: {exc}")
         return 1
@@ -91,22 +92,26 @@ def main(argv=None):
     out = args.out or project / ".fleetopt"  # with the agent: the team sees what fleetopt knows, and CI checks it out
     team = float(os.environ.get("FLEETOPT_TEAM_USD") or tools.TEAM_USD)
     minutes = float(os.environ.get("FLEETOPT_MAX_MINUTES") or tools.MAX_MINUTES)
-    print(f"fleetopt {args.cmd} · {chosen.name}@{chosen.version} · {project.name}\n  stops at: {minutes:g} min · ${team:.2f} spent by the agent on its "
-          f"own API key · ${args.max_usd:.2f} spent by fleetopt on your Claude login", flush=True)
+    print(f"fleetopt {args.cmd} · {' · '.join(f'{e.name}@{e.version}' for e in chosen)} · {project.name}\n  stops at: {minutes:g} min · "
+          f"${team:.2f} spent by the agent on its own API key · ${args.max_usd:.2f} spent by fleetopt on your Claude login, an expert",
+          flush=True)
     try:
-        facts = asyncio.run(session.run(project, out, look_only=args.cmd == "review", evals=args.evals,
-                                        graph=args.graph, model=os.environ.get("FLEETOPT_MODEL") or None,
-                                        max_usd=args.max_usd, expert=args.expert,
-                                        ask=not args.no_ask and sys.stdin.isatty() and sys.stdout.isatty()))
+        all_facts = asyncio.run(session.run_all(project, out, names, look_only=args.cmd == "review", evals=args.evals,
+                                                graph=args.graph, model=os.environ.get("FLEETOPT_MODEL") or None,
+                                                max_usd=args.max_usd,
+                                                ask=not args.no_ask and sys.stdin.isatty() and sys.stdout.isatty()))
     except (ValueError, RuntimeError) as exc:
         print(f"  can't run: {exc}")
         return 1
     except KeyboardInterrupt:
         return 130
-    if facts["account"] and (facts["mode"] == "review" or not facts["kept"]):  # why nothing was kept, in its words
-        print("\n" + facts["account"] + "\n")
-    print("\n".join(session.summary(facts)))
-    return 0 if facts["measured"] else 1
+    for facts in all_facts:
+        if len(all_facts) > 1:
+            print(f"\n== {facts['expert']}")
+        if facts["account"] and (facts["mode"] == "review" or not facts["kept"]):  # why nothing was kept, in its words
+            print("\n" + facts["account"] + "\n")
+        print("\n".join(session.summary(facts)))
+    return 0 if all(f["measured"] for f in all_facts) else 1
 
 
 if __name__ == "__main__":

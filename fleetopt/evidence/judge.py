@@ -14,6 +14,8 @@ import asyncio
 import json
 import os
 
+from fleetopt import scope
+
 PROMPT = """Two runs of a team's own eval suite for their AI agent, with the same command: BEFORE a
 change to the agent's code, and AFTER it. Decide whether the change broke anything.
 
@@ -62,7 +64,7 @@ Reply with JSON only: {{"broke": true|false, "reason": "<one sentence>"}}"""
 
 SYSTEM = "You check whether a change to an AI agent broke anything. Reply with JSON only."
 MODEL, FALLBACK = "haiku", "sonnet"  # aliases: whatever this Claude Code setup provides
-USED = {}  # the model that last answered, as the session reported it
+USED = scope.Scoped("fleetopt.reader")  # the model that last answered and what the readers spent, per run
 TIMEOUT_S = 300  # observed: a judge call that waited 38 minutes, silently, on the login's usage limit
 ANSWER_CHARS = 100_000  # of one answer the reader is shown: three of them fit its window with room to spare
 READERS = 4  # reader calls at once
@@ -86,8 +88,10 @@ async def _ask(prompt, model=None):
             USED["model"] = (message.data or {}).get("model")
         elif isinstance(message, AssistantMessage):
             text += "".join(b.text for b in message.content if isinstance(b, TextBlock))
-        elif isinstance(message, ResultMessage) and message.is_error:
-            failure = message.result or message.subtype
+        elif isinstance(message, ResultMessage):
+            USED["usd"] = USED.get("usd", 0.0) + (getattr(message, "total_cost_usd", None) or 0.0)  # the run's own spend
+            if message.is_error:
+                failure = message.result or message.subtype
     if failure or not text.strip():
         raise RuntimeError(f"the eval reader failed: {failure or 'no answer'}")
     text = text.strip()

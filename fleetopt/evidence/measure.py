@@ -5,6 +5,7 @@ so everything here works in medians over n sessions and refuses to call a
 difference a saving when it sits inside the spread of the baseline itself.
 """
 
+import contextvars
 import os
 import pathlib
 import statistics
@@ -70,7 +71,7 @@ def collect(project, run_cmd, out_dir, n, label, with_io=True, say=print, max_st
         n_left = n
     if n_left:
         with ThreadPoolExecutor(max_workers=min(workers, n_left)) as pool:
-            list(pool.map(run_one, range(n_left)))
+            list(pool.map(lambda i: contextvars.copy_context().run(run_one, i), range(n_left)))  # each thread in the run's scope
 
     # Ingest every executed run before judging any of them: stopping at the first
     # failure used to leave the other runs' temp dirs behind forever.

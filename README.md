@@ -64,7 +64,7 @@ every branch; and what settles each check); and `skills/<name>/SKILL.md`. No exp
 A header can name a tool or a rule fleetopt has; it cannot bring its own, and a pulled expert
 that holds anything but markdown is refused, so an expert cannot loosen its own proof. Every
 run prints and records which expert it used and its fingerprint (`cost@158adedf`).
-`PLAN.md` says where this is going.
+`overview.html` is the one-page picture of how it all fits.
 
 To serve the catalogue: zip each folder of `experts/` as `<name>.zip`, its files at the top
 level, and put the zips behind any web server.

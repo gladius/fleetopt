@@ -46,6 +46,7 @@
 
   .opening { gap: 14px; }
   .lede { font-size: clamp(1.25rem, 3vw, 1.6rem); line-height: 1.35; max-width: 27em; }
+  .sub { font-size: 1rem; color: var(--muted); max-width: 40em; }
 
   /* what a team needs */
   .needs { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
@@ -57,7 +58,7 @@
   .stop q { font-family: var(--mono); font-size: 0.9rem; color: var(--ink); quotes: none; }
 
   /* the flow */
-  .flow { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(6, 1fr); counter-reset: step; }
+  .flow { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(7, 1fr); counter-reset: step; }
   .flow li { counter-increment: step; position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-right: 14px; }
   .flow li::before {
     content: counter(step); width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
@@ -67,11 +68,12 @@
   .flow li::after { content: ""; position: absolute; top: 21px; left: 44px; right: 0; height: 2px; background: var(--line); }
   .flow li:last-child::after { display: none; }
   .flow li.loop::before { background: var(--accent); color: var(--accent-ink); }
+  .flow li.once::before { background: var(--surface); color: var(--ink); border: 2px solid var(--ink); box-sizing: border-box; }
   .flow h3 { font-size: 1.1rem; font-weight: 600; }
   .flow span { font-size: 0.92rem; color: var(--muted); }
-  .again { display: grid; grid-template-columns: repeat(6, 1fr); }
-  .again div { grid-column: 3 / span 3; margin-right: 14px; border: 2px solid var(--accent); border-top: 0; height: 14px; }
-  .again p { grid-column: 3 / span 4; font-size: 0.9rem; color: var(--accent); font-weight: 600; padding-top: 6px; }
+  .again { display: grid; grid-template-columns: repeat(7, 1fr); }
+  .again div { grid-column: 4 / span 3; margin-right: 14px; border: 2px solid var(--accent); border-top: 0; height: 14px; }
+  .again p { grid-column: 4 / span 4; font-size: 0.9rem; color: var(--accent); font-weight: 600; padding-top: 6px; }
   @media (max-width: 760px) {
     .flow { grid-template-columns: 1fr; gap: 18px; }
     .flow li { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 4px 14px; padding-left: 58px; min-height: 44px; }
@@ -82,6 +84,13 @@
     .again div { display: none; }
     .again p { grid-column: 1; padding-left: 58px; }
   }
+
+  /* experts */
+  .experts { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 12px; }
+  .experts li { background: var(--surface); border: 1px solid var(--line); padding: 14px 16px; display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; align-items: baseline; }
+  .experts code { font-size: 0.95rem; font-weight: 500; }
+  .experts span { font-size: 0.95rem; color: var(--muted); }
+  .experts em { grid-column: 2; font-style: normal; font-size: 0.82rem; color: var(--accent); font-weight: 600; }
 
   /* inside: one agent */
   .arch { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -130,78 +139,93 @@
   <section class="opening">
     <h2>Central AI team</h2>
     <h1>fleetopt</h1>
-    <p class="lede">Makes our AI agents cheaper, and proves every change on the team's own checks before keeping it.</p>
+    <p class="lede">Sends an expert to a team's AI agent, measures what the agent does, and keeps only what the team's own checks prove.</p>
+    <p class="sub">One command on the developer's machine, in their own setup. Cost, design, security, red team, tester: each an expert written centrally as prose, each judged by a number. Several can go at once.</p>
   </section>
 
   <section>
     <h2>What a team needs ready</h2>
     <ul class="needs">
-      <li><b>The project in git</b><span>Changes land on a new branch</span></li>
-      <li><b>The agent runs</b><span>Its own setup, keys and services</span></li>
+      <li><b>The project in git</b><span>Changes land on a new branch; nothing uncommitted is touched</span></li>
+      <li><b>The agent runs</b><span>Its own setup, env files, keys and services, found by name</span></li>
       <li class="key"><b>Something to check against</b><span>Their eval suite (any tool), a golden dataset, or even one example request</span></li>
-      <li><b>Visible model calls</b><span>Through LangChain</span></li>
+      <li><b>Visible model calls</b><span>Through LangChain, in a LangGraph graph</span></li>
     </ul>
-    <p class="stop">It uses the strongest check the project has. If anything is missing, it says what it looked at and stops before spending: <q>Nothing to check the agent against: add evals, a golden dataset or an example of what it is sent.</q></p>
+    <p class="stop">It uses the strongest check the project has. With none, the cost expert can call the tester to write requests, labelled as written. If what it needs is missing, it says what it looked at and stops before spending: <q>Nothing to check the agent against: add evals, a golden dataset or an example of what it is sent.</q></p>
   </section>
 
   <section>
     <h2>How it works &middot; one command, unattended</h2>
     <ol class="flow">
-      <li><h3>Check</h3><span>Everything is ready</span></li>
-      <li><h3>Baseline</h3><span>Checks it as it is, measures cost</span></li>
-      <li class="loop"><h3>Find</h3><span>Where tokens and money go</span></li>
-      <li class="loop"><h3>Change</h3><span>Every fix at once, on a branch</span></li>
-      <li class="loop"><h3>Prove</h3><span>Together; split only if refused</span></li>
-      <li><h3>Report</h3><span>What was kept and saved</span></li>
+      <li class="once"><h3>Survey</h3><span>Once a project: every agent, how each starts, what checks it</span></li>
+      <li><h3>Start</h3><span>The shipped agent, as the survey proved it</span></li>
+      <li><h3>Measure</h3><span>3 runs, every model call recorded, cost past the noise</span></li>
+      <li class="loop"><h3>Find</h3><span>What the expert looks for, in the recordings and the code</span></li>
+      <li class="loop"><h3>Change</h3><span>With apply only: each fix saved on a branch</span></li>
+      <li class="loop"><h3>Prove</h3><span>Measure and evals again; keep or undo, by code</span></li>
+      <li><h3>Report</h3><span>Findings with numbers, checks closed, and the card</span></li>
     </ol>
     <div class="again"><div></div><p>Looks again after each kept change</p></div>
   </section>
 
   <section>
-    <h2>Inside &middot; one AI agent, set up as the expert asked for</h2>
+    <h2>The experts &middot; one folder of prose each, judged by a number</h2>
+    <ul class="experts">
+      <li><code>cost</code><span>Where the agent wastes tokens and money: growing context, repeated work, the wrong model, tools it never uses</span><em>review and apply</em></li>
+      <li><code>design</code><span>Whether the design fits the job: branches never taken, a supervisor that always picks the same order, a review loop that changes nothing</span><em>review</em></li>
+      <li><code>security</code><span>What it can do with whose credentials, what reaches its model unchecked, what leaves the process, what it pulls in</span><em>review</em></li>
+      <li><code>redteam</code><span>What a hostile request makes it do, judged by what it did in the recordings</span><em>review</em></li>
+      <li><code>tester</code><span>The requests that would check it: those the project holds and those worth writing; called by cost when a project has none</span><em>called</em></li>
+      <li><code>surveyor</code><span>What the project holds: every agent, how each starts, proven; runs by itself the first time, and when the files change</span><em>automatic</em></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Inside &middot; one Claude session, set up as the expert asks</h2>
     <div class="arch">
       <div class="part">
         <h3>Guide</h3>
-        <p>How to work: a part every expert shares, and each expert's own.</p>
+        <p>How to work: a part every expert shares, and each expert's own. The header names what it is asked, what a change must earn, which experts it may call. It can name a rule or a tool; it cannot bring its own.</p>
       </div>
       <div class="part">
-        <h3>Skills</h3>
-        <p>What an expert knows. Cost: where cost hides, per provider. Design: the patterns, and when each earns its keep.</p>
-        <div class="chips"><span>caching</span><span>model choice</span><span>prompt growth</span><span>repeated work</span><span>tool lists</span></div>
+        <h3>Skills and checks</h3>
+        <p>What an expert knows, and the list it must close: for every node that matters, each of its checks, opened by code from the recording. It cannot shorten the list.</p>
+        <div class="chips"><span>caching</span><span>redundant work</span><span>agency</span><span>provenance</span><span>egress</span><span>attacks</span></div>
       </div>
       <div class="core">
-        <h3>One Claude agent</h3>
-        <p>Decides how: reads the project, starts it, finds the waste, makes the changes.</p>
+        <h3>One Claude session</h3>
+        <p>Decides how: reads the project, starts the agent, finds what its expertise looks for, closes its checks, reports.</p>
       </div>
       <div class="part">
         <h3>Tools</h3>
-        <p>What it can do, each with limits built in.</p>
-        <div class="chips"><span>ask</span><span>start</span><span>measure</span><span>query</span><span>run evals</span><span>save</span><span>keep</span><span>undo</span></div>
+        <p>What it can do, each with limits built in. Several experts at once share the survey and the measurement.</p>
+        <div class="chips"><span>ask</span><span>start</span><span>measure</span><span>query</span><span>checked</span><span>run evals</span><span>save</span><span>keep</span><span>undo</span><span>call</span><span>shape</span></div>
       </div>
       <div class="part">
         <h3>Rules</h3>
-        <p>Enforced, never asked: edits only on its branch, no push, no installs. Env files are shown to it by name only.</p>
-        <div class="chips"><span>$2 on the agent's own key</span><span>2 hours</span></div>
+        <p>Enforced, never asked: edits only on its branch, no push, no installs, env files by name only, never a secret's value.</p>
+        <div class="chips"><span>$2 on the agent's own key</span><span>2 hours</span><span>4 tries to start</span><span>3 questions</span></div>
       </div>
       <div class="under">
         <b>Code decides what counts</b>
-        <span>Records every model call &middot; measures cost past the noise &middot; a separate reader checks the results</span>
+        <span>Records every model call &middot; cost past the noise &middot; shape unchanged &middot; tests untouched &middot; nothing changed that never ran &middot; a separate reader reads the evals</span>
       </div>
     </div>
   </section>
 
   <section>
     <h2>In the code &middot; fleetopt/</h2>
-    <p class="entry"><code>cli.py</code> the command &middot; <code>config.py</code> signs in the way Claude Code does on the machine; no key of its own</p>
+    <p class="entry"><code>cli.py</code> the command &middot; <code>config.py</code> signs in the way Claude Code does on the machine; no key of its own &middot; <code>scope.py</code> one run's state, in its own task, so a process holds several</p>
     <div class="code">
       <div class="part">
         <h3>the session &middot; and its experts</h3>
         <ul>
-          <li><code>session.py</code>The one Claude session: guards, model, the run</li>
-          <li><code>tools.py</code>The 8 tools every expert uses, with the limits and git inside them</li>
+          <li><code>session.py</code>The one Claude session: guards, model, the run, the tape of every message, several experts at once</li>
+          <li><code>tools.py</code>The 11 tools every expert uses, with the limits, the checks and git inside them</li>
           <li><code>expert.py</code>Finds an expert's folder here or pulls it from the central catalogue; holds the rules a change must meet</li>
-          <li><code>GUIDE.md</code>The guide every expert shares: how to start a team's agent and work with the tools</li>
-          <li><code>../experts/</code>The catalogue, outside the code. Prose only, one folder an expert: <code>cost/</code>, <code>design/</code>, <code>tester/</code></li>
+          <li><code>census.py</code>What the project holds, walked by code before any model sees it: agents, env files, launchers, evals</li>
+          <li><code>card.py</code>The agent card, assembled from the records after every run; no model writes a word of it</li>
+          <li><code>../experts/</code>The catalogue, outside the code. Prose only, one folder an expert</li>
         </ul>
       </div>
       <div class="part">
@@ -219,17 +243,18 @@
           <li><code>measure.py</code>3 runs, medians, only a change past the noise counts</li>
           <li><code>pricing.py</code>Tokens to dollars, per model and provider</li>
           <li><code>judge.py</code>The separate reader: did anything break</li>
-          <li><code>shape.py</code>What the graph declared against what it did, for the design expert</li>
+          <li><code>shape.py</code>What the graph declared against what it did: nodes, edges, branches taken</li>
         </ul>
       </div>
     </div>
     <ol class="run">
-      <li><b>Check</b><span>Reads the project, finds what to check against, and how the team runs it; <code>start</code> tries one request</span></li>
-      <li><b>Baseline</b><span><code>run evals</code> on the original, then <code>measure</code>: 3 runs, every call recorded</span></li>
-      <li><b>Find</b><span><code>query</code> the recorded calls and read the code, with the skills</span></li>
-      <li><b>Change</b><span>Each fix its own <code>save</code>, a named commit on fleetopt's branch</span></li>
-      <li><b>Prove</b><span>One <code>measure</code> and evals for all; <code>keep</code> only if cheaper and nothing broke, else <code>undo</code> and split</span></li>
-      <li><b>Report</b><span>Its account, and a summary computed by code; the team's copy is back as it was</span></li>
+      <li><b>Survey</b><span>The census by code, then the surveyor proves how each agent starts; kept in <code>.fleetopt/</code> until the project changes</span></li>
+      <li><b>Start</b><span>The proven entry for the shipped graph; <code>start</code> tries one request, several agents at once</span></li>
+      <li><b>Measure</b><span><code>run evals</code> on the original when there is a suite, then <code>measure</code>: 3 runs, every call recorded, the checks opened</span></li>
+      <li><b>Find</b><span><code>query</code> the recorded calls and read the code, with the skills; <code>checked</code> closes each cell with its number</span></li>
+      <li><b>Change</b><span>With apply: each fix its own <code>save</code>, a named commit on fleetopt's branch</span></li>
+      <li><b>Prove</b><span>One <code>measure</code> and evals for all; <code>keep</code> only if better and nothing broke, else <code>undo</code> and split</span></li>
+      <li><b>Report</b><span>Its account with the numbers, a summary computed by code, the run's log and tape, the card; the team's copy is back as it was</span></li>
     </ol>
   </section>
 
@@ -237,12 +262,13 @@
     <h2>What keeps it safe</h2>
     <ul class="safe">
       <li>Never touches a team's live code</li>
-      <li>Kept only if cheaper and the team's own checks still pass</li>
+      <li>Kept only if better past the noise and the team's own checks still pass</li>
+      <li>Every finding carries a number from the recording</li>
       <li>A person decides what is merged</li>
     </ul>
   </section>
 
-  <footer>For LangGraph agents in Python, with model calls through LangChain. Checked against the team's own evals (any tool), a golden dataset, or examples of what the agent is sent.</footer>
+  <footer>For LangGraph agents in Python, with model calls through LangChain. Checked against the team's own evals (any tool), a golden dataset, or examples of what the agent is sent. Records live with the project in <code>.fleetopt/</code>: the survey, how each agent starts, every run, the agent card.</footer>
 
 </div>
 </body>

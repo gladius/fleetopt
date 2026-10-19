@@ -81,7 +81,7 @@ ADDED = (("runs", "path", "TEXT"), ("graphs", "driven", "INTEGER"), ("graphs", "
 
 
 def connect(path):
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=60)  # runs of several experts at once share it
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     for table, column, kind in ADDED:
