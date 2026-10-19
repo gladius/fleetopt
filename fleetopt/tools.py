@@ -175,17 +175,9 @@ env_names = census.env_names
 
 
 def declared(project):
-    """The names of the graphs the project ships: every langgraph.json in it, wherever it is."""
-    names = []
-    for folder, dirs, found in os.walk(project):
-        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in ("node_modules", "venv", "__pycache__"))
-        if "langgraph.json" in found:
-            try:
-                names += list(json.loads((pathlib.Path(folder) / "langgraph.json").read_text(encoding="utf-8-sig"))
-                              .get("graphs") or {})
-            except (OSError, ValueError, AttributeError):
-                pass
-    return names
+    """The agents the project ships: every langgraph.json's graphs, and every ADK root_agent."""
+    taken = census.take(project)
+    return [name for graphs in taken["graphs"].values() for name in graphs] + taken["adk_agents"]
 
 
 def trial(path, entry, timeout=600):
@@ -865,7 +857,7 @@ async def _baseline_once():
     if not stats.get("llm_calls"):
         CTX["baseline_failed"] = "no model call was seen"
         say("  it ran, and no model call was seen: fleetopt cannot see what it spends")
-        return _ok("It ran and no model call was recorded: it calls its model without LangChain. Find where "
+        return _ok("It ran and no model call was recorded: it calls its model without LangChain or ADK. Find where "
                    "(file and line), say so, and stop.")
     factor = BROKEN_FACTOR if not stats.get("completed") else STEP_FACTOR
     CTX.update(baseline=stats, max_steps=max(MIN_STEPS, factor * stats["steps"]), untracked=_untracked(),

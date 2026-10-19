@@ -1,6 +1,7 @@
 ---
 name: langgraph
 description: Dated facts about LangGraph and LangChain that a design recommendation must get right.
+when: langgraph
 ---
 
 ### LangGraph and LangChain facts for a recommendation

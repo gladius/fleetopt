@@ -1,6 +1,7 @@
-"""Capture hook: registers a global LangChain tracer and snapshots LangGraph graphs.
+"""Capture hook: records every model call, agent step and tool call of the agent run, and
+snapshots its structure, in one format whatever framework it is built on.
 
-Two independent pieces, both installed at interpreter startup:
+LangGraph, installed at interpreter startup:
 
 1. A `BaseTracer` subclass registered through `register_configure_hook`, which
    LangChain *appends* to every callback manager. It sits alongside any
@@ -9,12 +10,18 @@ Two independent pieces, both installed at interpreter startup:
 
 2. A patch on `StateGraph.compile` so every compiled graph snapshots its own
    topology. No need to locate the graph object in the target's source.
+
+ADK (Google's Agent Development Kit): a plugin the driver gives the Runner it builds, with
+the same records: an agent is a node, a workflow agent (sequential, parallel, loop) a nested
+graph, a hand-off between agents a conditional edge. Nothing in the team's code is touched.
 """
 
+import datetime
 import json
 import os
 import sys
 import threading
+import uuid
 
 _LOCK = threading.Lock()
 _installed = False
@@ -189,9 +196,247 @@ def _sources(compiled):
     return found
 
 
+def is_adk(obj):
+    """An ADK agent of any kind (it runs and has sub-agents; a LangGraph graph has neither), or an
+    ADK App around one (what `adk run` starts first when a file has one)."""
+    return (hasattr(obj, "run_async") and hasattr(obj, "sub_agents") or hasattr(obj, "root_agent")) and not hasattr(obj, "ainvoke")
+
+
+def adk_root(obj):
+    """The agent itself, or an App's root agent."""
+    return obj.root_agent if is_adk(obj) and not hasattr(obj, "run_async") else obj
+
+
+def _agent_sources(root, paths):
+    """{node: [file, first line, last line]} of the assignment that made each agent, found by
+    the agent's identity among the loaded modules' globals: `lookup = LlmAgent(...)` is the
+    code of node `lookup`, as a node function's lines are a graph node's. An agent made in a
+    loop or a factory has no assignment of its own, and no lines."""
+    import ast
+    import inspect
+
+    found, agents = {}, {}
+
+    def walk(agent):
+        agents[id(agent)] = paths[agent.name]
+        for sub in agent.sub_agents or []:
+            walk(sub)
+
+    walk(root)
+    for module in list(sys.modules.values()):
+        try:
+            names = {k: agents[id(v)] for k, v in vars(module).items() if id(v) in agents}
+            if not names:
+                continue
+            file = inspect.getsourcefile(module)
+            tree = ast.parse(inspect.getsource(module))
+        except Exception:  # noqa: BLE001 - a module without source, or one that will not be inspected
+            continue
+        for node in ast.walk(tree):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+            for t in targets:
+                if isinstance(t, ast.Name) and t.id in names and names[t.id] not in found:
+                    found[names[t.id]] = [file, node.lineno, node.end_lineno]
+    return found
+
+
+def adk_tree(root):
+    """The agent tree as a graph. {name: path}, {name: the agent whose run its own run belongs
+    under, or None for the root's}, nodes, edges. A workflow agent (sequential, parallel, loop)
+    is a nested graph: its sub-agents' paths start with its own. An LlmAgent's sub-agents are
+    the agents it can hand the request to: they are its siblings, and each hand-off a
+    conditional edge, so a hand-off never made is a branch never taken."""
+    paths, under, nodes, edges = {}, {}, [], []
+
+    def walk(agent, prefix, owner):
+        path = prefix + agent.name
+        paths[agent.name], under[agent.name] = path, owner
+        nodes.append(path)
+        subs = list(agent.sub_agents or [])
+        if hasattr(agent, "tools") or not subs:  # an LlmAgent: hand-offs to siblings
+            for sub in subs:
+                edges.append({"source": path, "target": prefix + sub.name, "conditional": True})
+                if not getattr(sub, "disallow_transfer_to_parent", True):
+                    edges.append({"source": prefix + sub.name, "target": path, "conditional": True})
+                walk(sub, prefix, owner)
+            return
+        kind = type(agent).__name__
+        for i, sub in enumerate(subs):  # a workflow agent: a graph of its own
+            if kind != "ParallelAgent" and i + 1 < len(subs):
+                edges.append({"source": path + ":" + sub.name, "target": path + ":" + subs[i + 1].name, "conditional": False})
+            walk(sub, path + ":", agent.name)
+        if kind == "LoopAgent" and len(subs) > 1:
+            edges.append({"source": path + ":" + subs[-1].name, "target": path + ":" + subs[0].name, "conditional": True})
+        elif kind == "LoopAgent" and subs:
+            edges.append({"source": path + ":" + subs[0].name, "target": path + ":" + subs[0].name, "conditional": True})
+
+    walk(root, "", None)
+    return paths, under, nodes, edges
+
+
+def _parts_text(content):
+    out = []
+    for p in getattr(content, "parts", None) or []:
+        if getattr(p, "text", None):
+            out.append(p.text)
+        elif getattr(p, "function_call", None):
+            out.append(json.dumps({"call": p.function_call.name, "args": p.function_call.args}, default=str))
+        elif getattr(p, "function_response", None):
+            out.append(json.dumps({"result": p.function_response.response}, default=str))
+    return "\n".join(out)
+
+
+def adk_plugin(root):
+    """The probe as an ADK plugin, for the Runner fleetopt's driver builds around `root`."""
+    from google.adk.plugins.base_plugin import BasePlugin
+
+    paths, under, _, _ = adk_tree(adk_root(root))
+    now = lambda: datetime.datetime.now(datetime.timezone.utc)
+    io = bool(os.environ.get("FLEETOPT_CAPTURE_IO"))
+
+    class FleetOptPlugin(BasePlugin):
+        def __init__(self):
+            super().__init__(name="fleetopt_probe")
+            self.inv = {}  # invocation id: {"step", "runs": {agent: run id}, "began": {agent: time}, "llm", "tool", "final"}
+
+        def _inv(self, invocation_id):
+            return self.inv.setdefault(invocation_id, {"step": 0, "runs": {}, "began": {}, "llm": {}, "tool": {}, "final": None})
+
+        def _write(self, inv_id, record, began, error=None):
+            ended = now()
+            record.update({"trace_id": inv_id, "start_time": began, "end_time": ended, "error": error, "tags": [],
+                           "duration_ms": round((ended - began).total_seconds() * 1000, 2) if began else None})
+            _append("FLEETOPT_TRACE_FILE", record)
+
+        def _parent(self, inv, agent_name):
+            owner = under.get(agent_name)
+            return inv["runs"].get(owner) if owner else inv["root"]
+
+        async def before_run_callback(self, *, invocation_context):
+            inv = self._inv(invocation_context.invocation_id)
+            inv["root"], inv["root_began"] = invocation_context.invocation_id, now()
+            inv["input"] = _parts_text(invocation_context.user_content)
+
+        async def on_event_callback(self, *, invocation_context, event):
+            if event.is_final_response() and event.content and not event.get_function_calls():
+                self._inv(invocation_context.invocation_id)["final"] = _parts_text(event.content)
+
+        def _close_run(self, invocation_context, error=None):
+            inv_id = invocation_context.invocation_id
+            inv = self.inv.get(inv_id)
+            if not inv:
+                return
+            for agent_name in list(inv["began"]):  # an agent that handed the request on gets no after-agent call
+                self._agent_record(agent_name, invocation_context)
+            self.inv.pop(inv_id)
+            record = {"run_id": inv["root"], "parent_run_id": None, "name": invocation_context.agent.name
+                      if invocation_context.agent else "adk", "run_type": "chain", "node": None, "path": None,
+                      "step": None, "model": None, "provider": None}
+            if io:
+                record["inputs"] = inv.get("input")
+                record["outputs"] = inv["final"] if error is None else None
+            self._write(invocation_context.invocation_id, record, inv.get("root_began"), error)
+
+        async def after_run_callback(self, *, invocation_context):
+            self._close_run(invocation_context)
+
+        async def on_run_error_callback(self, *, invocation_context, error):
+            self._close_run(invocation_context, repr(error))
+
+        async def before_agent_callback(self, *, agent, callback_context):
+            inv = self._inv(callback_context.invocation_id)
+            inv["step"] += 1
+            inv["runs"][agent.name] = str(uuid.uuid4())
+            inv["began"][agent.name] = (now(), inv["step"])
+
+        def _agent_record(self, agent_name, callback_context, error=None):
+            inv = self._inv(callback_context.invocation_id)
+            began, step = inv["began"].pop(agent_name, (None, None))
+            self._write(callback_context.invocation_id, {
+                "run_id": inv["runs"].get(agent_name), "parent_run_id": self._parent(inv, agent_name), "name": agent_name,
+                "run_type": "chain", "node": agent_name, "path": paths.get(agent_name, agent_name), "step": step,
+                "model": None, "provider": None}, began, error)
+
+        async def after_agent_callback(self, *, agent, callback_context):
+            self._agent_record(agent.name, callback_context)
+
+        async def on_agent_error_callback(self, *, agent, callback_context, error):
+            self._agent_record(agent.name, callback_context, repr(error))
+
+        async def before_model_callback(self, *, callback_context, llm_request):
+            inv = self._inv(callback_context.invocation_id)
+            system = llm_request.config.system_instruction if llm_request.config else None
+            prompt = "\n---\n".join(filter(None, [system if isinstance(system, str) else _parts_text(system)]
+                                          + [_parts_text(c) for c in llm_request.contents or []]))
+            inv["llm"][callback_context.agent_name] = (now(), prompt, llm_request.model or None)
+
+        def _model_record(self, callback_context, response=None, model=None, error=None):
+            inv = self._inv(callback_context.invocation_id)
+            agent = callback_context.agent_name
+            began, prompt, asked = inv["llm"].pop(agent, (None, None, None))
+            usage = getattr(response, "usage_metadata", None)
+            record = {"run_id": str(uuid.uuid4()), "parent_run_id": inv["runs"].get(agent), "name": "model",
+                      "run_type": "llm", "node": agent, "path": paths.get(agent, agent),
+                      "step": inv["began"].get(agent, (None, None))[1], "model": asked or model, "provider": None,
+                      "prompt_chars": len(prompt) if prompt else None,
+                      "usage": {"input_tokens": usage.prompt_token_count or 0, "output_tokens": usage.candidates_token_count or 0,
+                                "input_token_details": {"cache_read": usage.cached_content_token_count or 0}} if usage else None}
+            if io:
+                record["prompt"], record["completion"] = _clip(prompt), _clip(_parts_text(response.content) if response else None)
+            self._write(callback_context.invocation_id, record, began, error)
+
+        async def after_model_callback(self, *, callback_context, llm_response):
+            if llm_response.partial:
+                return None
+            self._model_record(callback_context, llm_response,
+                               error=f"{llm_response.error_code}: {llm_response.error_message}" if llm_response.error_code else None)
+
+        async def on_model_error_callback(self, *, callback_context, llm_request, error):
+            self._model_record(callback_context, model=llm_request.model or None, error=repr(error))
+
+        async def before_tool_callback(self, *, tool, tool_args, tool_context):
+            inv = self._inv(tool_context.invocation_id)
+            inv["step"] += 1
+            inv["tool"][(tool_context.agent_name, tool.name)] = (now(), inv["step"])
+
+        def _tool_record(self, tool, tool_args, tool_context, result=None, error=None):
+            inv = self._inv(tool_context.invocation_id)
+            agent = tool_context.agent_name
+            began, step = inv["tool"].pop((agent, tool.name), (None, None))
+            record = {"run_id": str(uuid.uuid4()), "parent_run_id": inv["runs"].get(agent), "name": tool.name,
+                      "run_type": "tool", "node": agent, "path": paths.get(agent, agent), "step": step, "model": None,
+                      "provider": None}
+            if io:
+                record["inputs"], record["outputs"] = tool_args, result
+            self._write(tool_context.invocation_id, record, began, error)
+
+        async def after_tool_callback(self, *, tool, tool_args, tool_context, result):
+            self._tool_record(tool, tool_args, tool_context, result)
+
+        async def on_tool_error_callback(self, *, tool, tool_args, tool_context, error):
+            self._tool_record(tool, tool_args, tool_context, error=repr(error))
+
+    return FleetOptPlugin()
+
+
+def snapshot_agent(root, driven=False):
+    """An ADK agent tree's structure, as snapshot_graph records a graph's."""
+    root = adk_root(root)
+    paths, _, nodes, edges = adk_tree(root)
+    try:
+        sources = _agent_sources(root, paths)
+    except Exception as exc:  # noqa: BLE001
+        _warn(f"agent sources not recorded: {exc}")
+        sources = {}
+    _append("FLEETOPT_GRAPH_FILE", {"driven": driven, "sources": sources, "name": root.name, "nodes": sorted(nodes),
+                                    "edges": edges, "mermaid": None})
+
+
 def snapshot_graph(compiled, driven=False):
     """One compiled graph's structure. `driven`: fleetopt's driver marks the graph it runs, of
     the several a project may compile."""
+    if is_adk(compiled):
+        return snapshot_agent(compiled, driven)
     graph = compiled.get_graph(xray=True)
     try:
         mermaid = graph.draw_mermaid()
@@ -283,10 +528,13 @@ def install():
         return
     _installed = True
 
+    import importlib.util
+
     for label, fn in (("tracer", _register_tracer), ("langgraph", _patch_langgraph), ("files", _watch_files)):
         try:
             fn()
         except ImportError as exc:
-            _warn(f"{label} not instrumented ({exc})")
+            if importlib.util.find_spec("google.adk") is None:  # an ADK project has no langchain: the driver's plugin records it
+                _warn(f"{label} not instrumented ({exc})")
         except Exception as exc:
             _warn(f"{label} instrumentation failed: {exc}")

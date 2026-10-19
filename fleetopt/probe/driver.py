@@ -99,11 +99,17 @@ def resolve(spec, root, paths):
     return compiled(found() if call or inspect.isfunction(found) else found)
 
 
+def is_adk(obj):
+    """An ADK agent of any kind (it runs and has sub-agents; a LangGraph graph has neither), or an
+    ADK App around one (what `adk run` starts first when a file has one)."""
+    return (hasattr(obj, "run_async") and hasattr(obj, "sub_agents") or hasattr(obj, "root_agent")) and not hasattr(obj, "ainvoke")
+
+
 def compiled(graph):
     """A builder compiled as the team's service compiles it at start-up, with a checkpointer:
     here one in memory, as `langgraph dev` gives it. Observed: a service whose graphs exist only
     as functions returning builders, compiled inside the app when it starts."""
-    if hasattr(graph, "ainvoke") or not hasattr(graph, "compile"):
+    if hasattr(graph, "ainvoke") or is_adk(graph) or not hasattr(graph, "compile"):
         return graph
     try:
         from langgraph.checkpoint.memory import MemorySaver
@@ -174,6 +180,37 @@ def platform(graph, entry):
     return {"context": entry["context"]} if entry.get("context") else {}
 
 
+def adk_runner(agent, entry, plugin=None):
+    """ADK's runner around the team's agent, as `adk run` builds one: services in memory, and
+    under the probe, fleetopt's plugin on it. An App (the team's cache, compaction and plugin
+    settings) is run as it is, with the plugin added to its own."""
+    try:
+        from google.adk.runners import InMemoryRunner
+    except ImportError:  # the agent came from the project's own ADK, so it is there; said plainly if ever not
+        raise RuntimeError("the agent is an ADK agent, and google.adk cannot be imported in its environment") from None
+    if not hasattr(agent, "run_async"):  # an App (an agent has a root_agent too: the top of its tree)
+        if plugin:
+            agent.plugins.append(plugin)
+        return InMemoryRunner(app=agent)
+    return InMemoryRunner(agent=agent, app_name=entry.get("name") or "agent", plugins=[plugin] if plugin else None)
+
+
+async def adk_ask(runner, text, state=None):
+    """One request to an ADK agent, in a session of its own; the last answer's text."""
+    try:
+        from google.genai import types
+    except ImportError:  # ADK depends on it
+        raise RuntimeError("google.genai cannot be imported in the agent's environment") from None
+    session = await runner.session_service.create_session(app_name=runner.app_name, user_id="fleetopt",
+                                                          state=state or None)
+    final = None
+    async for event in runner.run_async(user_id="fleetopt", session_id=session.id,
+                                        new_message=types.Content(role="user", parts=[types.Part(text=text)])):
+        if event.is_final_response() and event.content and event.content.parts:
+            final = "".join(p.text or "" for p in event.content.parts)
+    return final
+
+
 def main(argv):
     if argv[0] == "--env":  # what the env files add, for a command fleetopt runs in their place (the team's evals)
         entry = json.loads(sys.stdin.read())
@@ -209,25 +246,35 @@ def main(argv):
         traceback.print_exc()
         print(f"[driver] could not load {entry['graph']}: {type(exc).__name__}: {exc}")
         return 2
+    hook = plugin = None
     try:  # under fleetopt's probe: say which of the graphs the project compiles is the one run here
-        import _fleetopt_hook
+        import _fleetopt_hook as hook
     except ImportError:  # run by hand, without the probe
         pass
     else:
         try:
-            _fleetopt_hook.snapshot_graph(graph, driven=True)
+            hook.snapshot_graph(graph, driven=True)
         except Exception:  # noqa: BLE001 - a graph it cannot describe: the run goes on
             pass
 
     inputs = entry["inputs"][:limit]
-    extra = platform(graph, entry)
+    adk = is_adk(graph)
+    if adk:
+        plugin = hook.adk_plugin(graph) if hook else None
+        runner = adk_runner(graph, entry, plugin)
+    extra = {} if adk else platform(graph, entry)
     finished = paused = 0
     for text in inputs:
         shown = text if isinstance(text, str) else json.dumps(text)
         config = {"configurable": {"thread_id": str(uuid.uuid4()), **(entry.get("config") or {})}}
         try:
-            result = asyncio.run(graph.ainvoke(build_input(graph, text, entry.get("input_template")), config=config,
-                                               **extra))
+            if adk:  # the request is text; a record goes as its JSON, a template filled as text
+                asked = fill(entry["input_template"], shown) if entry.get("input_template") else shown
+                result = asyncio.run(adk_ask(runner, asked if isinstance(asked, str) else json.dumps(asked),
+                                             entry.get("context")))
+            else:
+                result = asyncio.run(graph.ainvoke(build_input(graph, text, entry.get("input_template")), config=config,
+                                                   **extra))
         except Exception as exc:  # noqa: BLE001 - one bad input must not hide the others
             print(f"[driver] FAILED {shown[:70]!r}\n         {type(exc).__name__}: {str(exc)[:400]}")
             continue

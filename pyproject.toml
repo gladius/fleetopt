@@ -1,7 +1,7 @@
 [project]
 name = "fleetopt"
 version = "0.1.0"
-description = "Find and prove cost savings in a LangGraph project without editing it"
+description = "Sends an expert to a team's agent (LangGraph or ADK), measures it, and keeps only what the team's own checks prove"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=1.7",
@@ -16,11 +16,12 @@ dependencies = [
 # The capture hook runs inside the target's interpreter and imports the target's
 # own langchain/langgraph. Deliberately not a dependency here - pinning them
 # would risk shadowing the versions the project under test actually uses.
-# The `dev` extra: the fixture's langgraph (it has no venv of its own) and the test runner.
+# The `dev` extra: the fixtures' langgraph and ADK (they have no venv of their own) and the test runner.
 [project.optional-dependencies]
 dev = [
     "langchain-core==1.6.3",
     "langgraph==1.2.11",
+    "google-adk==2.12.0",
     "pytest>=8",
 ]
 

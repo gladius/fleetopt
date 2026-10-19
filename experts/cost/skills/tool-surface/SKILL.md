@@ -23,8 +23,8 @@ step that costs more than it saves. This is the most common correct answer.
   Anthropic: `defer_loading: true` plus a tool-search tool. OpenAI / Gemini: no
   built-in deferral - select tools per node in code.
 - **MCP servers bound wholesale** - filter to the tools the node uses.
-- **Same tools bound to every node** - in LangGraph, `bind_tools` per node; a node
-  that cannot call a tool should not pay for its schema. Choose per node, not per call:
+- **Same tools bound to every node** - bind per node, with the framework's own means
+  (framework skill). A node that cannot call a tool should not pay for its schema. Choose per node, not per call:
   a tool list that changes between calls of one node breaks that node's cache (caching).
 - **Verbose descriptions** - paragraph-long field docs, long enums, nested objects,
   duplicated boilerplate across tools.

@@ -1,6 +1,6 @@
 ---
 name: attacks
-description: The kinds of hostile request a LangGraph agent can be sent, what each needs to apply, and what success looks like in the recordings.
+description: The kinds of hostile request an agent (LangGraph or ADK) can be sent, what each needs to apply, and what success looks like in the recordings.
 ---
 
 ### The attacks a request can carry

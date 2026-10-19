@@ -47,20 +47,24 @@ def walk(project):
 
 
 def _python(project, rel):
-    """(packages it imports, whether it builds a LangGraph graph, its StateGraph/compile lines)."""
+    """(packages it imports, whether it builds a LangGraph graph, the name of what `adk run`
+    would start in it: `app` first, else `root_agent`, else None)."""
     try:
         tree = ast.parse((project / rel).read_text(encoding="utf-8-sig", errors="replace"))
     except (SyntaxError, ValueError, OSError):
-        return set(), False
-    packages, builds = set(), False
+        return set(), False, None
+    packages, builds, names = set(), False, set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             packages |= {a.name.split(".")[0] for a in node.names}
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
-            packages.add(node.module.split(".")[0])
+            packages.add("google.adk" if node.module.startswith("google.adk") else node.module.split(".")[0])
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "compile":
             builds = True
-    return packages, builds and "langgraph" in packages
+        elif isinstance(node, ast.Assign):
+            names |= {t.id for t in node.targets if isinstance(t, ast.Name) and t.id in ("app", "root_agent")}
+    adk = "google.adk" in packages and ("app" if "app" in names else "root_agent" if "root_agent" in names else None)
+    return packages, builds and "langgraph" in packages, adk or None
 
 
 def env_names(project):
@@ -105,7 +109,7 @@ def take(project):
     project = pathlib.Path(project).resolve()
     files = list(walk(project))
     kinds = collections.Counter(pathlib.Path(f).suffix or "(none)" for f in files)
-    graphs, systems, builders, launchers, readmes, evals = {}, collections.defaultdict(set), [], [], [], []
+    graphs, systems, builders, adk, launchers, readmes, evals = {}, collections.defaultdict(set), [], [], [], [], []
     for rel in files:
         name = rel.rsplit("/", 1)[-1]
         if name == "langgraph.json":
@@ -120,14 +124,16 @@ def take(project):
         if EVALS.search(rel):
             evals.append(rel)
         if rel.endswith(".py"):
-            packages, builds = _python(project, rel)
+            packages, builds, root = _python(project, rel)
             if builds:
                 builders.append(rel)
+            if root:
+                adk.append(f"{rel}:{root}")
             for p in packages & SYSTEMS.keys():
                 systems[SYSTEMS[p]].add(rel)
     env, shell = env_names(project)
     return {"project": str(project), "files": len(files), "kinds": dict(kinds.most_common(8)),
-            "graphs": graphs, "builders": builders, "launchers": launchers, "readmes": readmes,
+            "graphs": graphs, "builders": builders, "adk_agents": adk, "launchers": launchers, "readmes": readmes,
             "env_files": env, "shell_credentials": shell, "interpreters": interpreters(project),
             "systems": {k: sorted(v) for k, v in sorted(systems.items())}, "evals": evals}
 
@@ -139,6 +145,7 @@ def render(census, cap=40):
              "Agents declared (langgraph.json): " + ("; ".join(f"{p}: " + ", ".join(f"{n} = {s}" for n, s in g.items())
                                                               for p, g in census["graphs"].items()) or "none"),
              f"Files that build a LangGraph graph: {some(census['builders'])}",
+             f"ADK agents (what `adk run` starts: an app, else a root_agent): {some(census.get('adk_agents') or [])}",
              f"Launchers and setup: {some(census['launchers'])}",
              f"READMEs: {some(census['readmes'])}",
              "Env files and the names each sets (never the values): "
@@ -149,6 +156,12 @@ def render(census, cap=40):
              + ("; ".join(f"{s}: {', '.join(f[:6])}" for s, f in census["systems"].items()) or "none seen"),
              f"Tests, evals, data and examples: {some(census['evals'])}"]
     return "\n".join(lines)
+
+
+def frameworks(census):
+    """Which frameworks the project builds on, by what the census found: a skill named after
+    one goes to an expert only on a project that uses it."""
+    return ({"langgraph"} if census["graphs"] or census["builders"] else set()) | ({"adk"} if census["adk_agents"] else set())
 
 
 def fingerprint(census):

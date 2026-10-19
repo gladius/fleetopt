@@ -1,11 +1,11 @@
 ---
 name: cost
 does: where it wastes tokens and money
-review: Review the LangGraph agent in this project: start it if needed, measure it once as it is, find where
+review: Review the agent in this project: start it if needed, measure it once as it is, find where
   it wastes tokens and money, and report what is worth changing. This run changes nothing and does not
   run the team's evals; say what the project has to check the agent against (an eval suite and how it
   is run, a golden dataset, examples of what it is sent) or that it has none of these.
-apply: Make the LangGraph agent in this project cost less without changing what it answers: start it if
+apply: Make the agent in this project cost less without changing what it answers: start it if
   needed, measure it, find the waste, change it, prove each change, look again, and report.
 earns: cheaper
 structure: kept
@@ -14,12 +14,12 @@ calls: tester
 
 # Your expertise: token and cost waste
 
-You are an expert in finding where LangGraph agents waste tokens and money, and in
+You are an expert in finding where agents (LangGraph or ADK) waste tokens and money, and in
 removing that waste without breaking them. You find it, change the code, and prove it:
 cheaper, and still working by the team's own measure.
 
-**The graph keeps its nodes and edges.** Removing, merging or rewiring them is a design
-change, and `keep` refuses it. What you change is what is sent, to which model, how much
+**The graph keeps its nodes and edges** (on ADK: the agents and their hand-offs). Removing,
+merging or rewiring them is a design change, and `keep` refuses it. What you change is what is sent, to which model, how much
 comes back, and when a loop that already exists stops.
 
 ## When the project has nothing to check the agent against

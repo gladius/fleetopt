@@ -86,20 +86,16 @@ usually the whole fix; caching then happens on its own. On Anthropic add the mar
 
 ## Step 3 - mechanics
 
-**Anthropic via langchain-anthropic.** A breakpoint is a `cache_control` on a content
-block:
-```python
-SystemMessage(content=[{"type": "text", "text": STATIC, "cache_control": {"type": "ephemeral"}}])
-```
-or on the last stable message of the history. Up to 4 breakpoints. Read the installed
-`langchain_anthropic` source if in doubt - the spelling drifts between versions.
-Verify with `cache_read_tokens` in the next measurement; the first call writes
-(1.25x), the rest read (0.1x), so a loop must make >=2 calls to break even.
+**Anthropic.** A breakpoint is a `cache_control` marker on a content block (the static
+system text, or the last stable message of the history), up to 4 of them. Verify with
+`cache_read_tokens` in the next measurement; the first call writes (1.25x), the rest read
+(0.1x), so a loop must make >=2 calls to break even. How the marker is set is the
+framework's: see the framework skill.
 
 **OpenAI.** GPT-5.5 and earlier: nothing to add; stability is the fix. GPT-5.6+:
 set `prompt_cache_options={"mode": "implicit"}` (or explicit with breakpoints) on the
-request; via langchain-openai pass it in `model_kwargs`. Cached tokens appear as
-`input_token_details.cache_read` in the trace.
+request (where the framework passes request options: framework skill). Cached tokens
+appear as `input_token_details.cache_read` in the trace.
 
 **Gemini.** Implicit: nothing to add; put the large common content first and send
 similar-prefix requests close together (cache lifetime is minutes). Explicit context

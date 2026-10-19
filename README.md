@@ -1,6 +1,6 @@
 # fleetopt
 
-Makes a LangGraph agent cheaper, and proves it still works by the team's own measure. Point
+Makes a team's agent (LangGraph, or Google's ADK) cheaper, and proves it still works by the team's own measure. Point
 it at a project: it works out how to run the agent, finds where it wastes tokens and money,
 changes it on a new branch, and keeps only what is cheaper and proven not to break it.
 
@@ -53,7 +53,8 @@ of the requests were written for the run and not found in the project.
 An expert is a folder of prose, with no code in it: `GUIDE.md`, whose header says what it is
 asked, which shared tools it uses, what a change of its must earn and which experts it may
 call; `CHECKS.md`, what it tracks (the rows: the nodes that carry the money, every node, or
-every branch; and what settles each check); and `skills/<name>/SKILL.md`. No expert lives in fleetopt's code. Where one is found, first hit wins:
+every branch; and what settles each check); and `skills/<name>/SKILL.md`. A skill whose header says
+`when: adk` (or `langgraph`) goes to the expert only on a project built on that framework. No expert lives in fleetopt's code. Where one is found, first hit wins:
 
 1. a directory named in `FLEETOPT_EXPERTS`;
 2. `experts/` in this repo, when fleetopt runs from a checkout: the catalogue itself;
@@ -106,6 +107,8 @@ Try `review` on a copy of the bundled fixture (a fake model, nothing spent on an
 T=$(mktemp -d) && cp -r fixture/. "$T" && git -C "$T" init -q && git -C "$T" add -A && git -C "$T" commit -qm base
 fleetopt review "$T"
 ```
+
+The same with `fixture-adk/` in place of `fixture/` tries it on an ADK agent tree.
 
 ## How it works
 
@@ -174,7 +177,7 @@ Enforced, not asked; each is a test in `tests/test_invariants.py`.
 | Flag | Meaning |
 |---|---|
 | `--evals WHAT` | What to check the agent with: your eval command (`pytest tests/evals`) or a file of test cases, expected answers or example requests. Found in the project otherwise |
-| `--graph NAME` | Which agent, when a project has several |
+| `--graph NAME` | Which agent, when a project has several (a name from `langgraph.json`, or `path/agent.py:root_agent` for ADK) |
 | `--expert NAME` | Which expert looks at it (default `cost`); pulled from the central catalogue when it is not here |
 | `--no-ask` | Never ask a question at the terminal |
 | `--max-usd N` | Cap on fleetopt's own spend |
@@ -196,8 +199,11 @@ answers: treat them like the project's own logs. `.fleetopt/survey/` holds the s
 
 - The cost expert's "start from the bill" rule and its hand-offs skill are new, after a real
   run missed a call worth 29% of an agent's cost; they have run on no real agent yet.
-- LangGraph in Python only; model calls must go through LangChain to be seen.
-- Anthropic and OpenAI models have been run; Gemini is priced, untested.
+- LangGraph and ADK, in Python only; model calls must go through LangChain or ADK to be seen.
+- ADK is proven on fleetopt's own fixture (`fixture-adk/`, a coordinator, a sequential pipeline with a
+  review loop, tools) and on no real ADK agent yet. A change to an ADK agent the requests never ran is
+  not tied to its code the way a graph node's is; a change to a file the runs never loaded is still refused.
+- Anthropic and OpenAI models have been run; Gemini is priced, untested on a real run.
 - Reading eval results has been tried on pytest output only; checking by a golden dataset or
   examples is tested in code, not yet on a real run.
 - The design expert only reviews. A branch "never taken" is never taken on the requests run:

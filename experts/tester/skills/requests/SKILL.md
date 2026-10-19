@@ -1,6 +1,6 @@
 ---
 name: requests
-description: Writing requests that exercise a LangGraph agent, one per route and tool, in its users' words.
+description: Writing requests that exercise an agent (LangGraph or ADK), one per route and tool, in its users' words.
 ---
 
 ### Writing requests that exercise an agent

@@ -1,9 +1,14 @@
 ---
 name: patterns
-description: The design patterns a LangGraph agent is built from, when each is warranted, the evidence that it is not, and the simpler design.
+description: The design patterns an agent (LangGraph or ADK) is built from, when each is warranted, the evidence that it is not, and the simpler design.
 ---
 
 ### Patterns: warranted when, the evidence that it is not, and what is simpler
+
+On ADK the same patterns have names: a `SequentialAgent` is a pipeline, a `ParallelAgent` a
+fan-out, a `LoopAgent` a review loop, an `LlmAgent` with `sub_agents` a router or supervisor
+(the hand-off is the `transfer_to_agent` tool call in the recordings), an `LlmAgent` with
+`tools` a tool-calling loop. The recordings name them as nested graphs: `pipeline:review_loop:critic`.
 
 | Pattern | Warranted when | Smell (evidence) | Simpler |
 |---|---|---|---|

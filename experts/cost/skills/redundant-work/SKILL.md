@@ -12,14 +12,15 @@ identical across traces, or when the same tool appears repeatedly.
 
 Signature: every trace runs the loop to `MAX_ROUNDS`; later rounds add little
 (compare `completion` of round n with round n-1). Fix: exit on a convergence or
-confidence condition; keep `MAX_ROUNDS` as the safety cap, not the schedule.
+confidence condition; keep `MAX_ROUNDS` as the safety cap, not the schedule. How a loop is
+ended early is the framework's: framework skill.
 Evidence: rounds per trace from `SELECT trace_id, MAX(step) ... GROUP BY trace_id`,
 and what the last round changed.
 
 ## Serial independent calls
 
 Signature: sibling nodes with disjoint inputs whose `start_time`/`end_time` never
-overlap. Fix: fan out (LangGraph `Send`, or a list of edges from one node). This saves
+overlap. Fix: fan out, with the framework's own construct (framework skill). This saves
 wall-clock, not tokens - say so; do not report it as a cost saving unless `cost_usd`
 moved.
 

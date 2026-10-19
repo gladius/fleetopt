@@ -110,7 +110,7 @@ def test_the_driver_needs_nothing_but_the_projects_own_packages():
     assert imported <= set(sys.stdlib_module_names), imported - set(sys.stdlib_module_names)
     # ... the probe's own hook, there only under the probe: the driver marks the graph it runs;
     # and the project's python-dotenv, which reads an env file as their launcher does
-    assert tried == {"langchain_core", "langgraph", "_fleetopt_hook", "dotenv"}
+    assert tried == {"langchain_core", "langgraph", "google", "_fleetopt_hook", "dotenv"}
 
 
 def test_an_edit_lands_inside_the_project_on_fleetopts_branch_or_not_at_all(tmp_path):

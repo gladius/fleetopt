@@ -18,7 +18,7 @@ Signature: same node, same `trace_id`, `prompt_chars` climbing monotonically wit
 Fixes, cheapest first:
 - Send the last k items, or a rolling summary, to the *repeated* call. Keep the full
   history in state for the node that genuinely needs it (usually the final one).
-- LangChain: `trim_messages(messages, max_tokens=N, strategy="last", token_counter=llm)`.
+- The framework's own trimming or narrowing, where it has one: framework skill.
 - Prune tool results at phase boundaries instead of carrying every verbatim result.
 
 This changes what the model sees. `keep` decides whether it changed what the model

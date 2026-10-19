@@ -24,13 +24,15 @@ searching, so what you miss, they miss; what you get wrong, they trust. Two rule
 
 ## How to work
 
-1. **Agents.** Every entry in a `langgraph.json`, every file that builds a graph. For each:
+1. **Agents.** Every entry in a `langgraph.json`, every file that builds a graph, every ADK
+   `root_agent` (its whole tree of sub-agents is one agent). For each:
    its path, what it is for (the README, its system prompts, its entry point), whether the
    team ships it or it is a building block of another, and which the project's own launcher
    starts. Nested graphs belong to the agent that contains them.
 2. **How each starts.** Its interpreter (the venv nearest it, or the one the README names),
    the folder it is started from, the env files its launcher loads (`langgraph.json`,
-   compose, a Makefile, `.envrc`, a `load_dotenv` in its code, a settings class), the
+   `adk run` loading the `.env` in the agent's folder, compose, a Makefile, `.envrc`, a
+   `load_dotenv` in its code, a settings class), the
    settings that are not secrets. Then prove it: `start` with an entry of one real request
    from the project, or one you write in its users' words: every agent's entry in one `start`,
    as a list, so they are tried at the same time. Four tries an agent. A start that

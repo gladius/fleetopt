@@ -1,4 +1,4 @@
-"""fleetopt: sends an expert to a team's LangGraph agent, and proves what it changes.
+"""fleetopt: sends an expert to a team's agent (LangGraph or ADK), and proves what it changes.
 
     fleetopt review <project>    look only: what is worth changing, with the numbers
     fleetopt apply  <project>    look, change it on a new branch, and prove each change
@@ -41,7 +41,7 @@ def _parser():
         p.add_argument("--evals", metavar="WHAT", help="what to check the agent with: the eval command you run "
                                                        "(e.g. 'pytest tests/evals'), or a file of test cases, expected "
                                                        "answers or example requests. Found in the project otherwise")
-        p.add_argument("--graph", help="which agent, when the project has several: a name from langgraph.json, "
+        p.add_argument("--graph", help="which agent, when the project has several: a name from langgraph.json, an ADK path/agent.py:root_agent, "
                                        "or file.py:variable")
         p.add_argument("--max-usd", type=float, default=usd,
                        help=f"the most fleetopt's own work may spend on your Claude login (default {usd:g}). "

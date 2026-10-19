@@ -1,7 +1,7 @@
 ---
 name: security
 does: what it can do with whose credentials, what reaches its model unchecked, what leaves the process
-review: Review the security of the LangGraph agent in this project: start it if needed, on the project's own
+review: Review the security of the agent in this project: start it if needed, on the project's own
   ordinary requests, measure it once as it is, and from the code and the recordings report what the agent is
   able to do (tools that act on the world, what the model controls in their arguments, with what credentials),
   what reaches its model without a boundary, what it holds that leaves the process, and where a secret could

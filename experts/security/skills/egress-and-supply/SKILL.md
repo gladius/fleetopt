@@ -11,8 +11,9 @@ a prompt, an answer), to which system, under which credential name. Two that tea
 
 - **tracing and observability**: LangSmith, Langfuse, OTel exporters and the like ship every
   prompt and answer to a vendor by default; `LANGCHAIN_TRACING_V2`, `LANGSMITH_TRACING` or
-  an exporter in the code is egress of everything the model sees. Say whether it is on in
-  how the team runs it.
+  an exporter in the code is egress of everything the model sees; ADK ships OpenTelemetry
+  tracing, exported wherever the code or the environment points it (Cloud Trace, an OTLP
+  endpoint). Say whether it is on in how the team runs it.
 - **logs**: a `print` or `logger.info` of a prompt, a payload or a request writes it to
   wherever logs go.
 

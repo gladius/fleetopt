@@ -120,14 +120,18 @@ class Expert:
     def skills(self):
         return sorted(p.name for p in (self.folder / "skills").glob("*") if (p / "SKILL.md").is_file())
 
-    def system(self):
+    def system(self, frameworks=None):
         """The shared guide, this expert's, then the mechanics of each skill it has: all in
-        the prompt, cached after the first turn, so it never works without the one it needs."""
+        the prompt, cached after the first turn, so it never works without the one it needs.
+        A skill whose header says `when: adk` (a framework, as the census names them) goes in
+        only when `frameworks` has it; with None, every skill goes in."""
+        skills = [n for n in self.skills if frameworks is None
+                  or not (when := header(self.folder / "skills" / n / "SKILL.md")[0].get("when")) or when in frameworks]
         return (SHARED.read_text(encoding="utf-8").strip() + "\n\n" + header(self.folder / "GUIDE.md")[1]
                 + (f"\n\n## What you check\n\n{self.checks_text}" if self.checks_text else "")
                 + "\n\n## The mechanics each pattern refers to\n\n"
                 + "\n\n".join(f"<!-- fleetopt:{n} -->\n" + header(self.folder / "skills" / n / "SKILL.md")[1]
-                              for n in self.skills))
+                              for n in skills))
 
 
 def read(folder):

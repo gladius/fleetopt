@@ -114,7 +114,7 @@ def guard_bash():
     return hook
 
 
-def _system_file(expert, where=None):
+def _system_file(expert, where=None, frameworks=None):
     """The expert's prose in a file for the session to read, never in the command line. Windows
     caps a whole command line at 32767 characters and the cost expert's prose is about 40000, so
     no run started on Windows at all - and said nothing true about why, since the SDK reports
@@ -122,7 +122,7 @@ def _system_file(expert, where=None):
     WinError CreateProcess raises here (206, "the filename or extension is too long"). Linux
     allows about 2MB (ARG_MAX) and never showed it. Same prose either way, and what the command
     line carries no longer grows with an expert. `where`: with the run's other records."""
-    text = expert.system()
+    text = expert.system(frameworks)
     where = pathlib.Path(where) if where else pathlib.Path(tempfile.gettempdir()) / "fleetopt-prompts"
     where.mkdir(parents=True, exist_ok=True)
     # Named by what is in it: runs of one expert share a file, a changed expert gets its own.
@@ -145,7 +145,7 @@ def build_options(project, model=None, max_usd=None, start_branch=None, look_onl
     return ClaudeAgentOptions(
         cwd=str(project), model=model or expert.model or MODEL,
         fallback_model=FALLBACK if (model or expert.model or MODEL) != FALLBACK else MODEL,
-        system_prompt=_system_file(expert, prompt_dir),
+        system_prompt=_system_file(expert, prompt_dir, tools.CTX.get("frameworks")),
         mcp_servers={"fleetopt": tools.server(look_only, expert)},
         # Built-ins by allowlist: no web, no scheduler, no subagents. Nothing is asked;
         # what keeps each tool safe is enforced by the hooks and inside fleetopt's tools.
@@ -171,7 +171,7 @@ async def consult(expert, task, project, *, asked_by, usd=1.0, minutes=15, model
     chosen = model or os.environ.get("FLEETOPT_MODEL") or expert.model or MODEL
     options = ClaudeAgentOptions(
         cwd=str(project), model=chosen, fallback_model=FALLBACK if chosen != FALLBACK else MODEL,
-        system_prompt=_system_file(expert, tools.CTX.get("run_dir")),
+        system_prompt=_system_file(expert, tools.CTX.get("run_dir"), tools.CTX.get("frameworks")),
         mcp_servers={"fleetopt": tools.server(True, expert, called=True)},
         tools=["Read", "Grep", "Glob"], allowed_tools=[*tools.names(True, expert, called=True), "Read", "Grep", "Glob"],
         disallowed_tools=["AskUserQuestion", *config.DENY_READS], setting_sources=config.SETTING_SOURCES,
@@ -262,7 +262,7 @@ def _entry_for(out, project, graph, taken):
     proven = {p: e for p in sorted(tools.entry_path(out, project, "x").parent.glob(
         f"{project.name}-{hashlib.sha1(str(project).encode()).hexdigest()[:8]}-*.json"))
         if not p.name.endswith(".answers.json") and (e := _saved_entry(p))}
-    shipped = [spec.removeprefix("./") for g in taken["graphs"].values() for spec in g.values()]
+    shipped = [spec.removeprefix("./") for g in taken["graphs"].values() for spec in g.values()] + taken["adk_agents"]
     for spec in shipped:
         for path, entry in proven.items():
             if entry["graph"] == spec:
@@ -346,6 +346,7 @@ async def run(project, out, *, look_only=False, evals=None, graph=None, model=No
     tools.begin(project, out, entry_file=path, entry=entry, run_dir=run_dir, look_only=look_only, team_usd=team,
                 minutes=minutes, first_session=first, expert=expert, ask=ask)
     ctx = tools.CTX
+    ctx["frameworks"] = census.frameworks(taken)  # a skill named after a framework goes in only on a project that uses it
     start_branch = _git(project, "rev-parse", "--abbrev-ref", "HEAD")
     branch = None if look_only else f"fleetopt/{began:%Y%m%d-%H%M%S}"
     if branch:
