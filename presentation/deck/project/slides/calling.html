@@ -1,0 +1,46 @@
+<section id="calling" data-transition="fade" style="background:#F6F6F6;color:#333333;font-family:'Inter', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:32px">
+<h2 style="font-size:60px;font-weight:700;line-height:1.1;color:#111111">One expert can call another</h2>
+<div style="display:flex;flex-direction:row;align-items:stretch;gap:16px">
+<div style="flex:1;display:flex;flex-direction:column;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:22px 26px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">Cost expert</h3>
+<p style="font-size:24px;line-height:1.4">Finds the project has nothing to check its agent against</p>
+</div>
+<x-shape kind="arrow-right" style="width:44px;height:22px;background:#A7A7A7;align-self:center"></x-shape>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px;background:#111111;border-radius:16px;padding:22px 26px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:14px">
+<x-shape kind="ellipse" style="width:22px;height:22px;background:#EE0000"></x-shape>
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#FFFFFF">The call</h3>
+</div>
+<p style="font-size:24px;line-height:1.4;color:#D8DADA">Code starts the tester in a session of its own, and waits</p>
+</div>
+<x-shape kind="arrow-right" style="width:44px;height:22px;background:#A7A7A7;align-self:center"></x-shape>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:22px 26px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">Tester</h3>
+<p style="font-size:24px;line-height:1.4">Reads the code and writes requests that reach each route</p>
+</div>
+<x-shape kind="arrow-right" style="width:44px;height:22px;background:#A7A7A7;align-self:center"></x-shape>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:22px 26px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">Cost expert</h3>
+<p style="font-size:24px;line-height:1.4">Carries on with the answer, and reports where the requests came from</p>
+</div>
+</div>
+<div style="display:flex;flex-direction:row;align-items:stretch;gap:24px">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:24px 32px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">The rules</h3>
+<ul style="font-size:24px;line-height:1.4">
+<li>An expert's header names whom it may call</li>
+<li>The called expert only reads; it changes nothing</li>
+<li>Two calls a run at most, and the spend is counted</li>
+</ul>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:24px 32px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">Why not one big agent</h3>
+<ul style="font-size:24px;line-height:1.4">
+<li>Each session holds one expert's prose, never two</li>
+<li>The caller waits, so no answer is lost</li>
+<li>The answer is kept with the run, for anyone to read</li>
+</ul>
+</div>
+</div>
+<aside>Experts reach each other in two ways. First, through files: when the design expert has reviewed an agent, the cost expert's next run on the same code is handed that review. Second, through a call, shown here. The cost expert found a project with no tests and no examples. Its header says it may call the tester, so it did. Code started the tester in a separate session with only the tester's own prose; the tester read the project, changed nothing, and returned requests that reach each route. The cost expert carried on, and its report says the requests were written for the run and are not the team's. This ran end to end on a project with no examples. There is no orchestrator agent: code starts the second session and the caller waits for it.</aside>
+</section>

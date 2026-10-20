@@ -10,3 +10,6 @@ targets/
 
 # browser preview scratch
 .playwright-mcp/
+
+# the deck builder's packages
+node_modules/

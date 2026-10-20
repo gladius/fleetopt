@@ -1,0 +1,70 @@
+<section id="flow" data-transition="fade" style="background:#F6F6F6;color:#333333;font-family:'Inter', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:28px">
+<h2 style="font-size:60px;font-weight:700;line-height:1.1;color:#111111">What one run does</h2>
+<div style="display:grid;grid-template-columns:1fr 28px 1fr 28px 1fr 28px 1fr 28px 1fr 28px 1fr;column-gap:12px;row-gap:10px">
+<div style="display:flex;flex-direction:column;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:20px 18px">
+<h3 style="font-size:30px;font-weight:700;line-height:1.2;color:#111111">Start</h3>
+<p style="font-size:24px;line-height:1.4">The agent, in its own setup</p>
+</div>
+<x-shape kind="arrow-right" style="width:28px;height:14px;background:#A7A7A7;align-self:center"></x-shape>
+<div style="display:flex;flex-direction:column;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:20px 18px">
+<h3 style="font-size:30px;font-weight:700;line-height:1.2;color:#111111">Measure</h3>
+<p style="font-size:24px;line-height:1.4">Cost, tokens and time, as it is</p>
+</div>
+<x-shape kind="arrow-right" style="width:28px;height:14px;background:#A7A7A7;align-self:center"></x-shape>
+<div style="display:flex;flex-direction:column;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:20px 18px">
+<h3 style="font-size:30px;font-weight:700;line-height:1.2;color:#111111">Find</h3>
+<p style="font-size:24px;line-height:1.4">What this expert looks for</p>
+</div>
+<x-shape kind="arrow-right" style="width:28px;height:14px;background:#A7A7A7;align-self:center"></x-shape>
+<div style="display:flex;flex-direction:column;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:20px 18px">
+<h3 style="font-size:30px;font-weight:700;line-height:1.2;color:#111111">Change</h3>
+<p style="font-size:24px;line-height:1.4">Fixes, on a branch of its own</p>
+</div>
+<x-shape kind="arrow-right" style="width:28px;height:14px;background:#A7A7A7;align-self:center"></x-shape>
+<div style="display:flex;flex-direction:column;gap:8px;background:#111111;border-radius:16px;padding:20px 18px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:12px">
+<x-shape kind="ellipse" style="width:20px;height:20px;background:#EE0000"></x-shape>
+<h3 style="font-size:30px;font-weight:700;line-height:1.2;color:#FFFFFF">Prove</h3>
+</div>
+<p style="font-size:24px;line-height:1.4;color:#D8DADA">Keeps only what passes the gate</p>
+</div>
+<x-shape kind="arrow-right" style="width:28px;height:14px;background:#A7A7A7;align-self:center"></x-shape>
+<div style="display:flex;flex-direction:column;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:20px 18px">
+<h3 style="font-size:30px;font-weight:700;line-height:1.2;color:#111111">Report</h3>
+<p style="font-size:24px;line-height:1.4">Kept, refused, and why</p>
+</div>
+<p style="grid-column:5 / 10;grid-row:2;font-size:24px;line-height:1.4;text-align:center;color:#333333;background:#D8DADA;border-radius:12px;padding:8px 24px">These three repeat: it looks again after each kept change</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:stretch;gap:48px;background:#111111;border-radius:16px;padding:22px 32px">
+<div style="flex:1;display:flex;flex-direction:column;gap:6px">
+<p style="font-family:'Courier New', monospace;font-size:26px;color:#FFFFFF">fleetopt review my-agent</p>
+<p style="font-size:24px;line-height:1.4;color:#D8DADA">Start, measure, find, report. Changes nothing</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:6px">
+<p style="font-family:'Courier New', monospace;font-size:26px;color:#FFFFFF">fleetopt apply my-agent</p>
+<p style="font-size:24px;line-height:1.4;color:#D8DADA">All six steps, alone. Each kept change is a commit</p>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:12px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:22px 32px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">What a team needs ready</h3>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:24px">
+<div style="display:flex;flex-direction:column;gap:4px">
+<p style="font-size:24px;font-weight:700;line-height:1.4;color:#111111">The project in git</p>
+<p style="font-size:24px;line-height:1.4">Changes land on a new branch</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:4px">
+<p style="font-size:24px;font-weight:700;line-height:1.4;color:#111111">An agent that runs</p>
+<p style="font-size:24px;line-height:1.4">In its own setup, with its own keys</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:4px">
+<p style="font-size:24px;font-weight:700;line-height:1.4;color:#111111">Something to check against</p>
+<p style="font-size:24px;line-height:1.4">Evals, a golden dataset, or one example request</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:4px">
+<p style="font-size:24px;font-weight:700;line-height:1.4;color:#111111">Model calls it can see</p>
+<p style="font-size:24px;line-height:1.4">Through LangChain, today</p>
+</div>
+</div>
+</div>
+<aside>This is what happens when a developer runs it. fleetopt starts the team's agent in the team's own setup and measures it as it is: cost, tokens, time and the answers it gives. Then the expert looks for what it is there to find. With review it stops there and reports; nothing is changed and a person decides. With apply it goes on alone: it makes the changes on a branch of its own, proves them against the gate, keeps what passes, and looks again until nothing more is kept. The report says what was kept, what was refused and why. A team needs four things ready: the project in git, an agent that runs, something to check it against, and model calls made through LangChain. If the project has nothing to check against, fleetopt can write requests itself and the report says so; it may put one question to the developer before it starts measuring.</aside>
+</section>

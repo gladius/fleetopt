@@ -1,0 +1,60 @@
+<section id="architecture" data-transition="fade" style="background:#F6F6F6;color:#333333;font-family:'Inter', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:28px">
+<h2 style="font-size:60px;font-weight:700;line-height:1.1;color:#111111">Experts plug in. fleetopt stays the same</h2>
+<div style="display:flex;flex-direction:row;align-items:stretch;gap:24px">
+<div style="width:620px;display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#5F6161">Pulled on demand</p>
+<div style="flex:1;display:flex;flex-direction:column;gap:6px;background:#FFFFFF;border:2px dashed #EE0000;border-radius:16px;padding:24px 32px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">An expert is a folder of prose</h3>
+<div style="flex:none;height:6px"></div>
+<p style="font-size:24px;line-height:1.4"><b>GUIDE.md</b> · what it is asked, how it works</p>
+<p style="font-size:24px;line-height:1.4"><b>CHECKS.md</b> · what it must account for</p>
+<p style="font-size:24px;line-height:1.4"><b>skills/</b> · what it knows</p>
+<p style="font-size:24px;line-height:1.4"><b>header</b> · its model, its tools, who it may call</p>
+<div style="flex:none;height:6px"></div>
+<p style="font-size:24px;line-height:1.4;color:#5F6161">No code in it. Written and reviewed like a document</p>
+</div>
+<div style="display:flex;flex-direction:row;flex-wrap:wrap;gap:12px">
+<p style="font-size:24px;font-weight:600;color:#111111;background:#FFFFFF;padding:8px 24px;border:1px solid #A7A7A7;border-radius:40px">cost</p>
+<p style="font-size:24px;font-weight:600;color:#111111;background:#FFFFFF;padding:8px 24px;border:1px solid #A7A7A7;border-radius:40px">design</p>
+<p style="font-size:24px;font-weight:600;color:#111111;background:#FFFFFF;padding:8px 24px;border:1px solid #A7A7A7;border-radius:40px">tester</p>
+<p style="font-size:24px;color:#5F6161;padding:8px 24px;border:1px dashed #747676;border-radius:40px">your next expert</p>
+</div>
+</div>
+<x-shape kind="arrow-right" style="width:48px;height:24px;background:#A7A7A7;align-self:center"></x-shape>
+<div style="flex:1;display:flex;flex-direction:column;gap:16px">
+<p style="font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#5F6161">Built in · the same for every expert</p>
+<div style="flex:1;display:flex;flex-direction:column;justify-content:space-between;gap:20px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:20px;padding:28px">
+<div style="display:flex;flex-direction:column;gap:6px;border:2px dashed #A7A7A7;border-radius:16px;padding:20px 28px">
+<h3 style="font-size:30px;font-weight:700;line-height:1.2;color:#111111">The expert slot</h3>
+<p style="font-size:24px;line-height:1.4">One expert for each run, chosen by name. Only its prose is loaded</p>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px">
+<div style="display:flex;flex-direction:column;gap:8px;background:#F6F6F6;border-radius:12px;padding:18px 20px">
+<h3 style="font-size:28px;font-weight:700;line-height:1.2;color:#111111">Session</h3>
+<p style="font-size:24px;line-height:1.4">One Claude Agent SDK session</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#F6F6F6;border-radius:12px;padding:18px 20px">
+<h3 style="font-size:28px;font-weight:700;line-height:1.2;color:#111111">Tools</h3>
+<p style="font-size:24px;line-height:1.4">Measure, change, undo</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#F6F6F6;border-radius:12px;padding:18px 20px">
+<h3 style="font-size:28px;font-weight:700;line-height:1.2;color:#111111">Probe</h3>
+<p style="font-size:24px;line-height:1.4">Records what the agent does</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#111111;border-radius:12px;padding:18px 20px">
+<h3 style="font-size:28px;font-weight:700;line-height:1.2;color:#FFFFFF">Gate</h3>
+<p style="font-size:24px;line-height:1.4;color:#D8DADA">Keeps only what is proven</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:48px;background:#111111;border-radius:16px;padding:22px 32px">
+<div style="display:flex;flex-direction:column;gap:6px">
+<p style="font-family:'Courier New', monospace;font-size:26px;color:#FFFFFF">fleetopt review my-agent --expert cost</p>
+<p style="font-family:'Courier New', monospace;font-size:26px;color:#FFFFFF">fleetopt review my-agent --expert design</p>
+</div>
+<p style="width:560px;font-size:26px;line-height:1.35;color:#D8DADA">Same command, same tools, same proof. Only the name changes.</p>
+</div>
+<aside>Two kinds of thing. On the left, what changes from run to run: the expert. It is a folder of markdown, fetched from the central catalogue when a developer names it, with no code in it. Its header says which model it runs on, which shared tools it uses, and which other experts it may call. On the right, what never changes: the session, the tools, the probe and the gate. They ship with fleetopt and are the same whichever expert is loaded. So adding an expert is writing a folder, and switching experts is changing one word on the command line. An expert can name a tool or a rule; it cannot bring its own, which is why it cannot loosen its own proof.</aside>
+</section>

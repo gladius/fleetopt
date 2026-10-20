@@ -1,0 +1,46 @@
+<section id="foundation" data-transition="fade" style="background:#F6F6F6;color:#333333;font-family:'Inter', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:32px">
+<h2 style="font-size:60px;font-weight:700;line-height:1.1;color:#111111">Built on the Claude Agent SDK</h2>
+<div style="display:flex;flex-direction:row;align-items:stretch;gap:24px">
+<div style="width:720px;display:flex;flex-direction:column;gap:12px">
+<div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:22px 28px">
+<h3 style="font-size:30px;font-weight:700;line-height:1.2;color:#111111">fleetopt</h3>
+<p style="font-size:24px;line-height:1.4">Experts, tools, probe and gate</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:22px 28px">
+<h3 style="font-size:30px;font-weight:700;line-height:1.2;color:#111111">Claude Agent SDK</h3>
+<p style="font-size:24px;line-height:1.4">Runs the session; our tools plug into it</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:22px 28px">
+<h3 style="font-size:30px;font-weight:700;line-height:1.2;color:#111111">Claude Code</h3>
+<p style="font-size:24px;line-height:1.4">Inside the SDK, or installed on the machine</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:8px;background:#111111;border-radius:16px;padding:22px 28px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:14px">
+<x-shape kind="ellipse" style="width:22px;height:22px;background:#EE0000"></x-shape>
+<h3 style="font-size:30px;font-weight:700;line-height:1.2;color:#FFFFFF">Your Claude setup</h3>
+</div>
+<p style="font-size:24px;line-height:1.4;color:#D8DADA">Company gateway or login; no key of its own</p>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:24px">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:24px 32px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">Taken from the machine's Claude setup</h3>
+<ul style="font-size:24px;line-height:1.4">
+<li>How to sign in: gateway address, token or login</li>
+<li>Company policy settings, where they are managed</li>
+<li>Model names (sonnet, opus, haiku), as your setup maps them</li>
+</ul>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:24px 32px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">Left out, on purpose</h3>
+<ul style="font-size:24px;line-height:1.4">
+<li>The developer's own plugins, skills, hooks and MCP servers</li>
+<li>The project's own .claude folder</li>
+<li>Memory from one run to the next</li>
+<li>Web access</li>
+</ul>
+</div>
+</div>
+</div>
+<aside>fleetopt is an agent built on the Claude Agent SDK. Each run is one SDK session, and the SDK drives the Claude Code program, which either ships inside the SDK package or is installed on the machine. It signs in the way Claude Code already does there: the company's gateway settings or a Claude login. fleetopt holds no key of its own. From the machine's Claude setup it takes only how to sign in, plus any policy the company manages. It deliberately loads nothing else: not the developer's plugins, skills, hooks or MCP servers, not the project's own .claude folder, and it keeps no memory between runs. That way every run on every machine behaves the same, and another team's repository cannot instruct it. The models are named sonnet, opus and haiku, and resolve to whatever your setup provides.</aside>
+</section>

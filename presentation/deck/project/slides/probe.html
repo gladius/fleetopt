@@ -1,0 +1,45 @@
+<section id="probe" data-transition="fade" style="background:#F6F6F6;color:#333333;font-family:'Inter', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:32px">
+<h2 style="font-size:60px;font-weight:700;line-height:1.1;color:#111111">How it sees the team's agent: the probe</h2>
+<div style="display:flex;flex-direction:row;align-items:stretch;gap:16px">
+<div style="flex:1;display:flex;flex-direction:column;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:22px 26px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">1 · Driver</h3>
+<p style="font-size:24px;line-height:1.4">Starts the team's graph in its own Python, from its folder, with its env files</p>
+</div>
+<x-shape kind="arrow-right" style="width:44px;height:22px;background:#A7A7A7;align-self:center"></x-shape>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:22px 26px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">2 · Hook</h3>
+<p style="font-size:24px;line-height:1.4">Loaded as Python starts. Adds a LangChain tracer and notes each compiled graph</p>
+</div>
+<x-shape kind="arrow-right" style="width:44px;height:22px;background:#A7A7A7;align-self:center"></x-shape>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:22px 26px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">3 · Record</h3>
+<p style="font-size:24px;line-height:1.4">Each step is written to a file as it ends, so a crash still leaves what happened</p>
+</div>
+<x-shape kind="arrow-right" style="width:44px;height:22px;background:#A7A7A7;align-self:center"></x-shape>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:22px 26px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">4 · Store</h3>
+<p style="font-size:24px;line-height:1.4">Loaded into SQLite when the run ends; the session reads it with SQL</p>
+</div>
+</div>
+<div style="display:flex;flex-direction:row;align-items:stretch;gap:24px">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:24px 32px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">Recorded for every model call</h3>
+<ul style="font-size:24px;line-height:1.4">
+<li>The node, and its path when graphs are nested</li>
+<li>Model and provider</li>
+<li>Tokens in, out and read from cache</li>
+<li>Prompt size, duration and any error</li>
+</ul>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#111111;border-radius:16px;padding:24px 32px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#FFFFFF">What it never does</h3>
+<ul style="font-size:24px;line-height:1.4;color:#D8DADA">
+<li>Edit a line of the team's code</li>
+<li>Replace or switch off their own tracing</li>
+<li>Change how the agent runs</li>
+<li>Show the session the value of a key or secret</li>
+</ul>
+</div>
+</div>
+<aside>For the technical audience. The probe is how numbers get into the system. The driver is a small script that runs inside the team's own interpreter and calls their graph for each request. The hook is picked up by Python as it starts; it registers a tracer beside whatever tracing the team already has, and takes a snapshot of each graph as it is compiled: its nodes, its edges, and where each node's code lives. Every step is appended to a file the moment it ends, and loaded into SQLite afterwards. Today it sees LangGraph agents whose model calls go through LangChain.</aside>
+</section>

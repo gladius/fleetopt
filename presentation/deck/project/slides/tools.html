@@ -1,0 +1,18 @@
+<section id="tools" data-transition="fade" style="background:#F6F6F6;color:#333333;font-family:'Inter', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:32px">
+<h2 style="font-size:60px;font-weight:700;line-height:1.1;color:#111111">The tools: what the session can do</h2>
+<table style="font-size:24px;color:#333333;background:#FFFFFF">
+<tr style="background:#111111"><th style="width:18%;text-align:left;color:#FFFFFF">Tool</th><th style="width:82%;text-align:left;color:#FFFFFF">What it does, and its limit</th></tr>
+<tr><td>ask</td><td>One question to the developer while getting started; three at most</td></tr>
+<tr><td>start</td><td>Tries the team's agent on one request, under the probe; four tries</td></tr>
+<tr><td>measure</td><td>Runs it three times, records every call, compares with the last kept code</td></tr>
+<tr><td>query</td><td>Read-only SQL over everything that was recorded</td></tr>
+<tr><td>checked</td><td>Closes one check on one node, with the number that settles it</td></tr>
+<tr><td>call</td><td>Hands a task to another expert in its own session and waits; two at most</td></tr>
+<tr><td>run evals</td><td>Runs the team's own eval command, the same one before and after</td></tr>
+<tr><td>save change</td><td>Commits one change, named in plain words, on its own branch</td></tr>
+<tr style="background:#F6F6F6"><td>keep</td><td>The gate: keeps what was saved only if it is proven</td></tr>
+<tr><td>undo</td><td>Back to the last kept code, or drops the changes named</td></tr>
+<tr><td>shape</td><td>Design expert only: what the graph declared against what it did</td></tr>
+</table>
+<aside>For the technical audience. These are the only ways the session can act on the team's agent. The session decides when to call each one and with what; the code inside decides what happens and where it stops. Keep is the gate. Shape is the one tool that belongs to a single expert: an expert's header names the extra tools it uses, and it can only name tools that exist.</aside>
+</section>

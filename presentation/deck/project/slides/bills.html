@@ -1,0 +1,30 @@
+<section id="bills" data-transition="fade" style="background:#F6F6F6;color:#333333;font-family:'Inter', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:28px">
+<h2 style="font-size:60px;font-weight:700;line-height:1.1;color:#111111">What a run costs: two separate bills</h2>
+<div style="display:flex;flex-direction:row;align-items:stretch;gap:24px">
+<div style="flex:1;display:flex;flex-direction:column;gap:6px;background:#FFFFFF;border:1px solid #D8DADA;border-radius:16px;padding:24px 32px">
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#111111">The team's agent</h3>
+<p style="font-size:24px;line-height:1.4">Its own model calls while it is measured, on its own API key</p>
+<p style="font-size:64px;font-weight:700;line-height:1.15;color:#111111">$0.36</p>
+<p style="font-size:24px;line-height:1.4;color:#5F6161">in all, over 13 runs on three agents using small models</p>
+<p style="font-size:24px;line-height:1.4">Stops at $2 a run unless you raise it</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:6px;background:#111111;border-radius:16px;padding:24px 32px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:16px">
+<x-shape kind="ellipse" style="width:22px;height:22px;background:#EE0000"></x-shape>
+<h3 style="font-size:32px;font-weight:700;line-height:1.2;color:#FFFFFF">fleetopt's own work</h3>
+</div>
+<p style="font-size:24px;line-height:1.4;color:#D8DADA">The AI session that reviews and changes, and the reader that checks answers</p>
+<p style="font-size:64px;font-weight:700;line-height:1.15;color:#FFFFFF">$17.95</p>
+<p style="font-size:24px;line-height:1.4;color:#A7A7A7">in all, over the same 13 runs</p>
+<p style="font-size:24px;line-height:1.4;color:#D8DADA">Stops at $2 for a review, $5 for a change</p>
+</div>
+</div>
+<table style="font-size:24px;color:#333333;background:#FFFFFF">
+<tr style="background:#111111"><th style="width:46%;text-align:left;color:#FFFFFF">Kind of run</th><th style="width:27%;text-align:left;color:#FFFFFF">fleetopt's own spend</th><th style="width:27%;text-align:left;color:#FFFFFF">Time</th></tr>
+<tr><td>Design review, on the stronger model</td><td>$1.05 to $1.71</td><td>10 to 12 minutes</td></tr>
+<tr><td>Cost review</td><td>$0.34 to $0.83</td><td>3 to 7 minutes</td></tr>
+<tr><td>Cost change</td><td>$0.55 to $3.30</td><td>3 to 23 minutes</td></tr>
+</table>
+<p style="font-size:30px;line-height:1.3;color:#111111">On these small agents fleetopt cost about fifty times what the agents did. It pays where an agent spends real money.</p>
+<aside>There are two bills and they never mix. The first is the team's own agent: when fleetopt measures it, the agent makes its usual model calls on its own key. On three test agents using small, cheap models that came to thirty-six cents in total across thirteen runs, and it is capped at two dollars a run by default. The second is fleetopt's own work: the AI session that does the reviewing and changing, and the separate reader that checks answers. That came to about eighteen dollars across the same thirteen runs: roughly a dollar and a half for a design review, under a dollar for a cost review, and between fifty cents and three dollars thirty for a run that changes code. Be direct about the ratio: on agents this small, fleetopt costs far more than the agent it is measuring. It earns its cost on an agent that spends real money every day, which is why the next test is a production agent.</aside>
+</section>
