@@ -96,9 +96,21 @@ button:focus-visible{outline:2px solid var(--red);outline-offset:2px}
 .roller{fill:#1B1D1F;stroke:var(--line);stroke-width:2}
 @keyframes belt{to{stroke-dashoffset:-40}}
 .still .beltm{animation:none}
+.diag{margin:0;padding:10px 14px;border:1px solid var(--red);border-radius:8px;background:#3a0b0b;color:var(--white);font:14px/1.5 var(--mono)}
 .motion-note{font:13px/1.5 var(--mono);color:var(--mute);margin:0}
 </style>
 
+<div class="wrap" style="padding-bottom:0">
+  <p class="diag" id="diag" hidden></p>
+  <noscript><p class="diag">This browser is not running scripts for this file, so the scenes are not drawn. Open it in a current Chrome or Edge with scripts allowed.</p></noscript>
+</div>
+<script>
+(function () {
+  function say(t) { var d = document.getElementById('diag'); if (d) { d.hidden = false; d.textContent = t; } }
+  if (document.documentMode) say('This is Internet Explorer (or Edge in IE mode), which cannot run this page. Open the file in Chrome or Edge.');
+  window.onerror = function (msg, src, line) { say('A script error stopped the page: ' + msg + (line ? ' (line ' + line + ')' : '') + '. Open it in a current Chrome or Edge.'); };
+})();
+</script>
 <div class="wrap">
   <header>
     <p class="kicker">Sentinels</p>
@@ -127,7 +139,7 @@ button:focus-visible{outline:2px solid var(--red);outline-offset:2px}
     <ul class="status" id="cap-st"></ul>
   </section>
 
-  <p class="note">Solid outline: built. Dashed outline: next. This is a proof of concept: the numbers in “Sent to the team” come from one run on a test agent we built, not a real one; change B is illustrative. The engine is fleetopt, built on the Claude Agent SDK.</p>
+  <p class="note">Solid outline: built. Dashed outline: next. This is a proof of concept: the numbers in “Sent to the team” come from one run on a test agent we built, not a real one; change B is illustrative. The engine is fleetopt, built on the Claude Agent SDK.<br><span id="check"></span></p>
 </div>
 
 <script>/* GSAP 3.12.5, embedded so the page works offline */
@@ -966,6 +978,8 @@ function setMotion() {
   const note = !G ? 'The animation library did not load, so each scene shows its last frame.'
     : reduce && sysReduce && !saved ? 'Animation is off because this computer asks for reduced motion (Remote Desktop often does). Press \u201cAnimation on\u201d to play it.' : '';
   $('motion-note').textContent = note; $('motion-note').hidden = !note;
+  const ua = (navigator.userAgent.match(/(Edg|Firefox|Chrome|Safari)\/\d+/) || ['unknown browser'])[0].replace('Edg', 'Edge');
+  $('check').textContent = `Check: animation library ${G ? 'loaded' : 'missing'} · animation ${reduce ? 'off' : 'on'} · system reduced motion ${sysReduce ? 'on' : 'off'} · ${ua}`;
 }
 const tls = [];
 let cur = 0, auto = false, wait;
