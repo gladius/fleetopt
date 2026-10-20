@@ -1,0 +1,989 @@
+<!doctype html>
+<html lang="en">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8">
+<title>Sentinels at Work</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one stage, the caption and controls beneath it. Single dark look, by choice. */
+:root{
+  --bg:#0B0B0C; --stage:#0F1011; --panel:#151617; --line:#333536; --mute:#8A8C8C;
+  --pale:#D8DADA; --white:#F6F6F6; --red:#EE0000; --good:#3DBE7A;
+  --sans:'Inter', Arial, sans-serif; --mono:'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  color-scheme:dark;
+}
+body{background:var(--bg);color:var(--pale);font-family:var(--sans);font-size:16px;line-height:1.5;padding-inline:16px;padding-block:32px 56px}
+.wrap{max-width:1240px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+.kicker{font:600 13px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--red);margin:0}
+h1{font-size:clamp(28px,4.2vw,46px);font-weight:800;letter-spacing:-.02em;line-height:1.08;color:var(--white);margin:6px 0 0;text-wrap:balance}
+.lede{max-width:66ch;margin:10px 0 0;color:var(--pale)}
+.stage-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:var(--stage)}
+#stage{display:block;width:100%;min-width:760px;height:auto}
+.bar{height:3px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:-12px}
+.bar i{display:block;height:100%;background:var(--red);transform-origin:left;transform:scaleX(0)}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:inherit;cursor:pointer;color:var(--white);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 14px}
+button:hover{border-color:var(--mute)}
+button:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;flex:1;min-width:0}
+.tabs button{font-size:14px;color:var(--mute);background:transparent}
+.tabs button b{font-family:var(--mono);font-weight:600;margin-right:6px;color:var(--mute)}
+.tabs button[aria-current="step"]{color:var(--white);border-color:var(--pale)}
+.tabs button[aria-current="step"] b{color:var(--red)}
+.caption{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:24px 40px;align-items:start}
+.caption h2{font-size:clamp(22px,2.6vw,30px);font-weight:700;color:var(--white);margin:6px 0 8px;text-wrap:balance}
+.caption p{margin:0;max-width:64ch}
+.status{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.status li{display:flex;gap:10px;align-items:baseline;font-size:15px}
+.status li span{flex:none;font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;padding:5px 8px;border-radius:4px;border:1.5px solid var(--pale);color:var(--white)}
+.status li.next span{border-style:dashed;border-color:var(--mute);color:var(--mute)}
+.status li.idea span,.status li.history span{border-color:var(--red);color:var(--red)}
+.note{font:13px/1.6 var(--mono);color:var(--mute);border-top:1px solid var(--line);padding-top:14px;margin:4px 0 0}
+@media (max-width:760px){.caption{grid-template-columns:1fr}}
+
+#stage text{font-family:var(--sans);fill:var(--pale);white-space:pre}
+#stage .mid{text-anchor:middle} #stage .end{text-anchor:end}
+#stage .big{font-size:120px;font-weight:800;fill:#3A3C3D;letter-spacing:-3px}
+#stage .n{font-size:26px;font-weight:700;fill:var(--white)}
+#stage .b{font-size:19px;font-weight:600;fill:var(--white)}
+#stage .s{font-size:17px;fill:var(--pale)}
+#stage .m{font-family:var(--mono);font-size:15px;fill:var(--mute)}
+#stage .cap{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:2px;fill:var(--red)}
+#stage .yr{font-size:22px;font-weight:700;fill:var(--white)}
+#stage .il{font-family:var(--mono);font-size:16px;fill:var(--white)}
+#stage .cb{font-size:16px;font-weight:600;fill:var(--white)}
+#stage .cs{font-size:15px;fill:var(--pale)}
+#stage .it{font-style:italic;fill:var(--mute)}
+#stage .red{fill:var(--red)}
+#stage .rm{font-family:var(--mono);font-size:15px;fill:var(--red)}
+#stage .pct{font-family:var(--mono);font-size:15px;fill:var(--white)}
+#stage .ok{font-family:var(--mono);font-size:15px;fill:var(--good)}
+#stage .st{font-family:var(--mono);font-size:14px;font-weight:600;fill:#0B0B0C}
+#stage .ch{font-size:17px;font-weight:600;fill:var(--white)}
+#stage .lead{font-size:28px;fill:var(--pale)}
+#stage .h64{font-size:64px;font-weight:800;letter-spacing:-1.5px;fill:var(--white)}
+#stage .mw{font-family:var(--mono);font-size:15px;fill:var(--pale)}
+#stage .pk{font-family:var(--mono);font-size:15px;font-weight:600;fill:var(--white)}
+.box{fill:var(--panel);stroke:var(--line);stroke-width:2}
+.next{stroke-dasharray:10 7}
+.gate{stroke:var(--red);stroke-width:3}
+.panel{fill:#121314;stroke:var(--line);stroke-width:1.5}
+.callout{fill:#1B1D1F;stroke:#4B4D4E;stroke-width:1.5}
+.tick,.axis{stroke:#4B4D4E;stroke-width:2}
+.dot{fill:#333536;stroke:var(--stage);stroke-width:4}
+.press{fill:#747676}
+.item{stroke-width:2}
+.before{fill:#4B4D4E} .after{fill:var(--red)}
+.card{fill:#262829;stroke:#A7A7A7;stroke-width:1.5}
+.tray{fill:none;stroke:#4B4D4E;stroke-width:2;stroke-dasharray:6 6}
+.cart{fill:#1B1D1F;stroke:#A7A7A7;stroke-width:1.5}
+.slot{fill:none;stroke:#4B4D4E;stroke-width:2}
+.engine{fill:#121314;stroke:var(--line);stroke-width:2}
+.scan{fill:var(--red);opacity:0}
+.pill{fill:#1B1D1F;stroke:#A7A7A7;stroke-width:1.5}
+.wire{stroke:#747676;stroke-width:2;stroke-dasharray:4 6}
+.pkt{fill:var(--red)}
+.ring{fill:none;stroke:var(--red);stroke-width:3;opacity:0}
+.agent{fill:#1B1D1F;stroke:var(--pale);stroke-width:2}
+.edge{stroke:#747676;stroke-width:2}
+.node{fill:var(--pale)} .node.hot{fill:var(--red)}
+.ph{fill:#4B4D4E}
+.good{fill:var(--good)} .bad{fill:var(--red)}
+.dim{opacity:.4}
+.belt{fill:#1B1D1F;stroke:var(--line);stroke-width:2}
+.beltm{fill:none;stroke:#4B4D4E;stroke-width:3;stroke-dasharray:18 22;animation:belt 1.1s linear infinite}
+.roller{fill:#1B1D1F;stroke:var(--line);stroke-width:2}
+@keyframes belt{to{stroke-dashoffset:-40}}
+@media (prefers-reduced-motion:reduce){.beltm{animation:none}}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="kicker">Sentinels</p>
+    <h1>Sentinels: experts sent to a team's agent</h1>
+    <p class="lede">Thirteen scenes: where the factory idea comes from, what a sentinel is, what it is made of, two of its experts, one run end to end, what it adds to a skill, how it is sent to a team today, why autonomy is coming, the road from invoked to autonomous with the team in charge throughout, what it looks like on the platform, and where it stands today. Step with the arrow keys or the scene names, or switch on autoplay.</p>
+  </header>
+
+  <div class="stage-wrap"><svg id="stage" viewBox="0 0 1600 860" role="img" aria-labelledby="cap-h"></svg></div>
+  <div class="bar" aria-hidden="true"><i id="bar"></i></div>
+
+  <div class="controls">
+    <button id="prev" aria-label="Previous scene">←</button>
+    <button id="play">Autoplay</button>
+    <button id="next" aria-label="Next scene">→</button>
+    <div class="tabs" id="tabs"></div>
+  </div>
+
+  <section class="caption" aria-live="polite">
+    <div>
+      <p class="kicker" id="cap-eye"></p>
+      <h2 id="cap-h"></h2>
+      <p id="cap-p"></p>
+    </div>
+    <ul class="status" id="cap-st"></ul>
+  </section>
+
+  <p class="note">Solid outline: built. Dashed outline: next. This is a proof of concept: the numbers in “Sent to the team” come from one run on a test agent we built, not a real one; change B is illustrative. The engine is fleetopt, built on the Claude Agent SDK.</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script>
+(() => {
+const NS = 'http://www.w3.org/2000/svg', stage = document.getElementById('stage');
+const el = (tag, a, p, text) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); if (text != null) e.textContent = text; if (p) p.appendChild(e); return e; };
+const g = (p, a = {}) => el('g', a, p);
+const T = (p, x, y, s, cls, a = {}) => el('text', { x, y, class: cls, ...a }, p, s);
+const R = (p, x, y, w, h, cls, a = {}) => el('rect', { x, y, width: w, height: h, rx: 8, class: cls, ...a }, p);
+const scene = id => g(stage, { id, class: 'scene' });
+function belt(p) {
+  R(p, 60, 500, 1480, 30, 'belt', { rx: 15 });
+  el('line', { x1: 78, y1: 515, x2: 1522, y2: 515, class: 'beltm' }, p);
+  for (let x = 120; x <= 1480; x += 120) el('circle', { cx: x, cy: 550, r: 9, class: 'roller' }, p);
+}
+function agent(p, x, y, s = 1) {
+  const a = g(p, { transform: `translate(${x} ${y}) scale(${s})` });
+  R(a, -60, -37, 120, 74, 'agent', { rx: 10 });
+  [[-32, -12, 0, 14], [0, 14, 32, -12], [-32, -12, 32, -12]].forEach(([x1, y1, x2, y2]) => el('line', { x1, y1, x2, y2, class: 'edge' }, a));
+  el('circle', { cx: -32, cy: -12, r: 8, class: 'node hot' }, a);
+  el('circle', { cx: 0, cy: 14, r: 8, class: 'node' }, a);
+  el('circle', { cx: 32, cy: -12, r: 8, class: 'node' }, a);
+  return a;
+}
+const G = window.gsap;
+
+/* 1 · The software factory */
+function s1() {
+  const p = scene('s1');
+  const years = ['1968', '1969', '1975', '1976–77', '2004', '2017'];
+  const yearEls = years.map((y, i) => T(p, 116, 190, y, 'big', { opacity: i === 5 ? 1 : 0 }));
+  T(p, 124, 232, 'SOFTWARE FACTORIES, 1968 TO 2017', 'cap');
+  const SX = [330, 630, 930, 1230], presses = [];
+  ['Design', 'Build', 'Test', 'Ship'].forEach((n, i) => {
+    R(p, SX[i] - 120, 260, 240, 170, 'box');
+    T(p, SX[i], 330, n, 'n mid');
+    T(p, SX[i], 362, 'standard station', 'm mid');
+    presses.push(R(p, SX[i] - 36, 410, 72, 16, 'press', { rx: 3 }));
+  });
+  belt(p);
+  T(p, 60, 592, 'parts in', 'm');
+  T(p, 1540, 592, 'software out', 'm end');
+  const states = ['parts', 'design', 'code', 'tested', 'shipped'];
+  const look = [['#262829', '#747676'], ['#151617', '#D8DADA'], ['#4B4D4E', '#4B4D4E'], ['#4B4D4E', '#F6F6F6'], ['#EE0000', '#EE0000']];
+  const paint = (r, k) => { r.style.fill = look[k][0]; r.style.stroke = look[k][1]; };
+  const items = [180, 480, 780, 1480].map((x, i) => {
+    const it = g(p, { transform: `translate(${x} 0)` });
+    const r = R(it, -50, 446, 100, 52, 'item', { rx: 6 });
+    paint(r, i + 1);
+    const labs = states.map((s, k) => T(it, 0, 478, s, 'il mid', { opacity: k === i + 1 ? 1 : 0 }));
+    return { it, r, labs };
+  });
+  el('line', { x1: 140, y1: 660, x2: 1460, y2: 660, class: 'axis' }, p);
+  const desc = [['Bemer urges GE', 'to build one'], ['Hitachi names', 'its "factory"'], ['SDC opens the', 'second, in the US'],
+                ['NEC, Toshiba and', 'Fujitsu follow'], ["Microsoft's", 'Software Factories'], ['Kessel Run:', 'DevSecOps factory']];
+  const ms = [200, 440, 680, 920, 1160, 1400].map((x, i) => {
+    const m = g(p), d = el('circle', { cx: x, cy: 660, r: 9, class: 'dot' }, m);
+    d.style.fill = '#EE0000';
+    T(m, x, 704, years[i], 'yr mid'); T(m, x, 732, desc[i][0], 's mid'); T(m, x, 754, desc[i][1], 's mid');
+    return { m, d };
+  });
+  return () => {
+    const tl = G.timeline({ paused: true }), V = 200;
+    [0, 2.4, 4.8, 7.2].forEach((t0, i) => {
+      const { it, r, labs } = items[i], end = i === 3 ? 1480 : 1720;
+      tl.fromTo(it, { x: -80 }, { x: end, duration: (end + 80) / V, ease: 'none' }, t0);
+      tl.set(r, { fill: look[0][0], stroke: look[0][1] }, 0);
+      labs.forEach((l, k) => tl.set(l, { opacity: k ? 0 : 1 }, 0));
+      SX.forEach((sx, k) => {
+        const at = t0 + (sx + 80) / V;
+        tl.fromTo(presses[k], { y: 0 }, { y: 16, duration: .12, yoyo: true, repeat: 1, ease: 'power2.in', immediateRender: false }, at - .14);
+        tl.set(r, { fill: look[k + 1][0], stroke: look[k + 1][1] }, at);
+        tl.set(labs[k], { opacity: 0 }, at); tl.set(labs[k + 1], { opacity: 1 }, at);
+      });
+    });
+    yearEls.forEach((y, i) => tl.set(y, { opacity: i ? 0 : 1 }, 0));
+    ms.forEach(({ m, d }, i) => {
+      const at = .4 + i * 2.6;
+      tl.fromTo(d, { fill: '#333536' }, { fill: '#EE0000', duration: .3 }, at);
+      tl.fromTo(m, { opacity: .35 }, { opacity: 1, duration: .3 }, at);
+      if (i) { tl.set(yearEls[i - 1], { opacity: 0 }, at); tl.set(yearEls[i], { opacity: 1 }, at); }
+    });
+    return tl;
+  };
+}
+
+/* 2 · Skill vs sentinel */
+function s2() {
+  const p = scene('s2');
+  function chip(x, y, w, s) {
+    const c = g(p);
+    R(c, x, y, w, 90, 'box');
+    const ls = s.split('\n');
+    ls.forEach((l, k) => T(c, x + w / 2, y + 51 - (ls.length - 1) * 11 + k * 22, l, 'ch mid'));
+    return c;
+  }
+  function arrow(x1, x2, y) {
+    el('line', { x1, y1: y, x2: x2 - 8, y2: y, class: 'wire' }, p);
+    el('polygon', { points: `${x2},${y} ${x2 - 10},${y - 6} ${x2 - 10},${y + 6}`, class: 'pkt' }, p);
+  }
+  T(p, 60, 186, 'A SKILL', 'cap');
+  T(p, 60, 220, 'Claude Code', 'n'); T(p, 60, 248, 'with skills', 'n');
+  const one = ['a person asks', 'reads the code', 'suggests a change', 'a person judges'].map((s, i) => {
+    const x = 340 + i * 280;
+    if (i) arrow(x - 50, x, 205);
+    return chip(x, 160, 230, s);
+  });
+  const note1 = T(p, 1295, 290, 'judged by reading, not measured', 'm mid');
+  T(p, 60, 350, '↓ the same expert prose', 'm');
+  T(p, 60, 462, 'A SENTINEL', 'cap');
+  T(p, 60, 496, 'the same skills,', 'b'); T(p, 60, 522, 'plus probe, gate', 'b'); T(p, 60, 548, 'and receipt', 'b');
+  const two = ['invoked', 'runs the\nagent', 'measures', 'changes', 'proves', 'keeps or\nrefuses', 'receipt'].map((s, i) => {
+    const x = 340 + i * 176;
+    if (i) arrow(x - 26, x, 485);
+    return chip(x, 440, 150, s);
+  });
+  const brackets = [[516, 842, 'probe'], [1044, 1370, 'gate'], [1396, 1546, 'receipt']].map(([a, b, s]) => {
+    const k = g(p);
+    el('path', { d: `M${a} 546 v14 h${b - a} v-14`, fill: 'none', class: 'tick' }, k);
+    el('path', { d: `M${a} 546 v14 h${b - a} v-14`, fill: 'none', stroke: '#EE0000', 'stroke-width': 2 }, k);
+    T(k, (a + b) / 2, 588, s, 'rm mid');
+    return k;
+  });
+  const end = g(p);
+  T(end, 800, 690, 'A sentinel is a skill that carries its own proof.', 'n mid');
+  T(end, 800, 730, 'Same session, same prose. The probe, the gate and the receipt are what a skill alone does not have.', 's mid');
+  return () => {
+    const tl = G.timeline({ paused: true });
+    one.forEach((c, i) => tl.fromTo(c, { opacity: .15 }, { opacity: 1, duration: .35 }, .3 + i * .5));
+    tl.fromTo(note1, { opacity: 0 }, { opacity: 1, duration: .4 }, 2.4);
+    two.forEach((c, i) => tl.fromTo(c, { opacity: .15 }, { opacity: 1, duration: .35 }, 3.2 + i * .5));
+    tl.fromTo(brackets, { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: .4, stagger: .35 }, 7.0);
+    tl.fromTo(end, { opacity: 0 }, { opacity: 1, duration: .6 }, 8.4);
+    return tl;
+  };
+}
+
+/* 3 · Forward deployed, invoked today */
+function s3() {
+  const p = scene('s3');
+  R(p, 60, 120, 320, 480, 'box');
+  T(p, 84, 158, 'CENTRAL', 'cap'); T(p, 84, 182, 'home of the experts', 'm');
+  ['cost', 'design', 'security', 'red team', 'tester', 'surveyor'].forEach((n, i) => {
+    R(p, 84, 210 + i * 56, 272, 44, 'cart');
+    T(p, 104, 238 + i * 56, n, 's');
+  });
+  el('line', { x1: 380, y1: 444, x2: 590, y2: 444, class: 'wire' }, p);
+  T(p, 470, 428, 'sent to the team', 'm mid');
+  R(p, 560, 70, 980, 570, 'box');
+  T(p, 590, 108, "THE TEAM'S LOCATION", 'cap'); T(p, 1510, 108, 'their machine, their setup, their keys', 'm end');
+  const dev = R(p, 590, 160, 310, 140, 'box');
+  el('circle', { cx: 626, cy: 196, r: 12, class: 'node' }, p);
+  el('path', { d: 'M606 232 a20 18 0 0 1 40 0 z', class: 'node' }, p);
+  T(p, 660, 202, 'a developer', 'b'); T(p, 660, 228, 'invokes it', 's');
+  R(p, 604, 250, 282, 34, 'callout', { rx: 4 });
+  const cmd = T(p, 616, 273, 'fleetopt apply --expert cost', 'pk');
+  R(p, 590, 330, 310, 160, 'box');
+  T(p, 612, 364, 'their agent', 'b'); T(p, 612, 388, 'their commit, their keys', 'm');
+  agent(p, 672, 444, .8);
+  const ring = el('circle', { cx: 672, cy: 444, r: 50, class: 'ring' }, p);
+  const gate = g(p);
+  R(gate, 940, 160, 570, 240, 'panel');
+  T(gate, 962, 194, 'GATE · A AGAINST THE ORIGINAL', 'cap'); T(gate, 1488, 194, '3 runs each side', 'm end');
+  const afters = [];
+  [['tokens in', .50, '−50%'], ['tokens out', .62, '−38%'], ['model calls', .67, '−33%'], ['time', .76, '−24%']].forEach(([l, f, v], i) => {
+    const y = 218 + i * 34;
+    T(gate, 962, y + 14, l, 'cs');
+    R(gate, 1100, y, 300, 8, 'before', { rx: 2 });
+    afters.push([R(gate, 1100, y + 11, 300 * f, 8, 'after', { rx: 2 }), 300 * f, T(gate, 1488, y + 18, v, 'pct end')]);
+  });
+  const reader = T(gate, 962, 380, 'reader: no answer worse', 'ok');
+  function outcome(x, l1, l2, l2c, stamp, good) {
+    const c = g(p);
+    R(c, x, 420, 270, 70, 'card', { rx: 6 });
+    T(c, x + 20, 450, l1, 'cb'); T(c, x + 20, 474, l2, l2c);
+    const w = good ? 66 : 96;
+    R(c, x + 258 - w, 458, w, 24, good ? 'good' : 'bad', { rx: 4 });
+    T(c, x + 258 - w / 2, 475, stamp, 'st mid');
+    return c;
+  }
+  const oa = outcome(940, 'A · stop the loop', 'when critique repeats', 'cs', 'KEPT', true);
+  const ob = outcome(1240, 'B · trim the critic', 'illustrative', 'cs it', 'REFUSED', false);
+  const outs = [['a branch', 'with change A'], ['a report', 'kept, refused, and why'], ['the developer decides', 'merge or not']].map(([a, b], i) => {
+    const c = g(p), x = 590 + i * 315;
+    R(c, x, 530, 290, 80, 'callout');
+    T(c, x + 20, 562, a, 'b'); T(c, x + 20, 590, b, 's');
+    return c;
+  });
+  const em = g(p, { transform: 'translate(815 444)' });
+  R(em, -80, -18, 160, 36, 'pkt', { rx: 18 });
+  T(em, 0, 6, 'sentinel · cost', 'pk mid');
+  const foot = T(p, 60, 700, 'Invoked today: a person starts it, the gate keeps what it proves, the developer decides.', 'b');
+  T(p, 60, 800, 'A: one run on a test agent we built, October 2026 · B: illustrative', 'm');
+  return () => {
+    const tl = G.timeline({ paused: true });
+    tl.fromTo(dev, { stroke: '#333536' }, { stroke: '#F6F6F6', duration: .4 }, .3);
+    tl.fromTo(cmd, { opacity: 0 }, { opacity: 1, duration: .5 }, .5);
+    tl.fromTo(em, { x: 220, y: 232 }, { x: 470, y: 444, duration: .9, ease: 'power1.in' }, 1.2);
+    tl.to(em, { x: 815, y: 444, duration: 1, ease: 'power1.out' }, 2.1);
+    tl.fromTo(ring, { attr: { r: 40 }, opacity: .9 }, { attr: { r: 110 }, opacity: 0, duration: .9, repeat: 2, ease: 'power1.out', immediateRender: false }, 3.2);
+    tl.fromTo(gate, { opacity: 0 }, { opacity: 1, duration: .5 }, 5.0);
+    afters.forEach(([a, w, v], i) => {
+      tl.fromTo(a, { attr: { width: 300 } }, { attr: { width: w }, duration: .6 }, 5.4 + i * .25);
+      tl.fromTo(v, { opacity: 0 }, { opacity: 1, duration: .3 }, 5.7 + i * .25);
+    });
+    tl.fromTo(reader, { opacity: 0 }, { opacity: 1, duration: .4 }, 6.8);
+    tl.fromTo(oa, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .45 }, 7.4);
+    tl.fromTo(ob, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .45 }, 8.0);
+    tl.fromTo(outs, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .45, stagger: .45 }, 8.8);
+    tl.fromTo(dev, { stroke: '#F6F6F6' }, { stroke: '#EE0000', duration: .25, yoyo: true, repeat: 3, immediateRender: false }, 10.2);
+    tl.fromTo(foot, { opacity: 0 }, { opacity: 1, duration: .5 }, 10.8);
+    return tl;
+  };
+}
+
+/* 4 · One sentinel, any expert */
+function s4() {
+  const p = scene('s4');
+  R(p, 120, 50, 1360, 190, 'panel');
+  T(p, 148, 88, 'CENTRAL CATALOGUE · EXPERTS ARE FOLDERS OF PROSE', 'cap');
+  const names = ['cost', 'design', 'security', 'red team', 'tester', 'surveyor', 'your next'], shelf = {};
+  names.forEach((n, i) => {
+    const x = 160 + i * 185;
+    shelf[n] = [x, R(p, x, 112, 160, 100, i === 6 ? 'cart next' : 'cart')];
+    T(p, x + 80, 158, n, 'b mid');
+    T(p, x + 80, 188, i === 6 ? 'a new folder' : 'prose only', 'm mid');
+  });
+  T(p, 1480, 272, 'pull by name: built  ·  hosted, signed catalogue: next', 'm end');
+  const X0 = [120, 580, 1040], trig = [], drops = [], scans = [], engines = [];
+  [['A', 'cost alarm', 'cost'], ['B', 'pull request', 'security'], ['C', 'nightly', 'design']].forEach(([L, t, ex], i) => {
+    const x0 = X0[i], c = x0 + 220;
+    const tg = g(p);
+    R(tg, c - 90, 300, 180, 44, 'pill next', { rx: 22 });
+    T(tg, c, 328, t, 's mid');
+    el('line', { x1: c, y1: 344, x2: c, y2: 400, class: 'wire' }, tg);
+    trig.push(tg);
+    R(p, x0, 400, 440, 370, 'box next');
+    T(p, x0 + 24, 436, 'Team ' + L, 'n');
+    T(p, x0 + 24, 462, 'its own container', 'm');
+    engines.push(R(p, x0 + 24, 480, 240, 264, 'engine'));
+    T(p, x0 + 48, 518, 'Engine', 'b');
+    T(p, x0 + 48, 542, 'the same everywhere', 'm');
+    ['session', 'tools', 'probe', 'gate'].forEach((s, k) => {
+      R(p, x0 + 48, 574 + k * 36, 10, 10, 'pkt', { rx: 2 });
+      T(p, x0 + 68, 584 + k * 36, s, 's');
+    });
+    R(p, x0 + 284, 480, 136, 100, 'slot next');
+    T(p, x0 + 352, 536, 'expert slot', 'm mid');
+    agent(p, x0 + 352, 690, .9);
+    T(p, x0 + 352, 756, 'their agent', 'm mid');
+    scans.push(R(p, x0 + 292, 652, 120, 76, 'scan'));
+    const d = g(p, { transform: `translate(${x0 + 284} 480)` });
+    R(d, 0, 0, 136, 100, 'cart');
+    T(d, 68, 46, ex, 'b mid'); T(d, 68, 74, 'pulled', 'm mid');
+    drops.push([d, shelf[ex], x0 + 284]);
+  });
+  const same = T(p, 800, 814, 'One engine in every container; only the expert changes.', 's mid');
+  return () => {
+    const tl = G.timeline({ paused: true });
+    [1, 0, 2].forEach((i, k) => {
+      const t0 = .3 + k * 2.3, [d, [sx, sr], tx] = drops[i];
+      tl.fromTo(trig[i], { opacity: 0, y: -16 }, { opacity: 1, y: 0, duration: .4, ease: 'back.out(2)' }, t0);
+      tl.fromTo(sr, { stroke: '#A7A7A7' }, { stroke: '#EE0000', duration: .25, yoyo: true, repeat: 1 }, t0 + .3);
+      tl.fromTo(d, { x: sx + 12, y: 112, opacity: 0 }, { x: tx, y: 480, opacity: 1, duration: 1.1, ease: 'power2.inOut' }, t0 + .45);
+      tl.fromTo(scans[i], { opacity: 0 }, { opacity: .5, duration: .2, yoyo: true, repeat: 3 }, t0 + 1.6);
+    });
+    tl.fromTo(engines, { stroke: '#333536' }, { stroke: '#F6F6F6', duration: .3, yoyo: true, repeat: 1 }, 7.2);
+    tl.fromTo(same, { opacity: 0 }, { opacity: 1, duration: .5 }, 7.4);
+    return tl;
+  };
+}
+
+/* 5 · The road: invoked, semi-autonomous, autonomous */
+function s5() {
+  const p = scene('s5');
+  const rows = [['Who starts it', 236], ['Where it runs', 326], ['What comes back', 426], ['The team', 556]];
+  [210, 300, 400, 530].forEach(y => el('line', { x1: 60, y1: y, x2: 340, y2: y, class: 'tick' }, p));
+  rows.forEach(([l, y]) => T(p, 84, y, l, 'b'));
+  const cells = [
+    [['a developer'], ['a trigger the team chose'], ['a trigger the team chose']],
+    [["the team's machine,", 'their keys'], ['a sandbox on the platform,', 'keys injected'], ['a sandbox on the platform,', 'keys injected']],
+    [['a branch and a report'], ['a pull request', 'with the receipt'], ['a merge, only inside the', "team's rules; anything else", 'becomes a pull request']],
+    [['decides'], ['approves'], ['sets the rules, sees every', 'receipt, can revert or stop']],
+  ];
+  const cols = [['Invoked', 'built'], ['Semi-autonomous', 'next'], ['Autonomous', 'later']].map(([n, w], i) => {
+    const c = g(p), x = 360 + i * 410;
+    R(c, x, 70, 380, 580, i ? 'box next' : 'box');
+    T(c, x + 24, 110, 'STAGE ' + (i + 1), 'cap');
+    T(c, x + 24, 146, n, 'n'); T(c, x + 24, 172, w, 'm');
+    cells.forEach((row, r) => row[i].forEach((s, k) => T(c, x + 24, rows[r][1] + k * 26, s, 's')));
+    return c;
+  });
+  const mark = g(p);
+  R(mark, 640, 88, 84, 30, 'pkt', { rx: 15 });
+  T(mark, 682, 108, 'today', 'pk mid');
+  const band = R(p, 60, 668, 1500, 84, 'box');
+  band.style.stroke = '#EE0000';
+  const bandText = g(p);
+  T(bandText, 84, 702, 'THE TEAM OWNS THE AGENT AT EVERY STAGE', 'cap');
+  T(bandText, 84, 734, 'Autonomy changes who starts the run, never who owns the agent.', 'b');
+  const mem = T(p, 60, 800, "Memory: the sentinel never re-proposes what a team refused, and each team sees its own agent's history.", 's');
+  return () => {
+    const tl = G.timeline({ paused: true });
+    cols.forEach((c, i) => tl.fromTo(c, { opacity: .12 }, { opacity: 1, duration: .6 }, .3 + i * 1.6));
+    tl.fromTo(mark, { opacity: 0, scale: 1.6, transformOrigin: '50% 50%' }, { opacity: 1, scale: 1, duration: .35, ease: 'back.out(2)' }, .9);
+    tl.fromTo(band, { attr: { width: 0 } }, { attr: { width: 1500 }, duration: .9, ease: 'power2.out' }, 5.0);
+    tl.fromTo(bandText, { opacity: 0 }, { opacity: 1, duration: .5 }, 5.6);
+    tl.fromTo(mem, { opacity: 0 }, { opacity: 1, duration: .5 }, 6.4);
+    return tl;
+  };
+}
+
+/* 6 · Autonomous, on the platform, in a sandbox */
+function s6() {
+  const p = scene('s6');
+  const trig = ['pull request', 'nightly', 'cost alarm'].map((t, i) => {
+    const tg = g(p);
+    R(tg, 60, 90 + i * 60, 240, 40, 'pill next', { rx: 20 });
+    T(tg, 180, 116 + i * 60, t, 's mid');
+    return tg;
+  });
+  el('line', { x1: 300, y1: 170, x2: 360, y2: 170, class: 'wire' }, p);
+  R(p, 60, 360, 240, 200, 'box');
+  T(p, 84, 400, 'Team repo', 'n'); T(p, 84, 426, "the agent's code", 'm');
+  agent(p, 180, 492);
+  el('line', { x1: 300, y1: 460, x2: 400, y2: 460, class: 'wire' }, p);
+  R(p, 360, 50, 820, 600, 'box next');
+  T(p, 384, 88, 'PLATFORM', 'cap'); T(p, 1156, 88, "started by the team's trigger", 'm end');
+  const sb = R(p, 400, 130, 740, 480, 'box next');
+  sb.style.stroke = '#EE0000';
+  T(p, 424, 168, 'SANDBOX CONTAINER', 'cap'); T(p, 1116, 168, "one team's agent, sealed", 'm end');
+  const copy = g(p);
+  R(copy, 430, 190, 210, 140, 'engine');
+  T(copy, 535, 222, 'the agent', 'b mid'); T(copy, 535, 244, 'at one commit', 'm mid');
+  agent(copy, 535, 290, .75);
+  R(p, 430, 350, 210, 230, 'engine');
+  T(p, 454, 386, 'Engine', 'b'); T(p, 454, 410, 'the same everywhere', 'm');
+  ['session', 'tools', 'probe', 'gate'].forEach((s, k) => { R(p, 454, 436 + k * 34, 10, 10, 'pkt', { rx: 2 }); T(p, 474, 446 + k * 34, s, 's'); });
+  R(p, 680, 70, 160, 40, 'pill next', { rx: 20 }); T(p, 760, 96, 'catalogue', 's mid');
+  const cart = g(p, { transform: 'translate(680 190)' });
+  R(cart, 0, 0, 160, 96, 'cart'); T(cart, 80, 44, 'cost', 'b mid'); T(cart, 80, 70, 'pulled', 'm mid');
+  el('circle', { cx: 940, cy: 330, r: 100, fill: 'none', class: 'wire' }, p);
+  const stages = [[940, 214, 'measure', 'm mid'], [1050, 335, 'change', 'm'], [940, 456, 'prove', 'm mid'], [830, 335, 'keep or refuse', 'm end']]
+    .map(([x, y, s, c]) => T(p, x, y, s, c));
+  T(p, 940, 326, 'until nothing', 'm mid'); T(p, 940, 346, 'more is proven', 'm mid');
+  const orb = el('circle', { cx: 940, cy: 230, r: 10, class: 'pkt' }, p);
+  const guards = [['secrets injected,', 'never shown'], ['egress: model and', "agent's providers"], ['spend and', 'time caps']].map(([a, b], i) => {
+    const c = g(p), x = 680 + i * 150;
+    R(c, x, 510, 140, 64, 'callout');
+    T(c, x + 70, 537, a, 'cs mid'); T(c, x + 70, 558, b, 'cs mid');
+    return c;
+  });
+  el('line', { x1: 1140, y1: 225, x2: 1230, y2: 225, class: 'wire' }, p);
+  const pr = g(p);
+  R(pr, 1230, 110, 320, 220, 'box');
+  T(pr, 1254, 150, 'Pull request', 'n');
+  T(pr, 1254, 190, 'kept: A, −50% tokens', 's');
+  T(pr, 1254, 220, 'refused: B, reported', 's');
+  T(pr, 1254, 250, 'numbers and receipt', 's');
+  T(pr, 1254, 300, 'from a sentinel identity', 'm');
+  const human = g(p);
+  R(human, 1230, 360, 320, 120, 'box');
+  el('circle', { cx: 1278, cy: 404, r: 14, class: 'node' }, human);
+  el('path', { d: 'M1254 452 a24 22 0 0 1 48 0 z', class: 'node' }, human);
+  T(human, 1320, 410, 'The team approves', 'b'); T(human, 1320, 438, 'humans on the loop:', 'm'); T(human, 1320, 460, 'goals and rules', 'm');
+  const board = g(p);
+  R(board, 1230, 510, 320, 70, 'box next');
+  T(board, 1390, 552, 'card to the central board', 's mid');
+  const rows = [['TODAY · INVOKED', 'a developer starts it  ·  their machine, their keys  ·  the gate keeps, the developer decides'],
+                ['ON THE PLATFORM', 'a trigger the team chose starts it  ·  a sandbox, keys injected  ·  the gate keeps, the team approves']].map(([a, b], i) => {
+    const r = g(p), y = 680 + i * 76;
+    R(r, 60, y, 1490, 64, i ? 'box next' : 'box');
+    T(r, 84, y + 38, a, 'cap'); T(r, 440, y + 39, b, 's');
+    return r;
+  });
+  return () => {
+    const tl = G.timeline({ paused: true });
+    tl.fromTo(trig[0], { opacity: 1 }, { opacity: .3, duration: .25, yoyo: true, repeat: 3, immediateRender: false }, .3);
+    tl.fromTo(copy, { opacity: 0, x: -140 }, { opacity: 1, x: 0, duration: .9, ease: 'power2.out' }, 1.0);
+    tl.fromTo(sb, { strokeDashoffset: 0 }, { strokeDashoffset: -68, duration: 1.2, ease: 'none' }, 1.6);
+    tl.fromTo(cart, { y: 70, opacity: 0 }, { y: 190, opacity: 1, duration: .9, ease: 'power2.inOut' }, 2.2);
+    tl.fromTo(guards, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .4, stagger: .3 }, 3.2);
+    tl.fromTo(orb, { rotation: 0 }, { rotation: 1080, svgOrigin: '940 330', duration: 7.2, ease: 'none' }, 4.4);
+    for (let lap = 0; lap < 3; lap++) stages.forEach((s, k) => tl.fromTo(s, { fill: '#8A8C8C' }, { fill: '#F6F6F6', duration: .2, yoyo: true, repeat: 1 }, 4.4 + lap * 2.4 + k * .6));
+    tl.fromTo(pr, { opacity: 0, x: -60 }, { opacity: 1, x: 0, duration: .7, ease: 'power2.out' }, 11.8);
+    tl.fromTo(human, { opacity: 0 }, { opacity: 1, duration: .5 }, 12.8);
+    tl.fromTo(board, { opacity: 0 }, { opacity: 1, duration: .5 }, 13.6);
+    tl.fromTo(rows, { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .5, stagger: .5 }, 14.4);
+    return tl;
+  };
+}
+
+/* Sentinels, from The Matrix */
+function sDef() {
+  const p = scene('sdef');
+  T(p, 120, 120, 'DEFINITION', 'cap');
+  const h = T(p, 114, 250, 'Sentinels', 'big');
+  h.style.fill = '#F6F6F6';
+  const lines = ['In The Matrix, Sentinels are autonomous', 'machines that patrol the real world, find', 'threats on their own and act without', 'human control.']
+    .map((s, i) => T(p, 120, 320 + i * 38, s, 'lead'));
+  const d = g(p, { transform: 'translate(860 60)' });
+  d.innerHTML = `<defs>
+<radialGradient id="dglow" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#EE0000" stop-opacity="0.35"/><stop offset="100%" stop-color="#EE0000" stop-opacity="0"/></radialGradient>
+<linearGradient id="dhull" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4B4D4E"/><stop offset="100%" stop-color="#1B1D1F"/></linearGradient>
+<linearGradient id="dbeam" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#EE0000" stop-opacity="0.45"/><stop offset="100%" stop-color="#EE0000" stop-opacity="0"/></linearGradient></defs>
+<g fill="none" stroke="#333536" stroke-width="1"><path d="M0 360 H640 M0 390 H640 M0 412 H640"/><path d="M320 340 L40 420 M320 340 L180 420 M320 340 L460 420 M320 340 L600 420"/></g>
+<polygon id="dbeam-p" points="300,215 340,215 470,400 170,400" fill="url(#dbeam)"/>
+<circle id="dglow-c" cx="320" cy="180" r="170" fill="url(#dglow)"/>
+<g id="dradar" fill="none" stroke="#EE0000" stroke-width="2" opacity="0.6"><path d="M150 180 A170 170 0 0 1 490 180"/><path d="M190 180 A130 130 0 0 1 450 180" opacity="0.7"/></g>
+<g id="dbody">
+<g stroke="#747676" stroke-width="10" stroke-linecap="round"><line x1="270" y1="170" x2="140" y2="120"/><line x1="370" y1="170" x2="500" y2="120"/><line x1="270" y1="200" x2="160" y2="250"/><line x1="370" y1="200" x2="480" y2="250"/></g>
+<g fill="#1B1D1F" stroke="#D8DADA" stroke-width="3"><ellipse class="drot" cx="140" cy="116" rx="70" ry="12"/><ellipse class="drot" cx="500" cy="116" rx="70" ry="12"/><ellipse class="drot" cx="160" cy="246" rx="62" ry="11"/><ellipse class="drot" cx="480" cy="246" rx="62" ry="11"/></g>
+<g fill="#EE0000"><circle cx="140" cy="116" r="5"/><circle cx="500" cy="116" r="5"/><circle cx="160" cy="246" r="5"/><circle cx="480" cy="246" r="5"/></g>
+<polygon points="320,120 386,150 386,212 320,242 254,212 254,150" fill="url(#dhull)" stroke="#D8DADA" stroke-width="3"/>
+<circle cx="320" cy="181" r="34" fill="#000000" stroke="#747676" stroke-width="3"/>
+<circle id="deye" cx="320" cy="181" r="20" fill="#EE0000"/>
+<circle cx="313" cy="174" r="6" fill="#FFFFFF" opacity="0.85"/></g>`;
+  const cards = [['In the film', 'They sense, decide and act on their own,', 'within the rules their makers set.'],
+                 ['Ours', "They find, change and prove on their own,", 'within the rules the team sets.']].map(([t, a, b], i) => {
+    const c = g(p), x = 120 + i * 700;
+    R(c, x, 560, 660, 170, 'box');
+    el('rect', { x, y: 560, width: 660, height: 6, class: 'pkt' }, c);
+    T(c, x + 36, 616, t, 'n'); T(c, x + 36, 658, a, 's'); T(c, x + 36, 686, b, 's');
+    return c;
+  });
+  return () => {
+    const tl = G.timeline({ paused: true });
+    const q = s => d.querySelector(s);
+    tl.fromTo(h, { opacity: 0, x: -20 }, { opacity: 1, x: 0, duration: .6 }, .2);
+    tl.fromTo(lines, { opacity: 0 }, { opacity: 1, duration: .4, stagger: .3 }, .7);
+    tl.fromTo(q('#dbody'), { y: 0 }, { y: -10, duration: 1.2, yoyo: true, repeat: 7, ease: 'sine.inOut' }, 0);
+    tl.fromTo(q('#dbeam-p'), { rotation: -14, svgOrigin: '320 215' }, { rotation: 14, svgOrigin: '320 215', duration: 1.6, yoyo: true, repeat: 5, ease: 'sine.inOut' }, 0);
+    tl.fromTo(q('#dglow-c'), { opacity: .5 }, { opacity: 1, duration: .8, yoyo: true, repeat: 11 }, 0);
+    tl.fromTo(q('#dradar'), { opacity: .2, scale: .9, svgOrigin: '320 180' }, { opacity: .8, scale: 1.05, svgOrigin: '320 180', duration: 1, yoyo: true, repeat: 9 }, 0);
+    tl.fromTo(d.querySelectorAll('.drot'), { scaleX: 1, transformOrigin: '50% 50%' }, { scaleX: .55, duration: .12, yoyo: true, repeat: 79, ease: 'none' }, 0);
+    tl.fromTo(cards, { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: .5, stagger: .6 }, 2.4);
+    return tl;
+  };
+}
+
+/* Autonomy is coming */
+function sAuto() {
+  const p = scene('sauto');
+  T(p, 120, 110, 'THE ROAD TO AUTONOMY', 'cap');
+  T(p, 120, 178, 'Autonomy is coming. Be ready first.', 'h64');
+  const st = [['Manual building', 'People build and run', 'everything by hand.', 'do the work', '#D8DADA', 24],
+              ['Assisted', 'AI suggests and drafts.', 'People decide every step.', 'in the loop', '#747676', 72],
+              ['Semi-autonomous', 'Agents act on their own.', 'People approve the key steps.', 'on the loop', '#F07070', 120],
+              ['Full autonomy', 'Agents run end to end,', 'whether people are there or not.', 'set goals and rules', '#EE0000', 168]];
+  const bars = [], cards = [];
+  st.forEach(([n, a, b, hu, col, hgt], i) => {
+    const x = 120 + i * 350;
+    const bar = el('rect', { x, y: 400 - hgt, width: 330, height: hgt, fill: col }, p);
+    bars.push(bar);
+    const c = g(p);
+    const r = R(c, x, 400, 330, 220, 'box', { rx: 0 });
+    if (i === 3) r.style.stroke = '#EE0000';
+    T(c, x + 24, 440, 'STAGE ' + (i + 1), 'cap');
+    T(c, x + 24, 478, n, 'n');
+    T(c, x + 24, 514, a, 's'); T(c, x + 24, 540, b, 's');
+    const hl = T(c, x + 24, 590, 'Humans: ', 'b');
+    const t = document.createElementNS(NS, 'tspan'); t.textContent = hu; t.setAttribute('font-weight', '400'); hl.appendChild(t);
+    cards.push(c);
+  });
+  const move = g(p);
+  T(move, 120, 700, 'Our move: build the guardrails, governance and skills now, before stage 4 arrives.', 'n');
+  T(move, 120, 744, "A sentinel is one of those guardrails: nothing is kept that the team's own checks do not prove.", 's');
+  return () => {
+    const tl = G.timeline({ paused: true });
+    st.forEach((_, i) => {
+      tl.fromTo(bars[i], { scaleY: 0, transformOrigin: '50% 100%' }, { scaleY: 1, duration: .6, ease: 'power2.out' }, .4 + i * .9);
+      tl.fromTo(cards[i], { opacity: .1 }, { opacity: 1, duration: .5 }, .5 + i * .9);
+    });
+    tl.fromTo(move, { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .6 }, 4.4);
+    return tl;
+  };
+}
+
+/* Architecture: the expert folder, the engine, the tools */
+function sArch() {
+  const p = scene('sarch');
+  R(p, 60, 70, 440, 600, 'box');
+  T(p, 84, 110, 'THE EXPERT · A FOLDER OF PROSE', 'cap');
+  const tree = [['experts/cost/', '', 'pk'], ['├ GUIDE.md', 'what it is asked, how it works'], ['├ CHECKS.md', 'what it must account for'], ['└ skills/', 'what it knows'],
+    ['   ├ caching/SKILL.md'], ['   ├ prompt-growth/SKILL.md'], ['   ├ … five more'], ['   └ adk/SKILL.md', 'when: adk', 'tag']]
+    .map(([a, b, k], i) => {
+      const r = g(p), y = 160 + i * 34;
+      T(r, 84, y, a, k === 'pk' ? 'pk' : 'mw');
+      if (b) T(r, k === 'tag' ? 300 : 236, y, b, k === 'tag' ? 'rm' : 'cs');
+      return r;
+    });
+  const hdr = g(p);
+  R(hdr, 84, 440, 392, 136, 'callout', { rx: 6 });
+  T(hdr, 104, 468, 'GUIDE.md header', 'cs');
+  ['model: opus · tools: shape', 'calls: tester', 'earns: cheaper'].forEach((s, i) => T(hdr, 104, 498 + i * 26, s, 'mw'));
+  T(p, 84, 612, 'No code in it.', 'b'); T(p, 84, 640, 'Written and reviewed like a document.', 's');
+
+  R(p, 560, 70, 540, 600, 'box');
+  T(p, 584, 110, 'THE ENGINE · THE SAME FOR EVERY EXPERT', 'cap');
+  const sess = R(p, 584, 130, 492, 136, 'engine');
+  T(p, 604, 168, 'Claude Agent SDK session', 'n'); T(p, 604, 194, 'the harness Claude Code runs on', 'm');
+  T(p, 604, 244, 'loads', 'm');
+  const chips = ['GUIDE', 'CHECKS', 'skills'].map((s, i) => {
+    const c = g(p, { transform: `translate(${660 + i * 112} 222)` });
+    R(c, 0, 0, 102, 32, 'cart', { rx: 16 }); T(c, 51, 21, s, 'pk mid');
+    return c;
+  });
+  T(p, 584, 300, 'TOOLS · EACH WITH A LIMIT', 'cap');
+  const tools = [['ask', 'one question'], ['start', 'one request'], ['measure', '3 runs, every call'], ['query', 'SQL, read only'], ['checked', 'close a check'], ['call', 'another expert'],
+    ['run_evals', "the team's evals"], ['save_change', 'one commit'], ['keep', 'the gate'], ['undo', 'back to kept'], ['shape', 'declared vs ran']].map(([n, d], i) => {
+      const c = g(p), x = 584 + (i % 2) * 250, y = 316 + Math.floor(i / 2) * 40;
+      R(c, x, y, 242, 34, 'cart', { rx: 4 });
+      T(c, x + 12, y + 22, n, 'pk'); T(c, x + 122, y + 22, d, 'cs');
+      return c;
+    });
+  const gate = R(p, 584, 570, 242, 80, 'box gate');
+  T(p, 604, 604, 'Gate', 'b'); T(p, 604, 630, 'keeps only what is proven', 'cs');
+  const probe = R(p, 834, 570, 242, 80, 'box');
+  T(p, 854, 604, 'Probe', 'b'); T(p, 854, 630, 'records every call', 'cs');
+
+  R(p, 1160, 70, 380, 230, 'box');
+  T(p, 1184, 110, "THE TEAM'S AGENT", 'cap'); T(p, 1184, 136, 'in their setup, with their keys', 'm');
+  agent(p, 1350, 220);
+  const ring = el('circle', { cx: 1350, cy: 220, r: 50, class: 'ring' }, p);
+  el('path', { d: 'M1076 600 H1120 V220 H1160', fill: 'none', class: 'wire' }, p);
+  el('path', { d: 'M705 650 V662 H1130 V470 H1160', fill: 'none', class: 'wire' }, p);
+  const outs = [['a branch', 'one commit per change'], ['a report', 'findings, with the numbers'], ['a run record', 'the receipt']].map(([a, b], i) => {
+    const c = g(p), y = 340 + i * 110;
+    R(c, 1160, y, 380, 96, 'callout');
+    T(c, 1184, y + 40, a, 'b'); T(c, 1184, y + 68, b, 's');
+    return c;
+  });
+  const cmd = g(p);
+  T(cmd, 60, 730, '$ fleetopt review my-agent --expert cost', 'pk');
+  T(cmd, 60, 762, '$ fleetopt apply  my-agent --expert cost,security', 'pk');
+  T(cmd, 60, 806, 'Same command, same tools, same proof. Only the names change.', 's');
+  return () => {
+    const tl = G.timeline({ paused: true });
+    tl.fromTo(tree, { opacity: 0, x: -10 }, { opacity: 1, x: 0, duration: .3, stagger: .18 }, .2);
+    tl.fromTo(hdr, { opacity: 0 }, { opacity: 1, duration: .4 }, 1.8);
+    chips.forEach((c, i) => tl.fromTo(c, { x: 84, y: 184 + i * 34, opacity: 0 }, { x: 660 + i * 112, y: 222, opacity: 1, duration: .9, ease: 'power2.inOut' }, 2.6 + i * .3));
+    tl.fromTo(sess, { stroke: '#333536' }, { stroke: '#F6F6F6', duration: .3, yoyo: true, repeat: 1 }, 3.9);
+    tl.fromTo(tools, { opacity: .15 }, { opacity: 1, duration: .25, stagger: .15 }, 4.4);
+    tl.fromTo(probe, { stroke: '#333536' }, { stroke: '#F6F6F6', duration: .3 }, 6.3);
+    tl.fromTo(ring, { attr: { r: 40 }, opacity: .9 }, { attr: { r: 110 }, opacity: 0, duration: .9, repeat: 1, immediateRender: false }, 6.5);
+    tl.fromTo(gate, { stroke: '#EE0000' }, { stroke: '#F6F6F6', duration: .25, yoyo: true, repeat: 3 }, 8.2);
+    tl.fromTo(outs, { opacity: 0, x: 16 }, { opacity: 1, x: 0, duration: .4, stagger: .3 }, 8.6);
+    tl.fromTo(cmd, { opacity: 0 }, { opacity: 1, duration: .5 }, 9.8);
+    return tl;
+  };
+}
+
+/* One expert, shown from its own files */
+function expertScene(id, c) {
+  const p = scene(id);
+  const guide = g(p);
+  R(guide, 60, 70, 500, 330, 'box');
+  T(guide, 84, 108, 'GUIDE.md · ITS HEADER', 'cap');
+  c.guide.forEach((s, i) => T(guide, 84, 148 + i * 28, s, 'mw'));
+  c.note.forEach((s, i) => T(guide, 84, 350 + i * 26, s, 's'));
+  const checks = g(p);
+  R(checks, 60, 420, 500, 380, 'box');
+  T(checks, 84, 458, 'CHECKS.md · WHAT IT MUST CLOSE', 'cap');
+  c.checks.forEach((s, i) => T(checks, 84, 496 + i * 26, s, i < c.checksIntro ? 's' : 'cs'));
+  T(p, 600, 92, 'skills/ · WHAT IT KNOWS', 'cap');
+  const cards = c.skills.map(([n, d, tag], i) => {
+    const k = g(p), x = 600 + (i % 2) * 480, y = 110 + Math.floor(i / 2) * 86;
+    const r = R(k, x, y, 460, 74, tag === 'tool' ? 'callout' : 'cart', { rx: 6 });
+    T(k, x + 20, y + 30, n, 'b'); T(k, x + 20, y + 56, d, 'cs');
+    if (tag && tag !== 'tool') T(k, x + 440, y + 30, tag, 'rm end');
+    return [k, r];
+  });
+  const top = 110 + Math.ceil(c.skills.length / 2) * 86 + 14;
+  const sample = g(p);
+  R(sample, 600, top, 940, 800 - top, 'panel');
+  T(sample, 624, top + 38, c.sampleTitle, 'cap');
+  const body = c.sample(sample, top);
+  return () => {
+    const tl = G.timeline({ paused: true });
+    tl.fromTo(guide.querySelectorAll('text'), { opacity: 0 }, { opacity: 1, duration: .3, stagger: .15 }, .2);
+    tl.fromTo(checks.querySelectorAll('text'), { opacity: 0 }, { opacity: 1, duration: .3, stagger: .12 }, 1.8);
+    tl.fromTo(cards.map(k => k[0]), { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: .35, stagger: .2 }, 3.0);
+    const hot = cards[c.hot][1], at = 3.4 + cards.length * .2;
+    tl.fromTo(hot, { stroke: '#A7A7A7' }, { stroke: '#EE0000', duration: .3 }, at);
+    tl.fromTo(sample, { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: .5 }, at + .4);
+    tl.fromTo(body, { opacity: 0 }, { opacity: 1, duration: .3, stagger: .3 }, at + .8);
+    return tl;
+  };
+}
+
+function sCost() {
+  return expertScene('scost', {
+    guide: ['name: cost', 'does: where it wastes tokens and money', 'earns: cheaper', 'calls: tester', 'apply: make the agent cost less without', '       changing what it answers'],
+    note: ['Starts from the bill. Changes the code on', 'its own branch; the gate keeps what is proven.'],
+    checksIntro: 3,
+    checks: ['For every node that carries more than a', 'twentieth of the tokens, each of these is', 'closed with a number:',
+      '· caching: the largest stable prefix against', '  the provider’s minimum, and cached tokens read', '· handoffs: the calls that only pass on or', '  reword what another call answered',
+      '· model-tier: the model against what this', '  node’s output is, and its output tokens', '· … and one line for each other skill'],
+    skills: [['Caching', 'a repeated prefix not cached, or under the minimum'], ['Hand-offs', 'calls that only reword; transcripts re-sent'],
+      ['Model tier', 'a bigger model or more reasoning than a step needs'], ['Prompt growth', 'context re-sent and growing round after round'],
+      ['Redundant work', 'loops with no early exit; the same call twice'], ['Retrieval', 'more passages than the answers use'],
+      ['Tool surface', 'too many tools bound; long tool descriptions'], ['langgraph · adk', 'how each fix is spelled on that framework', 'when: adk | langgraph']],
+    hot: 0,
+    sampleTitle: 'A SAMPLE · skills/caching/SKILL.md',
+    sample: (s, top) => ['# Is caching exploitable here?',
+      "Open this when cache_read_tokens = 0 while a node's prefix repeats across calls.",
+      'Decide with two facts from the traces: the provider and model of the node,',
+      'and the largest stable prefix it sends.',
+      'Step 1 - the minimum, per provider (docs checked 2026-09-23; they move)',
+      'Below the minimum nothing caches - no error, just zero cache tokens.']
+      .map((l, i) => T(s, 624, top + 84 + i * 34, l, i ? 's' : 'pk')),
+  });
+}
+
+function sDesign() {
+  return expertScene('sdesign', {
+    guide: ['name: design', 'does: whether its design fits its job,', '      and what a simpler one would do', 'tools: shape', 'model: opus'],
+    note: ['Review only: it changes nothing.', 'Every finding carries a count and a line of code.'],
+    checksIntro: 2,
+    checks: ['For every node that carries more than a', 'twentieth of the tokens:',
+      '· needs-a-model: whether this step needs a', '  model at all, and whether anything reads it',
+      '· pattern: which pattern it is part of, by', '  what ran, and the number that shows it'],
+    skills: [['Needs a model', 'a step a rule, a function or a lookup would do'], ['Patterns', 'router, supervisor, review loop and eleven more'],
+      ['Offline pricing', 'work nobody waits for, at about half the price'], ['Framework facts', 'what LangGraph or ADK offers today', 'when: adk | langgraph'],
+      ['shape (a tool)', 'branches never taken, fixed order, loops', 'tool'], ['Broken comes first', 'a node failing every request outranks any pattern', 'tool']],
+    hot: 1,
+    sampleTitle: 'A SAMPLE · skills/patterns/SKILL.md · 2 OF 14 ROWS',
+    sample: (s, top) => {
+      const X = [624, 800, 1050, 1320], y0 = top + 82;
+      const out = [g(s), g(s), g(s)];
+      ['Pattern', 'Warranted when', 'Smell (evidence)', 'Simpler'].forEach((h, i) => T(out[0], X[i], y0, h, 'm'));
+      el('line', { x1: 624, y1: y0 + 14, x2: 1516, y2: y0 + 14, class: 'tick' }, out[0]);
+      [[['Router'], ['several branches taken', 'across requests'], ['branch_never_taken for', 'one or more targets'], ['hardwire the branch', 'taken, or a rule']],
+       [['Review / critic', 'loop'], ['the critique changes the', 'draft in some rounds'], ['repeated_identical_reply', 'constant_rounds'], ['one round with an exit', 'condition, or none']]]
+        .forEach((row, r) => row.forEach((cell, i) => cell.forEach((l, k) => T(out[r + 1], X[i], y0 + 46 + r * 76 + k * 24, l, i === 2 ? 'mw' : (i ? 'cs' : 'b')))));
+      T(out[2], 624, y0 + 210, 'On our own ADK test agent: the critic repeats itself, and the lookup agent is never reached.', 'rm');
+      return out;
+    },
+  });
+}
+
+/* One run, end to end */
+function sRun() {
+  const p = scene('srun');
+  const steps = [['1 · CENSUS', 'code, not a model', ['reads the project: framework,', 'agents, entry, env file names'], 'ADK · 7 agents'],
+    ['2 · SURVEYOR', 'an expert, once', ['how the team starts it:', 'folder, env files, inputs'], 'survey saved'],
+    ['3 · PROBE', 'start', ['runs one request the', 'way the team does'], '6 of 7 agents ran'],
+    ['4 · COST EXPERT', 'query', ['reads every call with', 'SQL, node by node'], 'critique repeats ×3'],
+    ['5 · ANYTHING TO CHECK?', 'evals, golden data, examples', ['looks anywhere in', 'the project'], 'none: calls the tester']]
+    .map(([a, b, ls, res], i) => {
+      const k = g(p), x = 60 + i * 300;
+      const r = R(k, x, 70, 280, 220, 'box');
+      T(k, x + 20, 106, a, 'cap'); T(k, x + 20, 132, b, 'm');
+      ls.forEach((l, j) => T(k, x + 20, 176 + j * 24, l, 's'));
+      T(k, x + 20, 262, res, i === 4 ? 'rm' : 'ok');
+      return [k, r];
+    });
+  const tester = g(p);
+  R(tester, 1260, 320, 280, 140, 'callout');
+  T(tester, 1280, 354, 'Tester · its own session', 'b');
+  T(tester, 1280, 384, 'writes requests that', 's'); T(tester, 1280, 408, 'reach each route', 's');
+  T(tester, 1280, 440, 'labelled in the report', 'm');
+  const report = g(p);
+  R(report, 1260, 480, 280, 140, 'callout');
+  T(report, 1280, 514, 'Report', 'b');
+  T(report, 1280, 544, 'kept, refused, and why,', 's'); T(report, 1280, 568, 'on its own branch', 's');
+  T(report, 1280, 600, 'the developer decides', 'm');
+
+  R(p, 60, 320, 1170, 300, 'box');
+  T(p, 84, 356, '6 · THE MEASURE LOOP', 'cap'); T(p, 1206, 356, 'apply only; review stops at step 5', 'm end');
+  const SX = [175, 405, 635, 865, 1095];
+  const st = [['measure ×3', 'the baseline'], ['change', 'one idea'], ['save_change', 'one commit'], ['measure ×3', 'the same requests'], ['keep or undo', 'the gate decides']]
+    .map(([a, b], i) => {
+      const k = g(p);
+      const r = R(k, SX[i] - 95, 390, 190, 76, i === 4 ? 'box gate' : 'cart', { rx: 6 });
+      T(k, SX[i], 424, a, 'pk mid'); T(k, SX[i], 450, b, 'cs mid');
+      if (i) el('line', { x1: SX[i - 1] + 95, y1: 428, x2: SX[i] - 99, y2: 428, class: 'wire' }, p);
+      return r;
+    });
+  el('path', { d: `M${SX[4]} 466 V560 H${SX[1]} V470`, fill: 'none', class: 'wire' }, p);
+  el('polygon', { points: `${SX[1]},466 ${SX[1] - 6},478 ${SX[1] + 6},478`, class: 'pkt' }, p);
+  T(p, 750, 590, 'look again: until nothing more is proven, or a cap is reached', 'm mid');
+  const dot = el('circle', { cx: 0, cy: 0, r: 9, class: 'pkt' }, p);
+  const round = [T(p, 84, 600, 'round 1', 'rm', { opacity: 0 }), T(p, 84, 600, 'round 2', 'rm')];
+
+  R(p, 60, 650, 1480, 150, 'box');
+  T(p, 84, 686, 'MEMORY · .fleetopt/ IN THE PROJECT', 'cap'); T(p, 1516, 686, 'what code proved, kept for the next run', 'm end');
+  const mem = ['census', 'survey', 'recordings · SQLite', 'checks closed', 'kept and refused', 'agent card'].map((s, i) => {
+    const k = g(p), x = 84 + i * 240;
+    R(k, x, 708, 224, 40, 'cart', { rx: 20 }); T(k, x + 112, 734, s, 's mid');
+    return k;
+  });
+  T(p, 84, 784, 'Next run: the survey is reused unless the project changed; the card is rewritten after every run.', 'm');
+  return () => {
+    const tl = G.timeline({ paused: true });
+    tl.set(mem, { opacity: 0 }, 0);
+    const memAt = [0, 1, 2, 3];
+    steps.forEach(([k, r], i) => {
+      const at = .3 + i * 1.3;
+      tl.fromTo(k, { opacity: .15 }, { opacity: 1, duration: .4 }, at);
+      tl.fromTo(r, { stroke: '#F6F6F6' }, { stroke: '#333536', duration: .8 }, at + .2);
+      if (memAt.includes(i)) tl.to(mem[i], { opacity: 1, duration: .4 }, at + .7);
+    });
+    tl.fromTo(tester, { opacity: 0, y: -16 }, { opacity: 1, y: 0, duration: .5 }, 6.2);
+    tl.fromTo(st, { opacity: .2 }, { opacity: 1, duration: .3, stagger: .15 }, 7.0);
+    const path = [[SX[0], 428], [SX[1], 428], [SX[2], 428], [SX[3], 428], [SX[4], 428], [SX[4], 560], [SX[1], 560], [SX[1], 428]];
+    tl.set(dot, { x: path[0][0], y: path[0][1], opacity: 1 }, 7.8);
+    tl.set(round[0], { opacity: 1 }, 7.8); tl.set(round[1], { opacity: 0 }, 7.8);
+    let t = 7.8;
+    for (let lap = 0; lap < 2; lap++) {
+      path.slice(lap ? 2 : 1).forEach(([x, y]) => { tl.to(dot, { x, y, duration: .45, ease: 'none' }, t); t += .45; });
+      tl.fromTo(st[4], { stroke: '#EE0000' }, { stroke: '#F6F6F6', duration: .2, yoyo: true, repeat: 1, immediateRender: false }, 7.8 + (lap ? 6.3 : 2.5));
+      if (!lap) { tl.set(round[0], { opacity: 0 }, t); tl.set(round[1], { opacity: 1 }, t); }
+    }
+    tl.to(mem[4], { opacity: 1, duration: .4 }, t);
+    tl.to(dot, { opacity: 0, duration: .3 }, t);
+    tl.fromTo(report, { opacity: 0, y: -16 }, { opacity: 1, y: 0, duration: .5 }, t + .4);
+    tl.to(mem[5], { opacity: 1, duration: .4 }, t + 1.0);
+    return tl;
+  };
+}
+
+/* Where it stands: a long-term goal */
+function sEnd() {
+  const p = scene('send');
+  T(p, 60, 100, 'WHERE IT STANDS', 'cap');
+  T(p, 60, 168, 'A long-term goal. Today it is early.', 'h64');
+  const NX = [160, 593, 1027, 1440];
+  const line = el('line', { x1: 160, y1: 262, x2: 1440, y2: 262, class: 'wire' }, p);
+  const nodes = [['Now', 'a proof of concept'], ['Next', 'a pilot on a real agent'], ['Then', 'semi-autonomous on the platform'], ['Later', 'autonomous inside team rules']].map(([a, b], i) => {
+    const k = g(p);
+    el('circle', { cx: NX[i], cy: 262, r: 12, class: i ? 'dot' : 'pkt' }, k);
+    T(k, NX[i], 306, a, 'b mid'); T(k, NX[i], 332, b, 's mid');
+    return k;
+  });
+  const here = g(p);
+  R(here, NX[0] - 62, 212, 124, 30, 'pkt', { rx: 15 }); T(here, NX[0], 232, 'we are here', 'pk mid');
+  const cols = [['A proof of concept', 'box', ['runs end to end on test agents we built', 'LangGraph and ADK test agents only', 'tried on a few small public demos', '6 experts written, none proven', 'nothing proven on a real agent']],
+    ['What we do not have', 'box gate', ["a real agent's source and configuration", 'a golden dataset or evals to check it', 'a run on a production agent', 'the first Windows run, still pending', 'so even the proof of concept is untested']],
+    ['What it takes', 'box next', ['a team sharing an agent, its config, a dataset', 'sustained testing before any trigger', 'a platform: sandbox, identity, triggers', 'autonomy earned stage by stage', 'a track record each team can see']]].map(([t, cls, items], i) => {
+      const k = g(p), x = 60 + i * 500;
+      R(k, x, 380, 480, 360, cls);
+      T(k, x + 28, 426, t, 'n');
+      const its = items.map((s, j) => T(k, x + 28, 476 + j * 50, '·  ' + s, 's'));
+      return [k, its];
+    });
+  const last = T(p, 60, 806, 'Nothing is proven yet. It needs a real agent and a golden dataset to test at all.', 'n');
+  return () => {
+    const tl = G.timeline({ paused: true });
+    tl.fromTo(line, { attr: { x2: 160 } }, { attr: { x2: 1440 }, duration: 1.2, ease: 'power2.out' }, .3);
+    tl.fromTo(nodes, { opacity: 0 }, { opacity: 1, duration: .3, stagger: .35 }, .4);
+    tl.fromTo(here, { opacity: 0, y: -10 }, { opacity: 1, y: 0, duration: .4, ease: 'back.out(2)' }, 1.8);
+    cols.forEach(([k, its], i) => {
+      tl.fromTo(k, { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: .4 }, 2.4 + i * 1.4);
+      tl.fromTo(its, { opacity: 0 }, { opacity: 1, duration: .25, stagger: .2 }, 2.7 + i * 1.4);
+    });
+    tl.fromTo(last, { opacity: 0 }, { opacity: 1, duration: .6 }, 7.0);
+    return tl;
+  };
+}
+
+const builders = [s1(), sDef(), sArch(), sCost(), sDesign(), sRun(), s2(), s3(), s4(), sAuto(), s5(), s6(), sEnd()];
+const scenes = [...stage.querySelectorAll('.scene')];
+const DATA = [
+  { tab: 'Software factory', eye: 'History', h: 'The software factory',
+    p: 'Since 1968 the idea has stayed the same: build software the way factories build products, with standard stations and one process reused across every project.',
+    st: [['history', 'Bemer at GE, 1968, to Kessel Run, 2017']] },
+  { tab: 'Sentinels', eye: 'Definition', h: 'Sentinels',
+    p: "In The Matrix, Sentinels are autonomous machines that patrol the real world, find threats on their own and act without human control, within the rules their makers set. Ours find, change and prove on their own, within the rules a team sets.",
+    st: [['idea', 'The idea, from the film'], ['idea', 'Ours act within the team\'s rules']] },
+  { tab: 'Architecture', eye: 'What it consists of', h: 'Experts plug in. The engine stays the same.',
+    p: "An expert is a folder of prose: a guide, the checks it must close, and the skills it knows, with a header naming its model, its tools and whom it may call. The engine is the same for every expert: one Claude Agent SDK session, the tools it may use, the probe that records the team's agent, and the gate that keeps only what is proven.",
+    st: [['built', 'Six experts, one engine'], ['built', 'Several experts in one run, the agent measured once']] },
+  { tab: 'Cost expert', eye: 'A sample expert', h: 'The cost expert: where the money goes',
+    p: "It starts from the bill: where every token goes, node by node. Its checks make it close every node that carries the money with a number. Its skills say what waste looks like and how to fix it; how a fix is spelled on LangGraph or ADK is sent only when the project uses that framework.",
+    st: [['built', 'Seven skills, and one for each framework'], ['built', 'Changes code on its own branch; the gate decides']] },
+  { tab: 'Design expert', eye: 'A sample expert', h: 'The design expert: is this the right design',
+    p: "It only looks. It names the patterns an agent is built from by what ran, not by what its nodes are called, and asks whether each earns its keep. Every finding carries a count from the runs and a line of code, and a person decides.",
+    st: [['built', 'Fourteen patterns, each with its evidence and a simpler design'], ['built', 'Review only: it changes nothing']] },
+  { tab: 'One run', eye: 'End to end', h: 'One run, end to end',
+    p: "Code takes a census of the project first: LangGraph or ADK, its agents, how it is entered. The surveyor works out once how the team starts it. The probe runs it, and the cost expert reads every call. With nothing to check against, it calls the tester for requests. Then the measure loop: measure, change, commit, measure again, and the gate keeps or undoes, round after round. Every step leaves a record in the project for the next run.",
+    st: [['built', 'Every step runs, on our own LangGraph and ADK test agents'], ['built', 'The measure loop: apply runs it; review stops before it'], ['next', 'Not yet on a production agent']] },
+  { tab: 'Skill vs sentinel', eye: 'What it is', h: 'What a sentinel adds to a skill',
+    p: "A skill is knowledge: Claude reads the code, suggests a change, and a person judges it by reading. A sentinel uses the same skills, then runs the team's real agent, measures it, makes the change, proves it against the team's own checks, and refuses what it cannot prove. It leaves a receipt.",
+    st: [['built', 'Probe, gate and receipt around the same prose']] },
+  { tab: 'Sent to the team', eye: 'Today · invoked', h: 'Forward deployed to the team',
+    p: "A developer invokes a sentinel where the agent lives: their machine, their setup, their keys. It runs the agent the way the team does, finds what its expert looks for, and keeps only what it proves. It leaves a branch and a report, and the developer decides.",
+    st: [['built', "Invoked by a developer, in the team's own setup"], ['built', 'Tried only on our own ADK test agent'], ['next', 'Not yet run on a production agent']] },
+  { tab: 'Any expert', eye: 'Pulled when needed', h: 'One sentinel, any expert',
+    p: "The engine is the same everywhere; the expert is a folder of prose pulled by name. Today a developer names the expert. On the platform, a trigger the team chose will.",
+    st: [['built', 'Pull by name from a catalogue address'], ['next', 'A hosted, signed catalogue'], ['next', 'Triggers and team containers']] },
+  { tab: 'Autonomy is coming', eye: 'The road to autonomy', h: 'Autonomy is coming. Be ready first.',
+    p: "Every system is heading toward autonomy: from manual building, to AI that assists, to agents that act while people approve the key steps, to agents that run end to end while people set the goals and the rules. The time to write those rules is before we get there.",
+    st: [['idea', 'Four stages, from manual to full autonomy'], ['idea', 'Guardrails, governance and skills first']] },
+  { tab: 'The road', eye: 'Where it goes', h: 'Invoked, then semi-autonomous, then autonomous',
+    p: "Autonomy changes who starts the run, never who owns the agent. Today a developer starts it. Next, a trigger the team chose starts it in a sandbox, and it opens a pull request. Later it may merge on its own, but only inside rules the team sets, and the team sees every receipt and can revert or stop it.",
+    st: [['built', 'Stage 1: invoked'], ['next', 'Stage 2: triggers, sandbox, pull requests'], ['next', "Stage 3: merges within the team's rules"]] },
+  { tab: 'On the platform', eye: 'Where it goes', h: 'Autonomous, on the platform, in a sandbox',
+    p: "A trigger the team chose starts the run. The platform copies the team's agent into a sealed container, injects its keys, and pulls the expert. Inside, the sentinel measures, changes and proves until nothing more is proven or a cap is reached. What it keeps comes back as a pull request the team approves; later, it may merge on its own inside rules the team sets.",
+    st: [['built', 'Everything inside the container: engine, probe, gate'], ['next', 'The platform, the sandbox and its guards'], ['next', 'Pull requests from a sentinel identity']] },
+  { tab: 'Where it stands', eye: 'Honest status', h: 'A long-term goal. Today it is early.',
+    p: "Everything before this scene is the direction. Today it is a proof of concept, run only on test agents we built and a few small public demos. Nothing is proven. Even to test the proof of concept properly we need a team's agent, its source and configuration, and a golden dataset or evals to check it against. Every later stage needs sustained testing and platform work, and autonomy has to be earned one stage at a time.",
+    st: [['built', 'A proof of concept, on test agents we built'], ['next', "A real agent's source, configuration and golden dataset"], ['next', 'Platform, triggers and autonomy: long term']] },
+];
+const $ = id => document.getElementById(id);
+const tabs = DATA.map((d, i) => {
+  const b = document.createElement('button');
+  b.innerHTML = `<b>${i + 1}</b>${d.tab}`;
+  b.addEventListener('click', () => show(i));
+  $('tabs').appendChild(b);
+  return b;
+});
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const tls = [];
+let cur = 0, auto = false, wait;
+function setPlay() { $('play').textContent = auto ? 'Stop autoplay' : 'Autoplay'; }
+function show(i) {
+  clearTimeout(wait);
+  if (tls[cur]) tls[cur].pause();
+  cur = (i + DATA.length) % DATA.length;
+  scenes.forEach((s, k) => { s.style.display = k === cur ? '' : 'none'; });
+  tabs.forEach((b, k) => k === cur ? b.setAttribute('aria-current', 'step') : b.removeAttribute('aria-current'));
+  const d = DATA[cur];
+  $('cap-eye').textContent = `Scene ${cur + 1} of ${DATA.length} · ${d.eye}`;
+  $('cap-h').textContent = d.h;
+  $('cap-p').textContent = d.p;
+  $('cap-st').innerHTML = d.st.map(([k, s]) => `<li class="${k}"><span>${k}</span>${s}</li>`).join('');
+  try { history.replaceState(null, '', '#scene-' + (cur + 1)); } catch (e) {}
+  if (!G) { $('bar').style.transform = 'scaleX(1)'; return; }
+  if (!tls[cur]) {
+    const tl = tls[cur] = builders[cur]();
+    const at = cur;
+    tl.eventCallback('onUpdate', () => { $('bar').style.transform = `scaleX(${tl.progress()})`; });
+    tl.eventCallback('onComplete', () => {
+      if (!auto || at !== cur) return;
+      if (cur < DATA.length - 1) wait = setTimeout(() => show(cur + 1), 8000);
+      else { auto = false; setPlay(); }
+    });
+  }
+  if (reduce) { tls[cur].progress(1); return; }
+  tls[cur].timeScale(.8).restart();
+}
+$('prev').addEventListener('click', () => show(cur - 1));
+$('next').addEventListener('click', () => show(cur + 1));
+$('play').addEventListener('click', () => {
+  auto = !auto; setPlay();
+  const tl = tls[cur];
+  if (!tl) return;
+  if (auto) { if (tl.progress() === 1) show(cur + 1); else tl.play(); }
+  else { clearTimeout(wait); tl.pause(); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight') show(cur + 1);
+  else if (e.key === 'ArrowLeft') show(cur - 1);
+});
+if (!G || reduce) { $('play').hidden = !G; }
+setPlay();
+const m = /^#scene-(\d+)$/.exec(location.hash);
+show(m && +m[1] >= 1 && +m[1] <= DATA.length ? +m[1] - 1 : 0);
+})();
+</script>
