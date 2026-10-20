@@ -102,7 +102,7 @@ button:focus-visible{outline:2px solid var(--red);outline-offset:2px}
   <header>
     <p class="kicker">Sentinels</p>
     <h1>Sentinels: experts sent to a team's agent</h1>
-    <p class="lede">Thirteen scenes: where the factory idea comes from, what a sentinel is, what it is made of, two of its experts, one run end to end, what it adds to a skill, how it is sent to a team today, why autonomy is coming, the road from invoked to autonomous with the team in charge throughout, what it looks like on the platform, and where it stands today. Step with the arrow keys or the scene names, or switch on autoplay.</p>
+    <p class="lede">A proof of concept, in thirteen short scenes. Step with the arrow keys or the scene names.</p>
   </header>
 
   <div class="stage-wrap"><svg id="stage" viewBox="0 0 1600 860" role="img" aria-labelledby="cap-h"></svg></div>
@@ -887,7 +887,7 @@ function sEnd() {
   };
 }
 
-const builders = [s1(), sDef(), sArch(), sCost(), sDesign(), sRun(), s2(), s3(), s4(), sAuto(), s5(), s6(), sEnd()];
+const builders = [s1(), sDef(), sAuto(), sArch(), sCost(), sDesign(), sRun(), s2(), s3(), s4(), s5(), s6(), sEnd()];
 const scenes = [...stage.querySelectorAll('.scene')];
 const DATA = [
   { tab: 'Software factory', eye: 'History', h: 'The software factory',
@@ -896,6 +896,9 @@ const DATA = [
   { tab: 'Sentinels', eye: 'Definition', h: 'Sentinels',
     p: "In The Matrix, Sentinels are autonomous machines that patrol the real world, find threats on their own and act without human control, within the rules their makers set. Ours find, change and prove on their own, within the rules a team sets.",
     st: [['idea', 'The idea, from the film'], ['idea', 'Ours act within the team\'s rules']] },
+  { tab: 'Autonomy is coming', eye: 'The road to autonomy', h: 'Autonomy is coming. Be ready first.',
+    p: "Every system is heading toward autonomy: from manual building, to AI that assists, to agents that act while people approve the key steps, to agents that run end to end while people set the goals and the rules. The time to write those rules is before we get there.",
+    st: [['idea', 'Four stages, from manual to full autonomy'], ['idea', 'Guardrails, governance and skills first']] },
   { tab: 'Architecture', eye: 'What it consists of', h: 'Experts plug in. The engine stays the same.',
     p: "An expert is a folder of prose: a guide, the checks it must close, and the skills it knows, with a header naming its model, its tools and whom it may call. The engine is the same for every expert: one Claude Agent SDK session, the tools it may use, the probe that records the team's agent, and the gate that keeps only what is proven.",
     st: [['built', 'Six experts, one engine'], ['built', 'Several experts in one run, the agent measured once']] },
@@ -917,9 +920,6 @@ const DATA = [
   { tab: 'Any expert', eye: 'Pulled when needed', h: 'One sentinel, any expert',
     p: "The engine is the same everywhere; the expert is a folder of prose pulled by name. Today a developer names the expert. On the platform, a trigger the team chose will.",
     st: [['built', 'Pull by name from a catalogue address'], ['next', 'A hosted, signed catalogue'], ['next', 'Triggers and team containers']] },
-  { tab: 'Autonomy is coming', eye: 'The road to autonomy', h: 'Autonomy is coming. Be ready first.',
-    p: "Every system is heading toward autonomy: from manual building, to AI that assists, to agents that act while people approve the key steps, to agents that run end to end while people set the goals and the rules. The time to write those rules is before we get there.",
-    st: [['idea', 'Four stages, from manual to full autonomy'], ['idea', 'Guardrails, governance and skills first']] },
   { tab: 'The road', eye: 'Where it goes', h: 'Invoked, then semi-autonomous, then autonomous',
     p: "Autonomy changes who starts the run, never who owns the agent. Today a developer starts it. Next, a trigger the team chose starts it in a sandbox, and it opens a pull request. Later it may merge on its own, but only inside rules the team sets, and the team sees every receipt and can revert or stop it.",
     st: [['built', 'Stage 1: invoked'], ['next', 'Stage 2: triggers, sandbox, pull requests'], ['next', "Stage 3: merges within the team's rules"]] },
