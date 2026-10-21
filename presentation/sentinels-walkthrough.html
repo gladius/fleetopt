@@ -6,12 +6,12 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;600&display=swap">
 <style>
-/* Layout: one stage, the caption and controls beneath it. Single dark look, by choice. */
+/* Layout: one stage, the caption and controls beneath it. Verizon light look, by choice. */
 :root{
-  --bg:#0B0B0C; --stage:#0F1011; --panel:#151617; --line:#333536; --mute:#8A8C8C;
-  --pale:#D8DADA; --white:#F6F6F6; --red:#EE0000; --good:#3DBE7A;
+  --bg:#FFFFFF; --stage:#F6F6F6; --panel:#FFFFFF; --line:#D8DADA; --mute:#6F7171;
+  --pale:#333333; --white:#000000; --red:#EE0000; --good:#008331;
   --sans:'Inter', Arial, sans-serif; --mono:'IBM Plex Mono', ui-monospace, Menlo, monospace;
-  color-scheme:dark;
+  color-scheme:light;
 }
 body{background:var(--bg);color:var(--pale);font-family:var(--sans);font-size:16px;line-height:1.5;padding-inline:16px;padding-block:32px 56px}
 .wrap{max-width:1240px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
@@ -44,7 +44,7 @@ button:focus-visible{outline:2px solid var(--red);outline-offset:2px}
 
 #stage text{font-family:var(--sans);fill:var(--pale);white-space:pre}
 #stage .mid{text-anchor:middle} #stage .end{text-anchor:end}
-#stage .big{font-size:120px;font-weight:800;fill:#3A3C3D;letter-spacing:-3px}
+#stage .big{font-size:120px;font-weight:800;fill:#E4E6E6;letter-spacing:-3px}
 #stage .n{font-size:26px;font-weight:700;fill:var(--white)}
 #stage .b{font-size:19px;font-weight:600;fill:var(--white)}
 #stage .s{font-size:17px;fill:var(--pale)}
@@ -59,44 +59,45 @@ button:focus-visible{outline:2px solid var(--red);outline-offset:2px}
 #stage .rm{font-family:var(--mono);font-size:15px;fill:var(--red)}
 #stage .pct{font-family:var(--mono);font-size:15px;fill:var(--white)}
 #stage .ok{font-family:var(--mono);font-size:15px;fill:var(--good)}
-#stage .st{font-family:var(--mono);font-size:14px;font-weight:600;fill:#0B0B0C}
+#stage .st{font-family:var(--mono);font-size:14px;font-weight:600;fill:#FFFFFF}
 #stage .ch{font-size:17px;font-weight:600;fill:var(--white)}
 #stage .lead{font-size:28px;fill:var(--pale)}
 #stage .h64{font-size:64px;font-weight:800;letter-spacing:-1.5px;fill:var(--white)}
 #stage .mw{font-family:var(--mono);font-size:15px;fill:var(--pale)}
 #stage .pk{font-family:var(--mono);font-size:15px;font-weight:600;fill:var(--white)}
+#stage .onred{fill:#FFFFFF}
 .box{fill:var(--panel);stroke:var(--line);stroke-width:2}
 .next{stroke-dasharray:10 7}
 .gate{stroke:var(--red);stroke-width:3}
-.panel{fill:#121314;stroke:var(--line);stroke-width:1.5}
-.callout{fill:#1B1D1F;stroke:#4B4D4E;stroke-width:1.5}
-.tick,.axis{stroke:#4B4D4E;stroke-width:2}
-.dot{fill:#333536;stroke:var(--stage);stroke-width:4}
+.panel{fill:#FFFFFF;stroke:var(--line);stroke-width:1.5}
+.callout{fill:#FFFFFF;stroke:#A7A7A7;stroke-width:1.5}
+.tick,.axis{stroke:#A7A7A7;stroke-width:2}
+.dot{fill:#D8DADA;stroke:var(--stage);stroke-width:4}
 .press{fill:#747676}
 .item{stroke-width:2}
-.before{fill:#4B4D4E} .after{fill:var(--red)}
-.card{fill:#262829;stroke:#A7A7A7;stroke-width:1.5}
-.tray{fill:none;stroke:#4B4D4E;stroke-width:2;stroke-dasharray:6 6}
-.cart{fill:#1B1D1F;stroke:#A7A7A7;stroke-width:1.5}
-.slot{fill:none;stroke:#4B4D4E;stroke-width:2}
-.engine{fill:#121314;stroke:var(--line);stroke-width:2}
+.before{fill:#A7A7A7} .after{fill:var(--red)}
+.card{fill:#F6F6F6;stroke:#747676;stroke-width:1.5}
+.tray{fill:none;stroke:#A7A7A7;stroke-width:2;stroke-dasharray:6 6}
+.cart{fill:#FFFFFF;stroke:#747676;stroke-width:1.5}
+.slot{fill:none;stroke:#A7A7A7;stroke-width:2}
+.engine{fill:#FFFFFF;stroke:var(--line);stroke-width:2}
 .scan{fill:var(--red);opacity:0}
-.pill{fill:#1B1D1F;stroke:#A7A7A7;stroke-width:1.5}
+.pill{fill:#FFFFFF;stroke:#747676;stroke-width:1.5}
 .wire{stroke:#747676;stroke-width:2;stroke-dasharray:4 6}
 .pkt{fill:var(--red)}
 .ring{fill:none;stroke:var(--red);stroke-width:3;opacity:0}
-.agent{fill:#1B1D1F;stroke:var(--pale);stroke-width:2}
+.agent{fill:#FFFFFF;stroke:var(--pale);stroke-width:2}
 .edge{stroke:#747676;stroke-width:2}
 .node{fill:var(--pale)} .node.hot{fill:var(--red)}
-.ph{fill:#4B4D4E}
+.ph{fill:#A7A7A7}
 .good{fill:var(--good)} .bad{fill:var(--red)}
 .dim{opacity:.4}
-.belt{fill:#1B1D1F;stroke:var(--line);stroke-width:2}
-.beltm{fill:none;stroke:#4B4D4E;stroke-width:3;stroke-dasharray:18 22;animation:belt 1.1s linear infinite}
-.roller{fill:#1B1D1F;stroke:var(--line);stroke-width:2}
+.belt{fill:#FFFFFF;stroke:var(--line);stroke-width:2}
+.beltm{fill:none;stroke:#A7A7A7;stroke-width:3;stroke-dasharray:18 22;animation:belt 1.1s linear infinite}
+.roller{fill:#FFFFFF;stroke:var(--line);stroke-width:2}
 @keyframes belt{to{stroke-dashoffset:-40}}
 .still .beltm{animation:none}
-.diag{margin:0;padding:10px 14px;border:1px solid var(--red);border-radius:8px;background:#3a0b0b;color:var(--white);font:14px/1.5 var(--mono)}
+.diag{margin:0;padding:10px 14px;border:1px solid var(--red);border-radius:8px;background:#FFF2F2;color:var(--white);font:14px/1.5 var(--mono)}
 .motion-note{font:13px/1.5 var(--mono);color:var(--mute);margin:0}
 </style>
 
@@ -197,13 +198,13 @@ function s1() {
   T(p, 60, 592, 'parts in', 'm');
   T(p, 1540, 592, 'software out', 'm end');
   const states = ['parts', 'design', 'code', 'tested', 'shipped'];
-  const look = [['#262829', '#747676'], ['#151617', '#D8DADA'], ['#4B4D4E', '#4B4D4E'], ['#4B4D4E', '#F6F6F6'], ['#EE0000', '#EE0000']];
+  const look = [['#F6F6F6', '#747676'], ['#FFFFFF', '#333333'], ['#A7A7A7', '#A7A7A7'], ['#A7A7A7', '#000000'], ['#EE0000', '#EE0000']];
   const paint = (r, k) => { r.style.fill = look[k][0]; r.style.stroke = look[k][1]; };
   const items = [180, 480, 780, 1480].map((x, i) => {
     const it = g(p, { transform: `translate(${x} 0)` });
     const r = R(it, -50, 446, 100, 52, 'item', { rx: 6 });
     paint(r, i + 1);
-    const labs = states.map((s, k) => T(it, 0, 478, s, 'il mid', { opacity: k === i + 1 ? 1 : 0 }));
+    const labs = states.map((s, k) => T(it, 0, 478, s, k === 4 ? 'il mid onred' : 'il mid', { opacity: k === i + 1 ? 1 : 0 }));
     return { it, r, labs };
   });
   el('line', { x1: 140, y1: 660, x2: 1460, y2: 660, class: 'axis' }, p);
@@ -232,7 +233,7 @@ function s1() {
     yearEls.forEach((y, i) => tl.set(y, { opacity: i ? 0 : 1 }, 0));
     ms.forEach(({ m, d }, i) => {
       const at = .4 + i * 2.6;
-      tl.fromTo(d, { fill: '#333536' }, { fill: '#EE0000', duration: .3 }, at);
+      tl.fromTo(d, { fill: '#D8DADA' }, { fill: '#EE0000', duration: .3 }, at);
       tl.fromTo(m, { opacity: .35 }, { opacity: 1, duration: .3 }, at);
       if (i) { tl.set(yearEls[i - 1], { opacity: 0 }, at); tl.set(yearEls[i], { opacity: 1 }, at); }
     });
@@ -344,12 +345,12 @@ function s3() {
   });
   const em = g(p, { transform: 'translate(815 444)' });
   R(em, -80, -18, 160, 36, 'pkt', { rx: 18 });
-  T(em, 0, 6, 'sentinel · cost', 'pk mid');
+  T(em, 0, 6, 'sentinel · cost', 'pk mid onred');
   const foot = T(p, 60, 700, 'Invoked today: a person starts it, the gate keeps what it proves, the developer decides.', 'b');
   T(p, 60, 800, 'A: one run on a test agent we built, October 2026 · B: illustrative', 'm');
   return () => {
     const tl = G.timeline({ paused: true });
-    tl.fromTo(dev, { stroke: '#333536' }, { stroke: '#F6F6F6', duration: .4 }, .3);
+    tl.fromTo(dev, { stroke: '#D8DADA' }, { stroke: '#000000', duration: .4 }, .3);
     tl.fromTo(cmd, { opacity: 0 }, { opacity: 1, duration: .5 }, .5);
     tl.fromTo(em, { x: 220, y: 232 }, { x: 470, y: 444, duration: .9, ease: 'power1.in' }, 1.2);
     tl.to(em, { x: 815, y: 444, duration: 1, ease: 'power1.out' }, 2.1);
@@ -363,7 +364,7 @@ function s3() {
     tl.fromTo(oa, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .45 }, 7.4);
     tl.fromTo(ob, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .45 }, 8.0);
     tl.fromTo(outs, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .45, stagger: .45 }, 8.8);
-    tl.fromTo(dev, { stroke: '#F6F6F6' }, { stroke: '#EE0000', duration: .25, yoyo: true, repeat: 3, immediateRender: false }, 10.2);
+    tl.fromTo(dev, { stroke: '#000000' }, { stroke: '#EE0000', duration: .25, yoyo: true, repeat: 3, immediateRender: false }, 10.2);
     tl.fromTo(foot, { opacity: 0 }, { opacity: 1, duration: .5 }, 10.8);
     return tl;
   };
@@ -416,11 +417,11 @@ function s4() {
     [1, 0, 2].forEach((i, k) => {
       const t0 = .3 + k * 2.3, [d, [sx, sr], tx] = drops[i];
       tl.fromTo(trig[i], { opacity: 0, y: -16 }, { opacity: 1, y: 0, duration: .4, ease: 'back.out(2)' }, t0);
-      tl.fromTo(sr, { stroke: '#A7A7A7' }, { stroke: '#EE0000', duration: .25, yoyo: true, repeat: 1 }, t0 + .3);
+      tl.fromTo(sr, { stroke: '#747676' }, { stroke: '#EE0000', duration: .25, yoyo: true, repeat: 1 }, t0 + .3);
       tl.fromTo(d, { x: sx + 12, y: 112, opacity: 0 }, { x: tx, y: 480, opacity: 1, duration: 1.1, ease: 'power2.inOut' }, t0 + .45);
       tl.fromTo(scans[i], { opacity: 0 }, { opacity: .5, duration: .2, yoyo: true, repeat: 3 }, t0 + 1.6);
     });
-    tl.fromTo(engines, { stroke: '#333536' }, { stroke: '#F6F6F6', duration: .3, yoyo: true, repeat: 1 }, 7.2);
+    tl.fromTo(engines, { stroke: '#D8DADA' }, { stroke: '#000000', duration: .3, yoyo: true, repeat: 1 }, 7.2);
     tl.fromTo(same, { opacity: 0 }, { opacity: 1, duration: .5 }, 7.4);
     return tl;
   };
@@ -448,7 +449,7 @@ function s5() {
   });
   const mark = g(p);
   R(mark, 640, 88, 84, 30, 'pkt', { rx: 15 });
-  T(mark, 682, 108, 'today', 'pk mid');
+  T(mark, 682, 108, 'today', 'pk mid onred');
   const band = R(p, 60, 668, 1500, 84, 'box');
   band.style.stroke = '#EE0000';
   const bandText = g(p);
@@ -537,7 +538,7 @@ function s6() {
     tl.fromTo(cart, { y: 70, opacity: 0 }, { y: 190, opacity: 1, duration: .9, ease: 'power2.inOut' }, 2.2);
     tl.fromTo(guards, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .4, stagger: .3 }, 3.2);
     tl.fromTo(orb, { rotation: 0 }, { rotation: 1080, svgOrigin: '940 330', duration: 7.2, ease: 'none' }, 4.4);
-    for (let lap = 0; lap < 3; lap++) stages.forEach((s, k) => tl.fromTo(s, { fill: '#8A8C8C' }, { fill: '#F6F6F6', duration: .2, yoyo: true, repeat: 1 }, 4.4 + lap * 2.4 + k * .6));
+    for (let lap = 0; lap < 3; lap++) stages.forEach((s, k) => tl.fromTo(s, { fill: '#6F7171' }, { fill: '#000000', duration: .2, yoyo: true, repeat: 1 }, 4.4 + lap * 2.4 + k * .6));
     tl.fromTo(pr, { opacity: 0, x: -60 }, { opacity: 1, x: 0, duration: .7, ease: 'power2.out' }, 11.8);
     tl.fromTo(human, { opacity: 0 }, { opacity: 1, duration: .5 }, 12.8);
     tl.fromTo(board, { opacity: 0 }, { opacity: 1, duration: .5 }, 13.6);
@@ -551,7 +552,7 @@ function sDef() {
   const p = scene('sdef');
   T(p, 120, 120, 'DEFINITION', 'cap');
   const h = T(p, 114, 250, 'Sentinels', 'big');
-  h.style.fill = '#F6F6F6';
+  h.style.fill = '#000000';
   const lines = ['In The Matrix, Sentinels are autonomous', 'machines that patrol the real world, find', 'threats on their own and act without', 'human control.']
     .map((s, i) => T(p, 120, 320 + i * 38, s, 'lead'));
   const d = g(p, { transform: 'translate(860 60)' });
@@ -559,7 +560,7 @@ function sDef() {
 <radialGradient id="dglow" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#EE0000" stop-opacity="0.35"/><stop offset="100%" stop-color="#EE0000" stop-opacity="0"/></radialGradient>
 <linearGradient id="dhull" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4B4D4E"/><stop offset="100%" stop-color="#1B1D1F"/></linearGradient>
 <linearGradient id="dbeam" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#EE0000" stop-opacity="0.45"/><stop offset="100%" stop-color="#EE0000" stop-opacity="0"/></linearGradient></defs>
-<g fill="none" stroke="#333536" stroke-width="1"><path d="M0 360 H640 M0 390 H640 M0 412 H640"/><path d="M320 340 L40 420 M320 340 L180 420 M320 340 L460 420 M320 340 L600 420"/></g>
+<g fill="none" stroke="#D8DADA" stroke-width="1"><path d="M0 360 H640 M0 390 H640 M0 412 H640"/><path d="M320 340 L40 420 M320 340 L180 420 M320 340 L460 420 M320 340 L600 420"/></g>
 <polygon id="dbeam-p" points="300,215 340,215 470,400 170,400" fill="url(#dbeam)"/>
 <circle id="dglow-c" cx="320" cy="180" r="170" fill="url(#dglow)"/>
 <g id="dradar" fill="none" stroke="#EE0000" stroke-width="2" opacity="0.6"><path d="M150 180 A170 170 0 0 1 490 180"/><path d="M190 180 A130 130 0 0 1 450 180" opacity="0.7"/></g>
@@ -599,7 +600,7 @@ function sAuto() {
   const p = scene('sauto');
   T(p, 120, 110, 'THE ROAD TO AUTONOMY', 'cap');
   T(p, 120, 178, 'Autonomy is coming. Be ready first.', 'h64');
-  const st = [['Manual building', 'People build and run', 'everything by hand.', 'do the work', '#D8DADA', 24],
+  const st = [['Manual building', 'People build and run', 'everything by hand.', 'do the work', '#333333', 24],
               ['Assisted', 'AI suggests and drafts.', 'People decide every step.', 'in the loop', '#747676', 72],
               ['Semi-autonomous', 'Agents act on their own.', 'People approve the key steps.', 'on the loop', '#F07070', 120],
               ['Full autonomy', 'Agents run end to end,', 'whether people are there or not.', 'set goals and rules', '#EE0000', 168]];
@@ -695,11 +696,11 @@ function sArch() {
     tl.fromTo(tree, { opacity: 0, x: -10 }, { opacity: 1, x: 0, duration: .3, stagger: .18 }, .2);
     tl.fromTo(hdr, { opacity: 0 }, { opacity: 1, duration: .4 }, 1.8);
     chips.forEach((c, i) => tl.fromTo(c, { x: 84, y: 184 + i * 34, opacity: 0 }, { x: 660 + i * 112, y: 222, opacity: 1, duration: .9, ease: 'power2.inOut' }, 2.6 + i * .3));
-    tl.fromTo(sess, { stroke: '#333536' }, { stroke: '#F6F6F6', duration: .3, yoyo: true, repeat: 1 }, 3.9);
+    tl.fromTo(sess, { stroke: '#D8DADA' }, { stroke: '#000000', duration: .3, yoyo: true, repeat: 1 }, 3.9);
     tl.fromTo(tools, { opacity: .15 }, { opacity: 1, duration: .25, stagger: .15 }, 4.4);
-    tl.fromTo(probe, { stroke: '#333536' }, { stroke: '#F6F6F6', duration: .3 }, 6.3);
+    tl.fromTo(probe, { stroke: '#D8DADA' }, { stroke: '#000000', duration: .3 }, 6.3);
     tl.fromTo(ring, { attr: { r: 40 }, opacity: .9 }, { attr: { r: 110 }, opacity: 0, duration: .9, repeat: 1, immediateRender: false }, 6.5);
-    tl.fromTo(gate, { stroke: '#EE0000' }, { stroke: '#F6F6F6', duration: .25, yoyo: true, repeat: 3 }, 8.2);
+    tl.fromTo(gate, { stroke: '#EE0000' }, { stroke: '#000000', duration: .25, yoyo: true, repeat: 3 }, 8.2);
     tl.fromTo(outs, { opacity: 0, x: 16 }, { opacity: 1, x: 0, duration: .4, stagger: .3 }, 8.6);
     tl.fromTo(cmd, { opacity: 0 }, { opacity: 1, duration: .5 }, 9.8);
     return tl;
@@ -737,7 +738,7 @@ function expertScene(id, c) {
     tl.fromTo(checks.querySelectorAll('text'), { opacity: 0 }, { opacity: 1, duration: .3, stagger: .12 }, 1.8);
     tl.fromTo(cards.map(k => k[0]), { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: .35, stagger: .2 }, 3.0);
     const hot = cards[c.hot][1], at = 3.4 + cards.length * .2;
-    tl.fromTo(hot, { stroke: '#A7A7A7' }, { stroke: '#EE0000', duration: .3 }, at);
+    tl.fromTo(hot, { stroke: '#747676' }, { stroke: '#EE0000', duration: .3 }, at);
     tl.fromTo(sample, { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: .5 }, at + .4);
     tl.fromTo(body, { opacity: 0 }, { opacity: 1, duration: .3, stagger: .3 }, at + .8);
     return tl;
@@ -854,7 +855,7 @@ function sRun() {
     steps.forEach(([k, r], i) => {
       const at = .3 + i * 1.3;
       tl.fromTo(k, { opacity: .15 }, { opacity: 1, duration: .4 }, at);
-      tl.fromTo(r, { stroke: '#F6F6F6' }, { stroke: '#333536', duration: .8 }, at + .2);
+      tl.fromTo(r, { stroke: '#000000' }, { stroke: '#D8DADA', duration: .8 }, at + .2);
       if (memAt.includes(i)) tl.to(mem[i], { opacity: 1, duration: .4 }, at + .7);
     });
     tl.fromTo(tester, { opacity: 0, y: -16 }, { opacity: 1, y: 0, duration: .5 }, 6.2);
@@ -865,7 +866,7 @@ function sRun() {
     let t = 7.8;
     for (let lap = 0; lap < 2; lap++) {
       path.slice(lap ? 2 : 1).forEach(([x, y]) => { tl.to(dot, { x, y, duration: .45, ease: 'none' }, t); t += .45; });
-      tl.fromTo(st[4], { stroke: '#EE0000' }, { stroke: '#F6F6F6', duration: .2, yoyo: true, repeat: 1, immediateRender: false }, 7.8 + (lap ? 6.3 : 2.5));
+      tl.fromTo(st[4], { stroke: '#EE0000' }, { stroke: '#000000', duration: .2, yoyo: true, repeat: 1, immediateRender: false }, 7.8 + (lap ? 6.3 : 2.5));
       if (!lap) { tl.set(round[0], { opacity: 0 }, t); tl.set(round[1], { opacity: 1 }, t); }
     }
     tl.to(mem[4], { opacity: 1, duration: .4 }, t);
@@ -890,7 +891,7 @@ function sEnd() {
     return k;
   });
   const here = g(p);
-  R(here, NX[0] - 62, 212, 124, 30, 'pkt', { rx: 15 }); T(here, NX[0], 232, 'we are here', 'pk mid');
+  R(here, NX[0] - 62, 212, 124, 30, 'pkt', { rx: 15 }); T(here, NX[0], 232, 'we are here', 'pk mid onred');
   const cols = [['A proof of concept', 'box', ['runs end to end on test agents we built', 'LangGraph and ADK test agents only', 'tried on a few small public demos', '6 experts written, none proven', 'nothing proven on a real agent']],
     ['What we do not have', 'box gate', ["a real agent's source and configuration", 'a golden dataset or evals to check it', 'a run on a production agent', 'the first Windows run, still pending', 'so even the proof of concept is untested']],
     ['What it takes', 'box next', ['a team sharing an agent, its config, a dataset', 'sustained testing before any trigger', 'a platform: sandbox, identity, triggers', 'autonomy earned stage by stage', 'a track record each team can see']]].map(([t, cls, items], i) => {
